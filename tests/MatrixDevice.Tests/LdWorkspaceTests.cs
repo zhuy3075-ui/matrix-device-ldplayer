@@ -6,6 +6,8 @@ public static class LdWorkspaceTests
     public static void Register(Action<string, Func<Task>> test)
     {
         test("LD workspace launch validates the whole batch before touching the console", LaunchValidationAsync);
+        test("LD workspace launch validates the complete confirmation snapshot before console calls", ConfirmationValidationAsync);
+        test("LD workspace launch rejects replacement after user confirmation before launching", ConfirmationReplacementAsync);
         test("LD workspace launch starts once per instance and waits sequentially", SequentialLaunchAsync);
         test("LD workspace launch skips ready instances and waits for existing processes", ExistingProcessesAsync);
         test("LD workspace launch timeout never retries or starts later instances", LaunchTimeoutAsync);
@@ -49,6 +51,48 @@ public static class LdWorkspaceTests
         Assert(result.Select(item => item.Index).SequenceEqual([1, 2]) && result.All(item => item.State == "ready"), "Sequential results were incomplete.");
         Assert(progress.Items.Any(item => item.State == "waiting") && result.All(item => item.Message.Contains("ADB", StringComparison.Ordinal)), "Progress incorrectly claimed guest readiness.");
         Assert(!runner.Calls.Any(call => call.Contains("0") || call[0] is "adb" or "quit" or "quitall"), "Batch touched protected or global operations.");
+    }
+
+    private static async Task ConfirmationValidationAsync()
+    {
+        var runner = new FakeConsole(); runner.Instances.Add(new(2, "B"));
+        await using var service = new LdPlayerService(runner);
+        var snapshot = (await service.RefreshAsync()).ToArray();
+        var before = runner.Calls.Count;
+        var resources = 0;
+        var invalidSnapshots = new IReadOnlyList<LdPlayerInstance>[]
+        {
+            [], [snapshot[0]], [snapshot[0], snapshot[0]],
+            [snapshot[0], snapshot[1], snapshot[0] with { Index = 3 }],
+            [snapshot[0], snapshot[1] with { Index = 3 }]
+        };
+        var coordinator = Coordinator(service);
+        foreach (var invalid in invalidSnapshots)
+            await Expect(400, () => coordinator.StartAsync([1, 2], _ => { resources++; return Task.CompletedTask; }, expectedInstances: invalid));
+        Assert(runner.Calls.Count == before && resources == 0, "Invalid confirmation snapshot reached the console or resource callback.");
+        var result = await coordinator.StartAsync([1, 2], _ => { resources++; return Task.CompletedTask; }, expectedInstances: snapshot.Reverse().ToArray());
+        Assert(result.Count == 2 && result.All(item => item.State == "ready") && runner.Count("launch") == 2, "Valid unordered confirmation snapshot blocked normal launch generations.");
+    }
+
+    private static async Task ConfirmationReplacementAsync()
+    {
+        foreach (var rename in new[] { true, false })
+        {
+            var runner = new FakeConsole(); runner.Instances.Add(new(2, "B"));
+            await using var service = new LdPlayerService(runner);
+            var snapshot = (await service.RefreshAsync()).ToArray();
+            if (rename) runner.Instances[0].Name = "replacement";
+            else
+            {
+                runner.Instances[0].Width++;
+                await service.RefreshAsync();
+                runner.Instances[0].Width--;
+                await service.RefreshAsync();
+            }
+            var resources = 0;
+            await Expect(409, () => Coordinator(service).StartAsync([1, 2], _ => { resources++; return Task.CompletedTask; }, expectedInstances: snapshot));
+            Assert(resources == 0 && runner.Count("launch") == 0, "Replacement after confirmation launched a changed or later instance.");
+        }
     }
 
     private static async Task ExistingProcessesAsync()

@@ -22,12 +22,17 @@ public sealed class LdLaunchCoordinator
 
     public async Task<IReadOnlyList<LdLaunchProgress>> StartAsync(int[] indices,
         Func<CancellationToken, Task> ensureResourceReserve, IProgress<LdLaunchProgress>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default, IReadOnlyList<LdPlayerInstance>? expectedInstances = null)
     {
         if (indices is null || indices.Length == 0 || indices.Any(index => index <= 0 || index == 99999) || indices.Distinct().Count() != indices.Length)
             throw new DeviceException("启动批次必须包含不同的正整数实例编号，不允许原实例 0 或桌面编号 99999。", 400, 1007);
         ArgumentNullException.ThrowIfNull(ensureResourceReserve);
         var requested = indices.ToArray();
+        var expected = expectedInstances?.ToArray();
+        if (expected is not null && (expected.Length != requested.Length || expected.Any(instance => instance is null) ||
+            !expected.Select(instance => instance.Index).ToHashSet().SetEquals(requested)))
+            throw new DeviceException("确认快照必须完整且唯一地对应本次启动编号，不能缺少、重复或包含额外实例。", 400, 1007);
+        var confirmed = expected?.ToDictionary(instance => instance.Index);
         await batch.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -42,6 +47,8 @@ public sealed class LdLaunchCoordinator
                 {
                     await service.RefreshAsync(token).ConfigureAwait(false);
                     var original = Require(index);
+                    if (confirmed is not null && (original.Generation != confirmed[index].Generation || original.Name != confirmed[index].Name))
+                        throw new DeviceException($"确认后实例身份或代次已变化：索引={index}；未提交启动命令，请刷新后重新确认。", 409, 1003);
                     if (IsReady(original))
                     {
                         var skipped = new LdLaunchProgress(index, "skipped", "实例已运行，未重复启动；尚未核验 ADB、设备授权或应用页面。", original);
