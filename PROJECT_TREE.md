@@ -32,6 +32,10 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- PLAN.md
 |   |   |   |-- REPORT.md
 |   |   |   +-- TEST_LOG.md
+|   |   |-- one-click-start/
+|   |   |   |-- PLAN.md
+|   |   |   |-- REPORT.md
+|   |   |   +-- TEST_LOG.md
 |   |   |-- REPORT.md
 |   |   |-- TEST_CASES.md
 |   |   |-- TEST_LOG.md
@@ -181,6 +185,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- app.manifest
 |   |   |-- App.xaml
 |   |   |-- App.xaml.cs
+|   |   |-- LdWindowVisibility.cs
 |   |   |-- LocalizationService.cs
 |   |   |-- MainWindow.xaml
 |   |   |-- MainWindow.xaml.cs
@@ -191,6 +196,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- Themes/
 |   |   |   +-- ModernTheme.xaml
 |   |   |-- UiErrorPresentation.cs
+|   |   |-- UnifiedDeviceRow.cs
 |   |   |-- Views/
 |   |   |   |-- ApiView.cs
 |   |   |   |-- ApplicationsView.cs
@@ -199,9 +205,11 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- ExtensionsView.cs
 |   |   |   |-- FilesView.cs
 |   |   |   |-- LdPlayerView.cs
+|   |   |   |-- LdWindowVisibilitySmoke.cs
 |   |   |   |-- LiveUiAcceptance.cs
 |   |   |   |-- NativeView.cs
 |   |   |   |-- NetworkScannerView.cs
+|   |   |   |-- OneClickStartAcceptance.cs
 |   |   |   |-- ResponsiveColumnsConverter.cs
 |   |   |   |-- ScreenshotView.cs
 |   |   |   |-- ScriptsView.cs
@@ -211,6 +219,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- UiControlAudit.cs
 |   |   |   |-- UnifiedDevicesAcceptance.cs
 |   |   |   |-- UnifiedDevicesView.cs
+|   |   |   |-- UnifiedDeviceTile.cs
 |   |   |   |-- WallDeviceTile.cs
 |   |   |   |-- WallView.cs
 |   |   |   +-- WorkspaceShell.cs

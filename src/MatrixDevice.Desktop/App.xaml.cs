@@ -17,6 +17,9 @@ public partial class App : Application
             var smoke = e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
             var liveVerification = e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase);
             var unifiedVerification = e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase);
+            var oneClickVerification = e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase);
+            if (new[] { smoke, liveVerification, unifiedVerification, oneClickVerification }.Count(enabled => enabled) > 1)
+                throw new ArgumentException("一次只能选择一种自动验收模式。");
             string? unifiedCandidate = null;
             var demo = smoke || e.Args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
             var dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MatrixDevice.Reconstructed", demo ? "demo" : "data");
@@ -51,11 +54,18 @@ public partial class App : Application
                 unifiedCandidate = candidate;
                 settings = settings with { AutoStartApi = false, AutoConnect = false, AdbAllowedSerials = [approved], LdSerialBindings = new() { [2] = approved } };
             }
+            if (oneClickVerification)
+            {
+                if (demo || unifiedVerification || directoryIndex < 0 || !dataDirectory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || !settings.LdSerialBindings.TryGetValue(1, out var candidate) || !settings.AdbAllowedSerials.Contains(candidate, StringComparer.Ordinal)) throw new ArgumentException("一键冷启动验收必须使用包含原批准实例1的独立artifacts配置，不能混用其它验收模式。");
+                unifiedCandidate = candidate;
+                settings = settings with { AutoStartApi = false, AutoConnect = false, AdbAllowedSerials = [], LdSerialBindings = new(), AgentBaseUrl = null, AgentSerial = null };
+            }
             runtime = await MatrixRuntime.CreateAsync(settings, dataDirectory, demo);
             var window = new MainWindow(new WorkspaceViewModel(runtime, dataDirectory, demo));
             MainWindow = window;
             window.Show();
             await window.ViewModel.RefreshDevicesAsync();
+            await window.RecoverBackgroundWindowsAsync();
             window.UpdateUnifiedDirectory();
             if (runtime.Settings.AutoStartApi) await window.ViewModel.StartApisAsync();
             if (smoke)
@@ -73,12 +83,16 @@ public partial class App : Application
             }
             if (unifiedVerification)
             {
-                await window.RunUnifiedAccessAcceptanceAsync(Path.Combine(dataDirectory, "evidence"), unifiedCandidate!); window.Close();
+                await window.RunUnifiedAccessAcceptanceAsync(Path.Combine(dataDirectory, "evidence"), unifiedCandidate!, e.Args.Contains("--verify-background-window", StringComparer.OrdinalIgnoreCase)); window.Close();
+            }
+            if (oneClickVerification)
+            {
+                await window.RunOneClickStartAcceptanceAsync(Path.Combine(dataDirectory, "evidence"), unifiedCandidate!); window.Close();
             }
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
+            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
             else MessageBox.Show(UiErrorPresentation.Describe(ex), "矩阵设备启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             try

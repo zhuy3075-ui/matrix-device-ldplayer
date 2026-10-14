@@ -8,6 +8,53 @@ namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
+    private async Task VerifyOneClickProjectionAsync()
+    {
+        NavigateTo("设备墙 / 主控"); UpdateUnifiedDirectory();
+        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+        var originalDevices = ViewModel.Devices.Count;
+        var originalSelection = unifiedDevices.ToDictionary(row => row.Key, row => row.IsSelected);
+        if (unifiedDevices.Select(row => row.Key).Distinct().Count() != unifiedDevices.Count || wallWorkspace.RowDefinitions.Count != 1) throw new InvalidOperationException("统一目录重复或仍有底部独立卡片区。");
+        if (!unifiedDevices.Any(row => row.Instance is { AndroidStarted: false } && row.Device is null)) throw new InvalidOperationException("统一目录遗漏关闭实例。");
+        try
+        {
+            foreach (var row in unifiedDevices.ToArray()) row.IsSelected = false;
+            var cold = unifiedDevices.First(row => row.Instance is { Index: > 0, AndroidStarted: false } && row.Device is null);
+            cold.Update(cold.Instance, null, false, "已连接");
+            if (cold.State == "已连接") throw new InvalidOperationException("连接失效后仍显示历史已连接阶段。");
+            UpdateUnifiedDirectory();
+            cold.IsSelected = true;
+            if (!workspaceCounts.Text.EndsWith("已选 1", StringComparison.Ordinal)) throw new InvalidOperationException("关闭实例的选择数量没有立即更新。");
+            if (ViewModel.Targets().Count != 0 || ViewModel.CanWriteTargets()) throw new InvalidOperationException("只选择关闭实例时仍回落到旧当前设备。");
+            var transfers = ViewModel.Transfers.Count;
+            try { ViewModel.QueuePush(typeof(MainWindow).Assembly.Location, false); throw new InvalidOperationException("未连接选择被静默忽略。"); }
+            catch (MatrixDevice.Core.DeviceException) { }
+            if (ViewModel.Transfers.Count != transfers) throw new InvalidOperationException("未连接选择导致其它设备被加入传输。");
+            ViewModel.Devices[0].IsSelected = true;
+            if (ViewModel.Targets().Count != 0 || ViewModel.CanWriteTargets()) throw new InvalidOperationException("混合选择静默遗漏未连接设备。");
+            var all = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == "选择当前筛选中的全部设备");
+            all.Command!.Execute(null);
+            if (unifiedDevices.Any(row => row.CanSelect && !row.IsSelected) || ViewModel.Devices.Count != originalDevices) throw new InvalidOperationException("全选未涵盖关闭实例或伪造了可控设备。");
+            UpdateUnifiedDirectory();
+            if (unifiedDevices.Any(row => row.CanSelect && !row.IsSelected)) throw new InvalidOperationException("自动目录更新丢失选择。");
+        }
+        finally { foreach (var row in unifiedDevices.ToArray()) row.IsSelected = originalSelection.GetValueOrDefault(row.Key); }
+        var originalConfirm = ViewModel.Confirm; var confirmations = 0;
+        ViewModel.Confirm = (_, _) => { confirmations++; return false; };
+        try
+        {
+            foreach (var invalid in new Dictionary<int, string>[] { new(), new() { [1] = "demo", [2] = "extra" }, new() { [1] = "" } })
+            {
+                try { await ConnectLdInstancesAsync([1], invalid); throw new InvalidOperationException("不完整的预批准串号进入启动流程。"); }
+                catch (MatrixDevice.Core.DeviceException ex) when (ex.Status == 400 && ex.Code == 1007) { }
+            }
+            try { await ConnectLdInstancesAsync([1]); throw new InvalidOperationException("演示模式进入真实启动。"); }
+            catch (MatrixDevice.Core.DeviceException ex) when (ex.Message.Contains("演示", StringComparison.Ordinal)) { }
+            if (confirmations != 0) throw new InvalidOperationException("普通启动仍弹出确认框。");
+        }
+        finally { ViewModel.Confirm = originalConfirm; }
+    }
+
     private async Task VerifyOperationGatesAsync()
     {
         var current = ViewModel.CurrentDevice!; var originalInfo = current.Info;

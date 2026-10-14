@@ -12,7 +12,7 @@ namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
-    private string wallViewMode = "cards";
+    private string wallViewMode = "list";
     private readonly Dictionary<string, ToggleButton> wallViewChoices = [];
     private Grid wallWorkspace = null!;
     private FrameworkElement wallCards = null!;
@@ -41,29 +41,25 @@ public partial class MainWindow
         }
         heading.Children.Add(new TextBlock { Text = "设备群控", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, VerticalAlignment = VerticalAlignment.Center });
         top.Children.Add(heading);
+        top.Children.Add(BuildOneClickLaunchTools());
         var tools = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
-        var select = WallButton("\uE73A", "全选", new ActionCommand(() => ViewModel.SelectFiltered(true))); select.ToolTip = "选择当前筛选中的全部设备"; tools.Children.Add(select);
+        var select = WallButton("\uE73A", "全选", new ActionCommand(() => { foreach (var row in unifiedDeviceView.Cast<UnifiedDeviceRow>().ToArray()) row.IsSelected = true; RefreshLaunchCommands(); })); select.ToolTip = "选择当前筛选中的全部设备"; tools.Children.Add(select);
         tools.Children.Add(WallButton("\uE711", "清空", new ActionCommand(ClearWallSelection)));
         var mouse = WallToggle("\uE962", "同步鼠标"); mouse.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(WorkspaceViewModel.SyncMouse))); tools.Children.Add(mouse);
         var keyboard = WallToggle("\uE765", "同步键盘"); keyboard.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(WorkspaceViewModel.SyncKeyboard))); tools.Children.Add(keyboard);
         var automatic = WallToggle("\uE787", "自动截图"); automatic.IsChecked = true; automatic.Checked += (_, _) => { autoCapture = true; }; automatic.Unchecked += (_, _) => { autoCapture = false; }; tools.Children.Add(automatic);
         wallMainToggle = WallToggle("\uE7F4", "主控面板"); wallMainToggle.Checked += (_, _) => UpdateWallMainPanel(); wallMainToggle.Unchecked += (_, _) => UpdateWallMainPanel(); tools.Children.Add(wallMainToggle);
         tools.Children.Add(BuildWallDensity()); top.Children.Add(tools);
-        var context = new DockPanel { Margin = new Thickness(0, 0, 0, 13) };
-        var mainState = BoundText(nameof(WorkspaceViewModel.MainContext)); mainState.Foreground = WallInk; mainState.TextTrimming = TextTrimming.CharacterEllipsis; mainState.MaxWidth = 330; mainState.SetBinding(ToolTipProperty, new Binding(nameof(WorkspaceViewModel.MainContext))); DockPanel.SetDock(mainState, Dock.Right); context.Children.Add(mainState);
-        var targets = BoundText(nameof(WorkspaceViewModel.TargetContext)); targets.Foreground = WallMuted; targets.TextTrimming = TextTrimming.CharacterEllipsis; targets.Margin = new Thickness(0, 0, 20, 0); targets.SetBinding(ToolTipProperty, new Binding(nameof(WorkspaceViewModel.TargetContext))); context.Children.Add(targets); top.Children.Add(context);
         top.Children.Add(new Border { Height = 1, Background = WallBorder });
         wallWorkspace = new Grid { Margin = new Thickness(22, 18, 22, 18) };
-        wallWorkspace.RowDefinitions.Add(new RowDefinition()); wallWorkspace.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        wallWorkspace.RowDefinitions.Add(new RowDefinition());
         wallWorkspace.ColumnDefinitions.Add(new ColumnDefinition()); wallWorkspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0) });
         var views = new Grid(); wallWorkspace.Children.Add(views);
         wallCards = BuildWallItems("cards"); views.Children.Add(wallCards);
         wallScreens = BuildWallItems("screens"); views.Children.Add(wallScreens);
         wallList = BuildWallList(); views.Children.Add(wallList);
         wallMainPanel = BuildWallMainPanel(); Grid.SetColumn(wallMainPanel, 1); wallWorkspace.Children.Add(wallMainPanel);
-        var pending = BuildPendingInstances(); Grid.SetRow(pending, 1); Grid.SetColumnSpan(pending, 2); wallWorkspace.Children.Add(pending);
-        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Search) or nameof(WorkspaceViewModel.GroupFilter)) UpdateUnifiedDirectory(); };
-        page.Children.Add(wallWorkspace); SetWallViewMode("cards"); return page;
+        page.Children.Add(wallWorkspace); SetWallViewMode("list"); return page;
     }
 
     private FrameworkElement BuildWallDensity()
@@ -84,13 +80,13 @@ public partial class MainWindow
     private FrameworkElement BuildWallItems(string mode)
     {
         var grid = new Grid();
-        var items = new ItemsControl { ItemsSource = ViewModel.DeviceView, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        var items = new ItemsControl { ItemsSource = unifiedDeviceView, HorizontalContentAlignment = HorizontalAlignment.Stretch };
         var panel = new FrameworkElementFactory(typeof(UniformGrid));
         var columns = new MultiBinding { Converter = new WallColumnsConverter(mode == "screens" ? 118 : 344, mode == "screens") };
         columns.Bindings.Add(new Binding(nameof(WorkspaceViewModel.WallColumns)) { Source = ViewModel });
         columns.Bindings.Add(new Binding(nameof(ActualWidth)) { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(ScrollViewer), 1) });
         panel.SetBinding(UniformGrid.ColumnsProperty, columns); items.ItemsPanel = new ItemsPanelTemplate(panel);
-        var tile = new FrameworkElementFactory(typeof(WallDeviceTile)); tile.SetBinding(WallDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) }); tile.SetValue(WallDeviceTile.ModeProperty, mode);
+        var tile = new FrameworkElementFactory(typeof(UnifiedDeviceTile)); tile.SetBinding(UnifiedDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) }); tile.SetValue(UnifiedDeviceTile.ModeProperty, mode);
         items.ItemTemplate = new DataTemplate { VisualTree = tile };
         grid.Children.Add(new ScrollViewer { Content = items, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
         var empty = new TextBlock { Text = "当前筛选没有设备", Foreground = WallMuted, FontSize = 14, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
@@ -99,16 +95,16 @@ public partial class MainWindow
 
     private FrameworkElement BuildWallList()
     {
-        var grid = new DataGrid { ItemsSource = ViewModel.DeviceView, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Single, HeadersVisibility = DataGridHeadersVisibility.Column, RowHeight = 48, ColumnHeaderHeight = 40, Background = Brushes.White, BorderThickness = new Thickness(0), GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, HorizontalGridLinesBrush = WallBorder, IsReadOnly = false };
-        grid.SetBinding(Selector.SelectedItemProperty, new Binding(nameof(WorkspaceViewModel.CurrentDevice)) { Mode = BindingMode.OneWay });
-        grid.SelectionChanged += (_, _) => { if (wallViewMode == "list" && grid.SelectedItem is DeviceRow row) ViewModel.CurrentDevice = row; };
-        var checkbox = new FrameworkElementFactory(typeof(CheckBox)); checkbox.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center); checkbox.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(DeviceRow.IsSelected)));
+        var grid = new DataGrid { ItemsSource = unifiedDeviceView, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Single, HeadersVisibility = DataGridHeadersVisibility.Column, RowHeight = 48, ColumnHeaderHeight = 40, Background = Brushes.White, BorderThickness = new Thickness(0), GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, HorizontalGridLinesBrush = WallBorder, IsReadOnly = true };
+        grid.SelectionChanged += (_, _) => { if (wallViewMode == "list" && grid.SelectedItem is UnifiedDeviceRow { Device: { } device }) ViewModel.CurrentDevice = device; };
+        var checkbox = new FrameworkElementFactory(typeof(CheckBox)); checkbox.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center); checkbox.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(UnifiedDeviceRow.IsSelected))); checkbox.SetBinding(IsEnabledProperty, new Binding(nameof(UnifiedDeviceRow.CanSelect)));
         grid.Columns.Add(new DataGridTemplateColumn { Header = "选择", Width = 54, CellTemplate = new DataTemplate { VisualTree = checkbox } });
-        TextColumn(grid, "设备名称", nameof(DeviceRow.Name), 170); TextColumn(grid, "状态", nameof(DeviceRow.State), 90);
-        TextColumn(grid, "型号", "Info.Model", 145); TextColumn(grid, "品牌", "Info.Brand", 110); TextColumn(grid, "安卓", "Info.AndroidVersion", 80);
-        TextColumn(grid, "设备序列号", nameof(DeviceRow.Serial), 185); TextColumn(grid, "分辨率", nameof(DeviceRow.Resolution), 120); TextColumn(grid, "分组", nameof(DeviceRow.Group), 110);
-        var actions = new FrameworkElementFactory(typeof(WallDeviceTile)); actions.SetBinding(WallDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) }); actions.SetValue(WallDeviceTile.ModeProperty, "list");
+        TextColumn(grid, "编号", nameof(UnifiedDeviceRow.Number), 58);
+        TextColumn(grid, "设备名称", nameof(UnifiedDeviceRow.Name), 175); TextColumn(grid, "状态", nameof(UnifiedDeviceRow.State), 110);
+        var actions = new FrameworkElementFactory(typeof(UnifiedDeviceTile)); actions.SetBinding(UnifiedDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) }); actions.SetValue(UnifiedDeviceTile.ModeProperty, "list");
         grid.Columns.Add(new DataGridTemplateColumn { Header = "操作", Width = 214, CellTemplate = new DataTemplate { VisualTree = actions } });
+        TextColumn(grid, "型号", nameof(UnifiedDeviceRow.Model), 145); TextColumn(grid, "品牌", nameof(UnifiedDeviceRow.Brand), 110); TextColumn(grid, "安卓", nameof(UnifiedDeviceRow.Android), 80);
+        TextColumn(grid, "设备序列号", nameof(UnifiedDeviceRow.Serial), 185); TextColumn(grid, "分辨率", nameof(UnifiedDeviceRow.Resolution), 120); TextColumn(grid, "分组", nameof(UnifiedDeviceRow.Group), 110);
         var page = new Grid(); page.Children.Add(grid);
         var empty = new TextBlock { Text = "当前筛选没有设备", Foreground = WallMuted, FontSize = 14, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         empty.SetBinding(VisibilityProperty, new Binding(nameof(ItemsControl.HasItems)) { Source = grid, Converter = new WallEmptyVisibilityConverter() }); page.Children.Add(empty); return page;
@@ -136,8 +132,9 @@ public partial class MainWindow
 
     internal void ClearWallSelection()
     {
+        foreach (var row in unifiedDevices.ToArray()) row.IsSelected = false;
         foreach (var row in ViewModel.Devices) row.IsSelected = false;
-        ViewModel.UpdateSelection();
+        ViewModel.UpdateSelection(); RefreshLaunchCommands();
     }
 
     internal void SetWallViewMode(string mode)
@@ -149,6 +146,7 @@ public partial class MainWindow
         wallList.Visibility = mode == "list" ? Visibility.Visible : Visibility.Collapsed;
         foreach (var choice in wallViewChoices) choice.Value.IsChecked = choice.Key == mode;
         wallDensity.IsEnabled = mode == "screens"; wallMainToggle.IsChecked = mode == "screens"; UpdateWallMainPanel();
+        wallDensity.Visibility = wallMainToggle.Visibility = mode == "screens" ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void UpdateWallMainPanel()

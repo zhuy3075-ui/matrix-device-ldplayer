@@ -14,6 +14,7 @@ public partial class MainWindow
     private readonly List<FrameworkElement> sidebarCaptions = [];
     private FrameworkElement sidebarStatistics = null!;
     private TextBlock collapseGlyph = null!;
+    private TextBlock workspaceCounts = null!;
     private Window? directoryWindow;
     private Window? scannerWindow;
     private bool sidebarCollapsed;
@@ -56,7 +57,7 @@ public partial class MainWindow
         var context = BuildWorkspaceContext(); Grid.SetRow(context, 2); workspace.Children.Add(context);
         var footer = new Grid { Margin = new Thickness(20, 8, 20, 10) };
         footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition());
-        var counts = BoundText(nameof(WorkspaceViewModel.Counts)); counts.FontSize = 11; counts.Foreground = WorkspaceBrush("#63718A"); footer.Children.Add(counts);
+        workspaceCounts = BoundText(nameof(WorkspaceViewModel.Counts)); workspaceCounts.FontSize = 11; workspaceCounts.Foreground = WorkspaceBrush("#63718A"); footer.Children.Add(workspaceCounts);
         var status = BoundText(nameof(WorkspaceViewModel.Status)); status.FontSize = 11; status.TextAlignment = TextAlignment.Right;
         status.TextTrimming = TextTrimming.CharacterEllipsis; status.SetBinding(ToolTipProperty, new Binding(nameof(WorkspaceViewModel.Status)));
         Grid.SetColumn(status, 1); footer.Children.Add(status); Grid.SetRow(footer, 4); workspace.Children.Add(footer);

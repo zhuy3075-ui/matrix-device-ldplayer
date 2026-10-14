@@ -3794,6 +3794,9 @@ public partial class App : Application
             var smoke = e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
             var liveVerification = e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase);
             var unifiedVerification = e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase);
+            var oneClickVerification = e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase);
+            if (new[] { smoke, liveVerification, unifiedVerification, oneClickVerification }.Count(enabled => enabled) > 1)
+                throw new ArgumentException("一次只能选择一种自动验收模式。");
             string? unifiedCandidate = null;
             var demo = smoke || e.Args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
             var dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MatrixDevice.Reconstructed", demo ? "demo" : "data");
@@ -3828,11 +3831,18 @@ public partial class App : Application
                 unifiedCandidate = candidate;
                 settings = settings with { AutoStartApi = false, AutoConnect = false, AdbAllowedSerials = [approved], LdSerialBindings = new() { [2] = approved } };
             }
+            if (oneClickVerification)
+            {
+                if (demo || unifiedVerification || directoryIndex < 0 || !dataDirectory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || !settings.LdSerialBindings.TryGetValue(1, out var candidate) || !settings.AdbAllowedSerials.Contains(candidate, StringComparer.Ordinal)) throw new ArgumentException("一键冷启动验收必须使用包含原批准实例1的独立artifacts配置，不能混用其它验收模式。");
+                unifiedCandidate = candidate;
+                settings = settings with { AutoStartApi = false, AutoConnect = false, AdbAllowedSerials = [], LdSerialBindings = new(), AgentBaseUrl = null, AgentSerial = null };
+            }
             runtime = await MatrixRuntime.CreateAsync(settings, dataDirectory, demo);
             var window = new MainWindow(new WorkspaceViewModel(runtime, dataDirectory, demo));
             MainWindow = window;
             window.Show();
             await window.ViewModel.RefreshDevicesAsync();
+            await window.RecoverBackgroundWindowsAsync();
             window.UpdateUnifiedDirectory();
             if (runtime.Settings.AutoStartApi) await window.ViewModel.StartApisAsync();
             if (smoke)
@@ -3850,12 +3860,16 @@ public partial class App : Application
             }
             if (unifiedVerification)
             {
-                await window.RunUnifiedAccessAcceptanceAsync(Path.Combine(dataDirectory, "evidence"), unifiedCandidate!); window.Close();
+                await window.RunUnifiedAccessAcceptanceAsync(Path.Combine(dataDirectory, "evidence"), unifiedCandidate!, e.Args.Contains("--verify-background-window", StringComparer.OrdinalIgnoreCase)); window.Close();
+            }
+            if (oneClickVerification)
+            {
+                await window.RunOneClickStartAcceptanceAsync(Path.Combine(dataDirectory, "evidence"), unifiedCandidate!); window.Close();
             }
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
+            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
             else MessageBox.Show(UiErrorPresentation.Describe(ex), "矩阵设备启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             try
@@ -3867,6 +3881,315 @@ public partial class App : Application
             finally { Shutdown(1); }
         }
     }
+}
+
+```
+
+## src/MatrixDevice.Desktop/LdWindowVisibility.cs
+
+```csharp
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
+using MatrixDevice.Core;
+
+namespace MatrixDevice.Desktop;
+
+public sealed class LdWindowVisibility
+{
+    private const int SwHide = 0;
+    private const int SwShowMinNoActive = 7;
+    private const int SwShowNoActivate = 8;
+    private const string MarkerPrefix = "MatrixDevice.LdVisibility.";
+    private static readonly TimeSpan VisibilityTimeout = TimeSpan.FromSeconds(3);
+    private readonly string journalDirectory;
+    private readonly string installDirectory;
+    private readonly SemaphoreSlim operations = new(1, 1);
+    private readonly object gate = new();
+    private readonly Dictionary<int, RecoveryRecord> owned = [];
+    private readonly int controllerPid;
+    private readonly long controllerBirth;
+
+    public LdWindowVisibility(string journalDirectory, string expectedInstallDirectory)
+    {
+        if (!Path.IsPathFullyQualified(journalDirectory) || !Path.IsPathFullyQualified(expectedInstallDirectory) || !Directory.Exists(expectedInstallDirectory))
+            throw new ArgumentException("窗口恢复目录与雷电安装目录必须为绝对路径，且安装目录必须存在。");
+        installDirectory = ResolveExistingPath(expectedInstallDirectory);
+        this.journalDirectory = Path.GetFullPath(Path.Combine(journalDirectory, "ld-window-visibility"));
+        Directory.CreateDirectory(this.journalDirectory);
+        this.journalDirectory = ResolveExistingPath(this.journalDirectory);
+        using var process = Process.GetCurrentProcess();
+        controllerPid = process.Id;
+        controllerBirth = process.StartTime.ToUniversalTime().Ticks;
+    }
+
+    public async Task<bool> HideAsync(LdPlayerInstance instance, long expectedPlayerBirth, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        ValidateIndex(instance.Index);
+        if (instance.ProcessId <= 0 || instance.TopWindow <= 0 || expectedPlayerBirth <= 0)
+            throw new DeviceException("隐藏窗口需要真实顶层窗口、播放器 PID 与已冻结的进程出生时刻。", 400, 1007);
+        await operations.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var window = new IntPtr(instance.TopWindow);
+            var executable = ValidateTarget(window, instance.ProcessId, expectedPlayerBirth, null);
+            RecoveryRecord? existing;
+            lock (gate) owned.TryGetValue(instance.Index, out existing);
+            if (existing is not null)
+            {
+                if (existing.Window != instance.TopWindow || existing.ProcessId != instance.ProcessId || existing.ProcessStartUtcTicks != expectedPlayerBirth)
+                    throw new DeviceException($"实例 {instance.Index} 的窗口或进程已变化，不能复用旧隐藏记录。", 409, 1003);
+                ValidateRecordOwner(existing);
+                await ChangeVisibilityAsync(existing, false, ct).ConfigureAwait(false);
+                return true;
+            }
+            if (!IsWindowVisible(window)) return false;
+            if (Directory.EnumerateFiles(journalDirectory, $"ld-window-{instance.Index}-*.json").Any())
+                throw new DeviceException($"实例 {instance.Index} 存在未处理的恢复记录，请先恢复或检查记录，未隐藏新窗口。", 409, 1003);
+            var id = Guid.NewGuid().ToString("N");
+            var record = new RecoveryRecord(1, id, instance.Index, instance.TopWindow, instance.ProcessId,
+                expectedPlayerBirth, executable, true, IsIconic(window), MarkerPrefix + id, controllerPid, controllerBirth);
+            var markerInstalled = false;
+            try
+            {
+                // The marker disappears with the HWND, including reuse inside the same process.
+                if (!SetProp(window, record.Marker, new IntPtr(1))) throw new Win32Exception(Marshal.GetLastWin32Error(), "无法标记自有隐藏窗口，未执行隐藏");
+                markerInstalled = true;
+                ValidateRecordOwner(record);
+                await WriteRecordAsync(record, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                if (markerInstalled && IsWindow(window) && GetProp(window, record.Marker) == new IntPtr(1)) RemoveProp(window, record.Marker);
+                throw;
+            }
+            lock (gate) owned.Add(instance.Index, record);
+            await ChangeVisibilityAsync(record, false, ct).ConfigureAwait(false);
+            return true;
+        }
+        finally { operations.Release(); }
+    }
+
+    public bool IsHidden(int index)
+    {
+        RecoveryRecord? record;
+        lock (gate) owned.TryGetValue(index, out record);
+        if (record is null) return false;
+        var window = new IntPtr(record.Window);
+        return IsWindow(window) && GetProp(window, record.Marker) == new IntPtr(1) &&
+            GetWindowThreadProcessId(window, out var pid) != 0 && pid == record.ProcessId && !IsWindowVisible(window);
+    }
+
+    public async Task ShowAsync(int index, CancellationToken ct = default)
+    {
+        ValidateIndex(index);
+        await operations.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            RecoveryRecord? record;
+            lock (gate) owned.TryGetValue(index, out record);
+            if (record is not null) await RestoreAsync(record, RecordPath(record), ct).ConfigureAwait(false);
+        }
+        finally { operations.Release(); }
+    }
+
+    public async Task RestoreAllAsync(CancellationToken ct = default)
+    {
+        await operations.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            RecoveryRecord[] records;
+            lock (gate) records = owned.Values.ToArray();
+            var failures = new List<Exception>();
+            foreach (var record in records)
+            {
+                ct.ThrowIfCancellationRequested();
+                try { await RestoreAsync(record, RecordPath(record), ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception error) { failures.Add(error); }
+            }
+            if (failures.Count > 0) throw new AggregateException("部分窗口未能安全恢复，已保留对应恢复记录。", failures);
+        }
+        finally { operations.Release(); }
+    }
+
+    public async Task<IReadOnlyList<string>> RecoverPendingAsync(CancellationToken ct = default)
+    {
+        await operations.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var errors = new List<string>();
+            foreach (var path in Directory.EnumerateFiles(journalDirectory, "ld-window-*.json").Order(StringComparer.Ordinal))
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || new FileInfo(path).Length > 64 * 1024)
+                        throw new InvalidDataException("恢复记录不能是链接或超过 64 KiB。");
+                    var record = JsonSerializer.Deserialize<RecoveryRecord>(await File.ReadAllTextAsync(path, ct).ConfigureAwait(false), JsonDefaults.Options)
+                        ?? throw new InvalidDataException("恢复记录为空。");
+                    ValidateRecord(record, path);
+                    if (record.ControllerPid != controllerPid && IsSameProcessAlive(record.ControllerPid, record.ControllerStartUtcTicks))
+                        throw new InvalidOperationException("原控制程序仍在运行，未接管其隐藏窗口。");
+                    await RestoreAsync(record, path, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception error) { errors.Add($"{Path.GetFileName(path)}：{error.Message}"); }
+            }
+            return errors.AsReadOnly();
+        }
+        finally { operations.Release(); }
+    }
+
+    private async Task RestoreAsync(RecoveryRecord record, string path, CancellationToken ct)
+    {
+        if (!File.Exists(path)) { Forget(record); return; }
+        ValidateRecord(record, path);
+        if (HasExited(record.ProcessId) || !IsWindow(new IntPtr(record.Window)))
+        {
+            DeleteRecord(path); Forget(record); return;
+        }
+        ValidateRecordOwner(record);
+        await ChangeVisibilityAsync(record, record.WasVisible, ct).ConfigureAwait(false);
+        DeleteRecord(path);
+        if (IsWindow(new IntPtr(record.Window)) && GetProp(new IntPtr(record.Window), record.Marker) == new IntPtr(1)) RemoveProp(new IntPtr(record.Window), record.Marker);
+        Forget(record);
+    }
+
+    private async Task ChangeVisibilityAsync(RecoveryRecord record, bool visible, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        ValidateRecordOwner(record);
+        var window = new IntPtr(record.Window);
+        // ShowWindowAsync reports queueing, not the resulting visibility.
+        ShowWindowAsync(window, visible ? record.WasMinimized ? SwShowMinNoActive : SwShowNoActivate : SwHide);
+        var deadline = Stopwatch.StartNew();
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            ValidateRecordOwner(record);
+            if (IsWindowVisible(window) == visible) return;
+            if (deadline.Elapsed >= VisibilityTimeout) throw new TimeoutException($"窗口可见状态未在期限内变为 {visible}，恢复记录已保留：实例 {record.Index}");
+            await Task.Delay(25, ct).ConfigureAwait(false);
+        }
+    }
+
+    private string ValidateTarget(IntPtr window, int processId, long birth, string? expectedExecutable)
+    {
+        if (!IsWindow(window)) throw new DeviceException("目标窗口已经失效，未修改窗口。", 409, 1003);
+        if (GetWindowThreadProcessId(window, out var actualPid) == 0 || actualPid != processId)
+            throw new DeviceException("窗口所属 PID 不匹配，拒绝操作复用窗口。", 409, 1003);
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != birth)
+                throw new DeviceException("播放器进程出生时刻不匹配，拒绝操作复用 PID。", 409, 1003);
+            var executable = ResolveExistingPath(process.MainModule?.FileName ?? throw new InvalidOperationException("无法读取目标进程路径。"));
+            var relative = Path.GetRelativePath(installDirectory, executable);
+            if (Path.IsPathFullyQualified(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                throw new DeviceException("目标进程不属于冻结的模拟器安装目录，未修改窗口。", 403, 1007);
+            if (expectedExecutable is not null && !executable.Equals(expectedExecutable, StringComparison.OrdinalIgnoreCase))
+                throw new DeviceException("目标可执行文件路径已变化，拒绝修改窗口。", 409, 1003);
+            return executable;
+        }
+        catch (ArgumentException) { throw new DeviceException("目标进程已退出，未修改窗口。", 409, 1003); }
+    }
+
+    private void ValidateRecordOwner(RecoveryRecord record)
+    {
+        ValidateTarget(new IntPtr(record.Window), record.ProcessId, record.ProcessStartUtcTicks, record.ExecutablePath);
+        if (GetProp(new IntPtr(record.Window), record.Marker) != new IntPtr(1))
+            throw new DeviceException("窗口标记不匹配，可能已销毁或复用，拒绝恢复其它窗口。", 409, 1003);
+    }
+
+    private void ValidateRecord(RecoveryRecord record, string path)
+    {
+        ValidateIndex(record.Index);
+        if (record.Version != 1 || !Guid.TryParseExact(record.Id, "N", out _) || record.Window <= 0 || record.ProcessId <= 0 ||
+            record.ProcessStartUtcTicks <= 0 || !record.WasVisible || record.Marker != MarkerPrefix + record.Id ||
+            record.ControllerPid <= 0 || record.ControllerStartUtcTicks <= 0 || !Path.IsPathFullyQualified(record.ExecutablePath) ||
+            !Path.GetFullPath(path).Equals(RecordPath(record), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("恢复记录字段或文件名不合法，未修改窗口。");
+    }
+
+    private async Task WriteRecordAsync(RecoveryRecord record, CancellationToken ct)
+    {
+        var path = RecordPath(record);
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            var bytes = new UTF8Encoding(false).GetBytes(JsonSerializer.Serialize(record, JsonDefaults.Options));
+            await using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, true))
+            {
+                await file.WriteAsync(bytes, ct).ConfigureAwait(false);
+                await file.FlushAsync(ct).ConfigureAwait(false);
+                file.Flush(true);
+            }
+            ct.ThrowIfCancellationRequested();
+            File.Move(temporary, path, false);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    private string RecordPath(RecoveryRecord record) => Path.Combine(journalDirectory, $"ld-window-{record.Index}-{record.Id}.json");
+    private void DeleteRecord(string path)
+    {
+        if (!Path.GetDirectoryName(Path.GetFullPath(path))!.Equals(journalDirectory, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("恢复记录不在私有目录内，拒绝清理。");
+        File.Delete(path);
+    }
+    private void Forget(RecoveryRecord record)
+    {
+        lock (gate)
+            if (owned.TryGetValue(record.Index, out var current) && current.Id == record.Id) owned.Remove(record.Index);
+    }
+    private static void ValidateIndex(int index)
+    {
+        if (index <= 0 || index == 99999) throw new DeviceException($"窗口隐藏只允许非零独立实例：{index}", 400, 1007);
+    }
+    private static bool HasExited(int pid)
+    {
+        try { using var process = Process.GetProcessById(pid); return process.HasExited; }
+        catch (ArgumentException) { return true; }
+    }
+    private static bool IsSameProcessAlive(int pid, long birth)
+    {
+        try { using var process = Process.GetProcessById(pid); return !process.HasExited && process.StartTime.ToUniversalTime().Ticks == birth; }
+        catch (ArgumentException) { return false; }
+    }
+    private static string ResolveExistingPath(string path)
+    {
+        var absolute = Path.GetFullPath(path);
+        var current = Path.GetPathRoot(absolute)!;
+        foreach (var part in absolute[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var next = Path.Combine(current, part);
+            var attributes = File.GetAttributes(next);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                FileSystemInfo info = (attributes & FileAttributes.Directory) != 0 ? new DirectoryInfo(next) : new FileInfo(next);
+                current = info.ResolveLinkTarget(true)?.FullName ?? throw new IOException("无法解析路径中的链接，拒绝修改窗口。");
+            }
+            else current = next;
+        }
+        return Path.TrimEndingDirectorySeparator(current);
+    }
+
+    private sealed record RecoveryRecord(int Version, string Id, int Index, long Window, int ProcessId,
+        long ProcessStartUtcTicks, string ExecutablePath, bool WasVisible, bool WasMinimized, string Marker,
+        int ControllerPid, long ControllerStartUtcTicks);
+    [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool ShowWindowAsync(IntPtr window, int command);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindow(IntPtr window);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out int pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SetPropW", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetProp(IntPtr window, string name, IntPtr value);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetPropW")] private static extern IntPtr GetProp(IntPtr window, string name);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "RemovePropW")] private static extern IntPtr RemoveProp(IntPtr window, string name);
 }
 
 ```
@@ -4041,6 +4364,7 @@ public partial class MainWindow : Window
     {
         BuildWorkspaceLayout();
         tabs = new TabControl { Background = Brushes.White, BorderThickness = new Thickness(0), Template = WorkspaceContentTemplate() };
+        InitializeUnifiedDevices();
         AddTab("设备墙 / 主控", BuildWallPage());
         AddTab("雷电实例", BuildLdPlayerPage());
         AddTab("节点", BuildNodesPage());
@@ -4055,6 +4379,7 @@ public partial class MainWindow : Window
         AddTab("设置", BuildSettingsPage());
         tabs.SelectionChanged += (_, args) => { if (ReferenceEquals(args.Source, tabs)) { UpdateNavigation(); RebuildNodes(); } };
         AttachWorkspacePages();
+        NavigateTo("设备墙 / 主控");
     }
 
 
@@ -4133,7 +4458,7 @@ public partial class MainWindow : Window
         foreach (var row in ViewModel.Devices) row.Changed(nameof(DeviceRow.FrameLabel));
     }
 
-    private void RefreshWall() { }
+    private void RefreshWall() { UpdateUnifiedDirectory(); }
     private void RefreshScreens()
     {
         if (screenshotImage is null) return;
@@ -4183,6 +4508,7 @@ public partial class MainWindow : Window
             scanCancellation?.Cancel();
             if (scanOperation is not null) { try { await scanOperation; } catch (OperationCanceledException) { } }
             foreach (var host in nativeHosts.ToList()) host.Restore();
+            if (ldWindowVisibility is not null) await ldWindowVisibility.RestoreAllAsync();
             var saved = ViewModel.Runtime.Settings with { WindowWidth = WindowState == WindowState.Normal ? ActualWidth : RestoreBounds.Width, WindowHeight = WindowState == WindowState.Normal ? ActualHeight : RestoreBounds.Height, WallColumns = ViewModel.WallColumns, SyncMouse = ViewModel.SyncMouse, SyncKeyboard = ViewModel.SyncKeyboard };
             ViewModel.Runtime.Settings = ViewModel.Runtime.SettingsStore.Save(saved);
             await ViewModel.ShutdownAsync();
@@ -4210,6 +4536,7 @@ public partial class MainWindow : Window
     public async Task RunSmokeAsync(string? screenshotPath = null)
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("启动验收仅允许显式演示模式");
+        if (tabs.SelectedIndex != 0 || wallViewMode != "list") throw new InvalidOperationException("初始页面必须是统一设备列表。");
         if (screenshotPath is not null)
         {
             if (!System.IO.Path.IsPathFullyQualified(screenshotPath)) throw new InvalidOperationException("截图输出必须为绝对路径");
@@ -4232,6 +4559,8 @@ public partial class MainWindow : Window
         ViewModel.SelectedNode = ViewModel.FlattenNodes().FirstOrDefault(node => node.Source.Clickable);
         await ViewModel.LoadAppsAsync();
         await VerifyOperationGatesAsync();
+        await VerifyOneClickProjectionAsync();
+        await LdWindowVisibilitySmoke.VerifyAsync(System.IO.Path.Combine(ViewModel.DataDirectory, "window-visibility-smoke"));
         ViewModel.SamplePixel(10, 10);
         ViewModel.ShellInput = "wm size"; await ViewModel.ExecuteShellAsync();
         var acceptanceDirectory = ViewModel.DataDirectory;
@@ -4435,7 +4764,12 @@ public partial class MainWindow : Window
         if (screenshotPath is not null)
             await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".controls.json"), JsonSerializer.Serialize(controlStates, JsonDefaults.Options));
         NavigateTo("设备墙 / 主控");
+        await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
         await Dispatcher.InvokeAsync(() => { UpdateLayout(); }, System.Windows.Threading.DispatcherPriority.Render);
+        var tiles = VisualDescendants<UnifiedDeviceTile>(Shell).Where(tile => tile.IsVisible).ToArray();
+        if (screenshotPath is not null) await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".tiles.json"), JsonSerializer.Serialize(tiles.Select(tile => new { tile.Mode, owner = tile.Owner is not null, context = tile.DataContext?.GetType().Name, child = tile.Child?.GetType().Name, tile.ActualWidth, tile.ActualHeight }), JsonDefaults.Options));
+        if (wallViewMode != "list" && !unifiedDeviceView.IsEmpty && tiles.Length == 0) throw new InvalidOperationException("非空统一目录没有生成可见卡片。");
+        if (tiles.Any(tile => tile.Child is null || tile.ActualHeight < 1)) throw new InvalidOperationException("统一设备视图出现空白条目。");
         if (screenshotPath is not null) SaveRender(screenshotPath);
         var path = System.IO.Path.Combine(ViewModel.DataDirectory, "desktop-smoke.json");
         if (!string.IsNullOrWhiteSpace(ViewModel.Error)) throw new InvalidOperationException("桌面验收产生错误：" + ViewModel.Error);
@@ -5599,6 +5933,64 @@ public static class UiErrorPresentation
 
 ```
 
+## src/MatrixDevice.Desktop/UnifiedDeviceRow.cs
+
+```csharp
+using MatrixDevice.Core;
+
+namespace MatrixDevice.Desktop;
+
+public sealed class UnifiedDeviceRow : ObservableObject
+{
+    private bool selected;
+    public string Key { get; }
+    public LdPlayerInstance? Instance { get; private set; }
+    public DeviceRow? Device { get; private set; }
+    public bool Connected { get; private set; }
+    private string phase = "";
+    public int? Index => Instance?.Index;
+    public string Number => Index?.ToString() ?? "-";
+    public string Name => Device?.Name ?? Instance?.Name ?? "";
+    public string State => Connected ? "已连接" : phase is not ("" or "已连接") ? phase : Instance?.Index == 0 ? "受保护" : Instance?.IsStarting == true ? "启动中" : Instance?.AndroidStarted == true ? "待连接" : Instance is not null ? "已关闭" : Device?.State ?? "离线";
+    public string Model => Device?.Info.Model ?? "-";
+    public string Brand => Device?.Info.Brand ?? "-";
+    public string Android => Device?.Info.AndroidVersion ?? "-";
+    public string Serial => Device?.Serial ?? "-";
+    public string Resolution => Device?.Resolution ?? (Instance?.Width is { } width && Instance.Height is { } height ? $"{width} × {height}" : "-");
+    public string Group => Device?.Group ?? "未分组";
+    public bool CanSelect => Index is not (0 or 99999);
+    public bool IsSelected
+    {
+        get => Device?.IsSelected ?? selected;
+        set { if (!CanSelect) return; selected = value; if (Device is not null) Device.IsSelected = value; Changed(); }
+    }
+    public string PrimaryLabel => Connected ? "调试" : Instance?.AndroidStarted == true ? "连接" : "启动";
+    public string PrimaryGlyph => Connected ? "\uE946" : "\uE768";
+    public AsyncCommand PrimaryCommand { get; }
+    public AsyncCommand ShowWindowCommand { get; }
+    public AsyncCommand MainCommand { get; }
+
+    public UnifiedDeviceRow(string key, Func<UnifiedDeviceRow, Task> activate, Func<UnifiedDeviceRow, bool> canActivate, Func<UnifiedDeviceRow, Task> showWindow, Func<UnifiedDeviceRow, bool> canShow, Func<UnifiedDeviceRow, Task> setMain)
+    {
+        Key = key;
+        PrimaryCommand = new AsyncCommand(() => activate(this), () => canActivate(this));
+        ShowWindowCommand = new AsyncCommand(() => showWindow(this), () => canShow(this));
+        MainCommand = new AsyncCommand(() => setMain(this), () => Connected && Device is not null && canActivate(this));
+    }
+
+    public void Update(LdPlayerInstance? instance, DeviceRow? device, bool connected, string operationPhase)
+    {
+        var retained = IsSelected;
+        Instance = instance; Device = device; Connected = connected; phase = operationPhase;
+        if (CanSelect && retained && device is not null && !device.IsSelected) device.IsSelected = true;
+        selected = retained; Changed(""); RefreshCommands();
+    }
+
+    public void RefreshCommands() { PrimaryCommand.Refresh(); ShowWindowCommand.Refresh(); MainCommand.Refresh(); }
+}
+
+```
+
 ## src/MatrixDevice.Desktop/Views/ApiView.cs
 
 ```csharp
@@ -6109,7 +6501,7 @@ public partial class MainWindow
         return Button(glyph, label, command);
     }
 
-    private void RefreshLdButtons() { foreach (var command in ldCommands) command.Refresh(); }
+    private void RefreshLdButtons() { foreach (var command in ldCommands) command.Refresh(); RefreshLaunchCommands(); }
     private void UpdateLdPlayerRows()
     {
         var index = ldSelection?.Index;
@@ -6182,6 +6574,174 @@ public sealed class LdInstanceRow(LdPlayerInstance instance, string binding, str
     public long Generation => Instance.Generation;
     public string Binding { get; } = binding;
     public string ConnectionState { get; } = connectionState;
+}
+
+```
+
+## src/MatrixDevice.Desktop/Views/LdWindowVisibilitySmoke.cs
+
+```csharp
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Interop;
+using System.Windows.Threading;
+using MatrixDevice.Core;
+
+namespace MatrixDevice.Desktop;
+
+public static class LdWindowVisibilitySmoke
+{
+    public static async Task VerifyAsync(string evidenceDir)
+    {
+        if (!Path.IsPathFullyQualified(evidenceDir)) throw new ArgumentException("窗口自测证据目录必须为绝对路径。");
+        if (Application.Current is null || !Application.Current.Dispatcher.CheckAccess())
+            throw new InvalidOperationException("窗口自测必须在本程序 WPF Dispatcher 上运行。");
+        var directory = Path.Combine(evidenceDir, "self-window-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        using var process = Process.GetCurrentProcess();
+        var birth = process.StartTime.ToUniversalTime().Ticks;
+        var executable = process.MainModule?.FileName ?? throw new InvalidOperationException("无法读取自测进程路径。");
+        var install = Path.GetDirectoryName(executable)!;
+        var visibility = new LdWindowVisibility(directory, install);
+        var passed = new List<string>();
+        var windows = new List<Window>();
+        var window = MakeWindow(); windows.Add(window);
+        await RenderAsync();
+        var handle = new WindowInteropHelper(window).Handle;
+        var instance = new LdPlayerInstance(1, "本程序窗口自测，不是真实模拟器", handle.ToInt64(), 0, false, process.Id, -1);
+        var parent = GetParent(handle);
+        var style = GetWindowLongPtr(handle, -16).ToInt64();
+        var exStyle = GetWindowLongPtr(handle, -20).ToInt64();
+        try
+        {
+            Assert(IsWindowVisible(handle), "自测窗口没有正常显示。");
+            await ExpectAsync(400, () => visibility.HideAsync(instance with { Index = 0 }, birth));
+            await ExpectAsync(409, () => visibility.HideAsync(instance, birth + 1));
+            await ExpectAsync(409, () => visibility.HideAsync(instance with { ProcessId = int.MaxValue }, birth));
+            Assert(IsWindowVisible(handle) && JournalCount(directory) == 0, "错误身份触碰了窗口或建立恢复记录。");
+            passed.Add("protected-index-and-wrong-owner-refused");
+
+            var outside = Path.Combine(directory, "empty-sdk"); Directory.CreateDirectory(outside);
+            var wrongInstall = new LdWindowVisibility(Path.Combine(directory, "wrong-install"), outside);
+            await ExpectAsync(403, () => wrongInstall.HideAsync(instance, birth));
+            Assert(IsWindowVisible(handle), "安装路径拒绝后窗口被隐藏。");
+            passed.Add("executable-outside-frozen-install-refused");
+
+            Assert(await visibility.HideAsync(instance, birth), "自有可见窗口未获得隐藏所有权。");
+            Assert(!IsWindowVisible(handle) && visibility.IsHidden(1) && JournalCount(directory) == 1, "隐藏状态或预写恢复记录不正确。");
+            Assert((GetWindowLongPtr(handle, -16).ToInt64() & ~0x10000000L) == (style & ~0x10000000L) && GetParent(handle) == parent && GetWindowLongPtr(handle, -20).ToInt64() == exStyle,
+                "隐藏改变了可见位以外的样式或父窗口。");
+            await visibility.ShowAsync(1);
+            Assert(IsWindowVisible(handle) && !visibility.IsHidden(1) && JournalCount(directory) == 0 && GetForegroundWindow() != handle,
+                "恢复未显示自有窗口、遗留记录或激活了窗口。");
+            Assert(GetWindowLongPtr(handle, -16).ToInt64() == style && GetParent(handle) == parent && GetWindowLongPtr(handle, -20).ToInt64() == exStyle,
+                "恢复改变了原窗口样式或父窗口。");
+            passed.Add("journal-before-hide-and-nonactivating-show");
+
+            window.Hide(); await RenderAsync();
+            Assert(!await visibility.HideAsync(instance, birth) && !visibility.IsHidden(1) && JournalCount(directory) == 0,
+                "此前已经隐藏的窗口被本组件占有。");
+            await visibility.ShowAsync(1);
+            Assert(!IsWindowVisible(handle), "显示操作修改了并非本组件隐藏的窗口。");
+            window.Show(); await RenderAsync();
+            passed.Add("preexisting-hidden-window-not-owned");
+
+            await visibility.HideAsync(instance, birth);
+            var recordPath = Directory.EnumerateFiles(directory, "ld-window-*.json", SearchOption.AllDirectories).Single();
+            var recordText = await File.ReadAllTextAsync(recordPath);
+            var record = JsonNode.Parse(recordText)!.AsObject();
+            var marker = record["marker"]!.GetValue<string>();
+            RemoveProp(handle, marker);
+            await ExpectAsync(409, () => visibility.ShowAsync(1));
+            Assert(!IsWindowVisible(handle) && File.Exists(recordPath), "窗口标记丢失后仍恢复窗口或删除恢复记录。");
+            if (!SetProp(handle, marker, new IntPtr(1))) throw new Win32Exception(Marshal.GetLastWin32Error(), "无法恢复自测窗口标记");
+            await visibility.ShowAsync(1);
+            passed.Add("missing-marker-reuse-guard-refused");
+
+            await visibility.HideAsync(instance, birth);
+            recordPath = Directory.EnumerateFiles(directory, "ld-window-*.json", SearchOption.AllDirectories).Single();
+            recordText = await File.ReadAllTextAsync(recordPath);
+            record = JsonNode.Parse(recordText)!.AsObject();
+            record["processStartUtcTicks"] = birth + 1;
+            await File.WriteAllTextAsync(recordPath, record.ToJsonString(JsonDefaults.Options));
+            var recovery = new LdWindowVisibility(directory, install);
+            var refused = await recovery.RecoverPendingAsync();
+            Assert(refused.Count == 1 && !IsWindowVisible(handle) && File.Exists(recordPath), "恢复错误出生时刻的记录没有被拒绝。");
+            await File.WriteAllTextAsync(recordPath, recordText);
+            Assert((await recovery.RecoverPendingAsync()).Count == 0 && IsWindowVisible(handle) && JournalCount(directory) == 0,
+                "同进程恢复记录回放失败。");
+            await visibility.RestoreAllAsync();
+            passed.Add("journal-replay-and-wrong-birth-refusal");
+
+            var second = MakeWindow(); windows.Add(second); await RenderAsync();
+            var secondHandle = new WindowInteropHelper(second).Handle;
+            var secondInstance = instance with { Index = 2, TopWindow = secondHandle.ToInt64() };
+            await visibility.HideAsync(instance, birth);
+            await visibility.HideAsync(secondInstance, birth);
+            await visibility.RestoreAllAsync();
+            Assert(IsWindowVisible(handle) && IsWindowVisible(secondHandle) && JournalCount(directory) == 0,
+                "批量恢复没有恢复所有自有窗口。");
+            passed.Add("restore-all-owned-windows");
+
+            await visibility.HideAsync(secondInstance, birth);
+            second.Close(); windows.Remove(second);
+            await visibility.ShowAsync(2);
+            Assert(JournalCount(directory) == 0 && !visibility.IsHidden(2), "窗口关闭后未安全清理自有恢复记录。");
+            passed.Add("closed-window-record-cleanup");
+
+            using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+            try { await visibility.HideAsync(instance, birth, cancellation.Token); throw new InvalidOperationException("取消状态被忽略。"); }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+            Assert(IsWindowVisible(handle) && JournalCount(directory) == 0, "已取消操作仍隐藏了窗口。");
+            passed.Add("pre-cancelled-hide-no-mutation");
+
+            await File.WriteAllTextAsync(Path.Combine(directory, "result.json"), JsonSerializer.Serialize(new
+            {
+                subject = "own-process-wpf-windows-only", processId = process.Id, processStartUtcTicks = birth,
+                executable, externalWindowsTouched = false, realLdPlayerTested = false,
+                desktopSha256 = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(typeof(LdWindowVisibility).Assembly.Location))),
+                passed, count = passed.Count, pendingRecords = JournalCount(directory)
+            }, JsonDefaults.Options));
+        }
+        finally
+        {
+            foreach (var ownWindow in windows) ownWindow.Close();
+            await visibility.RestoreAllAsync();
+        }
+    }
+
+    private static Window MakeWindow()
+    {
+        var window = new Window
+        {
+            Title = "本程序窗口恢复自测", Width = 280, Height = 120, Left = -10000, Top = -10000,
+            WindowStartupLocation = WindowStartupLocation.Manual, ShowActivated = false, ShowInTaskbar = false,
+            Content = new TextBlock { Text = "本程序创建的测试窗口，不是真实雷电实例。", TextWrapping = TextWrapping.Wrap }
+        };
+        window.Show(); return window;
+    }
+    private static async Task RenderAsync() => await Application.Current.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
+    private static int JournalCount(string directory) => Directory.EnumerateFiles(directory, "ld-window-*.json", SearchOption.AllDirectories).Count();
+    private static void Assert(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
+    private static async Task ExpectAsync(int status, Func<Task> action)
+    {
+        try { await action(); }
+        catch (DeviceException error) when (error.Status == status) { return; }
+        throw new InvalidOperationException($"预期窗口操作被拒绝，HTTP 类状态码={status}。");
+    }
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern IntPtr GetParent(IntPtr window);
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SetPropW", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetProp(IntPtr window, string name, IntPtr value);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "RemovePropW")] private static extern IntPtr RemoveProp(IntPtr window, string name);
 }
 
 ```
@@ -6440,6 +7000,89 @@ public partial class MainWindow
         LocalizationService.Bind(header, TextBlock.TextProperty, ViewModel.Demo ? "网络发现 · 演示模式禁用" : "网络发现");
         var expander = new Expander { Header = header, Content = panel, Margin = new Thickness(0, 6, 0, 0) };
         return expander;
+    }
+}
+
+```
+
+## src/MatrixDevice.Desktop/Views/OneClickStartAcceptance.cs
+
+```csharp
+using System.IO;
+using System.Text.Json;
+using MatrixDevice.Core;
+
+namespace MatrixDevice.Desktop;
+
+public partial class MainWindow
+{
+    internal async Task RunOneClickStartAcceptanceAsync(string output, string approvedCandidate)
+    {
+        var runtime = ViewModel.Runtime;
+        if (ViewModel.Demo || !Path.IsPathFullyQualified(output) || !ViewModel.DataDirectory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || runtime.Settings.AdbAllowedSerials.Length != 0)
+            throw new InvalidOperationException("冷启动验收必须使用无初始授权的隔离artifacts工作区。");
+        var runId = Guid.NewGuid().ToString("N");
+        var confirm = ViewModel.Confirm; var confirmations = 0;
+        var passed = false; var hidden = false; var colors = 0;
+        var othersUnchanged = false; var otherCount = 0; var playerPid = 0; var vboxPid = 0;
+        string? failure = null;
+        Directory.CreateDirectory(output);
+        var resultPath = Path.Combine(output, "result.json");
+        await File.WriteAllTextAsync(resultPath, JsonSerializer.Serialize(new { runId, passed = false, state = "running" }, JsonDefaults.Options));
+        try
+        {
+            var target = runtime.LdPlayer!.Instances.Single(item => item.Index == 1);
+            if (!target.Name.StartsWith("MatrixAcceptance-", StringComparison.Ordinal) || target.AndroidStarted || target.ProcessId > 0 || target.VBoxProcessId > 0)
+                throw new InvalidOperationException("仅允许已关闭的专用测试实例1，不能为验收关闭其它实例。");
+            var original = runtime.LdPlayer.Instances.Where(item => item.Index != 1).ToArray();
+            otherCount = original.Length;
+            ViewModel.Confirm = (_, _) => { confirmations++; throw new InvalidOperationException("一键启动出现确认框。"); };
+            await ConnectLdInstancesAsync([1], new Dictionary<int, string> { [1] = approvedCandidate });
+            if (confirmations != 0 || !LdInstanceConnected(1) || ViewModel.Runtime.Settings.LdSerialBindings.GetValueOrDefault(1) != approvedCandidate || ViewModel.Devices.Count != 1)
+                throw new InvalidOperationException("一键冷启动未完成指定实例连接：" + ldFeedback.Text);
+            hidden = ldWindowVisibility?.IsHidden(1) == true;
+            if (!hidden) throw new InvalidOperationException("新启动的雷电窗口未保持隐藏。");
+            var png = await ViewModel.Runtime.Backend.ScreenshotAsync(approvedCandidate);
+            var size = PngImage.ReadDimensions(png);
+            colors = Enumerable.Range(0, 16).Select(i => PngImage.ColorAt(png, i * (size.Width - 1) / 15, i * (size.Height - 1) / 15)).Distinct().Count();
+            if (colors < 2) throw new InvalidOperationException("后台截图未检出有效画面。");
+            await File.WriteAllBytesAsync(Path.Combine(output, "hidden-device.png"), png);
+            await ViewModel.Runtime.RefreshLdPlayerAsync();
+            var launched = ViewModel.Runtime.LdPlayer!.Instances.Single(item => item.Index == 1);
+            playerPid = launched.ProcessId; vboxPid = launched.VBoxProcessId;
+            if (!launched.AndroidStarted || playerPid <= 0 || vboxPid <= 0)
+                throw new InvalidOperationException("截图后实例未保持运行。");
+            foreach (var before in original)
+            {
+                var after = ViewModel.Runtime.LdPlayer!.Instances.SingleOrDefault(item => item.Index == before.Index);
+                if (after is null || after.Name != before.Name || after.ProcessId != before.ProcessId || after.VBoxProcessId != before.VBoxProcessId || after.AndroidStarted != before.AndroidStarted)
+                    throw new InvalidOperationException("测试期间其它实例状态发生变化，不能标记互不干扰通过。");
+            }
+            othersUnchanged = true;
+            SetWallViewMode("list"); UpdateUnifiedDirectory();
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            SaveRender(Path.Combine(output, "connected.png"));
+            passed = true;
+        }
+        catch (Exception ex) { failure = ex.ToString(); throw; }
+        finally
+        {
+            ViewModel.Confirm = confirm;
+            Exception? restoreFailure = null;
+            try { if (ldWindowVisibility is not null) await ldWindowVisibility.ShowAsync(1); }
+            catch (Exception ex) { restoreFailure = ex; passed = false; }
+            await File.WriteAllTextAsync(resultPath, JsonSerializer.Serialize(new
+            {
+                runId, passed, state = "finished", failure, restorationFailure = restoreFailure?.ToString(),
+                index = 1, startupConfirmationDialogs = confirmations, hiddenVerified = hidden,
+                screenshotSampleColors = colors, restored = ldWindowVisibility?.IsHidden(1) != true,
+                emulatorShutdownNotRequested = true, otherInstanceCount = otherCount, othersUnchanged,
+                launchAttempted = coldLaunched.Contains(1), observedPlayerPid = playerPid,
+                observedVBoxPid = vboxPid, trueHeadless = false
+            }, JsonDefaults.Options));
+            if (restoreFailure is not null) throw new InvalidOperationException("验收窗口恢复失败，详见本轮result.json。", restoreFailure);
+        }
     }
 }
 
@@ -6788,6 +7431,53 @@ namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
+    private async Task VerifyOneClickProjectionAsync()
+    {
+        NavigateTo("设备墙 / 主控"); UpdateUnifiedDirectory();
+        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+        var originalDevices = ViewModel.Devices.Count;
+        var originalSelection = unifiedDevices.ToDictionary(row => row.Key, row => row.IsSelected);
+        if (unifiedDevices.Select(row => row.Key).Distinct().Count() != unifiedDevices.Count || wallWorkspace.RowDefinitions.Count != 1) throw new InvalidOperationException("统一目录重复或仍有底部独立卡片区。");
+        if (!unifiedDevices.Any(row => row.Instance is { AndroidStarted: false } && row.Device is null)) throw new InvalidOperationException("统一目录遗漏关闭实例。");
+        try
+        {
+            foreach (var row in unifiedDevices.ToArray()) row.IsSelected = false;
+            var cold = unifiedDevices.First(row => row.Instance is { Index: > 0, AndroidStarted: false } && row.Device is null);
+            cold.Update(cold.Instance, null, false, "已连接");
+            if (cold.State == "已连接") throw new InvalidOperationException("连接失效后仍显示历史已连接阶段。");
+            UpdateUnifiedDirectory();
+            cold.IsSelected = true;
+            if (!workspaceCounts.Text.EndsWith("已选 1", StringComparison.Ordinal)) throw new InvalidOperationException("关闭实例的选择数量没有立即更新。");
+            if (ViewModel.Targets().Count != 0 || ViewModel.CanWriteTargets()) throw new InvalidOperationException("只选择关闭实例时仍回落到旧当前设备。");
+            var transfers = ViewModel.Transfers.Count;
+            try { ViewModel.QueuePush(typeof(MainWindow).Assembly.Location, false); throw new InvalidOperationException("未连接选择被静默忽略。"); }
+            catch (MatrixDevice.Core.DeviceException) { }
+            if (ViewModel.Transfers.Count != transfers) throw new InvalidOperationException("未连接选择导致其它设备被加入传输。");
+            ViewModel.Devices[0].IsSelected = true;
+            if (ViewModel.Targets().Count != 0 || ViewModel.CanWriteTargets()) throw new InvalidOperationException("混合选择静默遗漏未连接设备。");
+            var all = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == "选择当前筛选中的全部设备");
+            all.Command!.Execute(null);
+            if (unifiedDevices.Any(row => row.CanSelect && !row.IsSelected) || ViewModel.Devices.Count != originalDevices) throw new InvalidOperationException("全选未涵盖关闭实例或伪造了可控设备。");
+            UpdateUnifiedDirectory();
+            if (unifiedDevices.Any(row => row.CanSelect && !row.IsSelected)) throw new InvalidOperationException("自动目录更新丢失选择。");
+        }
+        finally { foreach (var row in unifiedDevices.ToArray()) row.IsSelected = originalSelection.GetValueOrDefault(row.Key); }
+        var originalConfirm = ViewModel.Confirm; var confirmations = 0;
+        ViewModel.Confirm = (_, _) => { confirmations++; return false; };
+        try
+        {
+            foreach (var invalid in new Dictionary<int, string>[] { new(), new() { [1] = "demo", [2] = "extra" }, new() { [1] = "" } })
+            {
+                try { await ConnectLdInstancesAsync([1], invalid); throw new InvalidOperationException("不完整的预批准串号进入启动流程。"); }
+                catch (MatrixDevice.Core.DeviceException ex) when (ex.Status == 400 && ex.Code == 1007) { }
+            }
+            try { await ConnectLdInstancesAsync([1]); throw new InvalidOperationException("演示模式进入真实启动。"); }
+            catch (MatrixDevice.Core.DeviceException ex) when (ex.Message.Contains("演示", StringComparison.Ordinal)) { }
+            if (confirmations != 0) throw new InvalidOperationException("普通启动仍弹出确认框。");
+        }
+        finally { ViewModel.Confirm = originalConfirm; }
+    }
+
     private async Task VerifyOperationGatesAsync()
     {
         var current = ViewModel.CurrentDevice!; var originalInfo = current.Info;
@@ -6892,7 +7582,7 @@ namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
-    internal async Task RunUnifiedAccessAcceptanceAsync(string output, string approvedCandidate)
+    internal async Task RunUnifiedAccessAcceptanceAsync(string output, string approvedCandidate, bool verifyBackgroundWindow = false)
     {
         if (ViewModel.Demo || !Path.IsPathFullyQualified(output) || !ViewModel.DataDirectory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("接入验收必须使用artifacts下的独立配置及绝对证据路径。");
@@ -6922,13 +7612,41 @@ public partial class MainWindow
             }
             if (!ReferenceEquals(before, ViewModel.Runtime) || ViewModel.Runtime.Settings.AdbAllowedSerials.Length != 1)
                 throw new InvalidOperationException("取消接入改变了旧授权或运行时。");
-            await ViewModel.ApplyLdConnectionsAsync(proofs, ct);
-            if (ReferenceEquals(before, ViewModel.Runtime) || ViewModel.Runtime.Settings.LdSerialBindings.Count != 2 || ViewModel.Devices.Count(row => row.Info.Online) != 2)
+            completed = true;
+        });
+        if (!completed) throw new InvalidOperationException("接入取消验收未完成：" + ldFeedback.Text);
+        var previousRuntime = ViewModel.Runtime;
+        var previousConfirm = ViewModel.Confirm; var confirmations = 0;
+        ViewModel.Confirm = (_, _) => { confirmations++; throw new InvalidOperationException("一键启动弹出了确认框。"); };
+        try { await ConnectLdInstancesAsync([1], new Dictionary<int, string> { [1] = approvedCandidate }); }
+        finally { ViewModel.Confirm = previousConfirm; }
+        {
+            if (confirmations != 0 || ReferenceEquals(previousRuntime, ViewModel.Runtime) || ViewModel.Runtime.Settings.LdSerialBindings.GetValueOrDefault(1) != approvedCandidate) throw new InvalidOperationException("一键接入没有通过原批准目标的核验。");
+            if (ViewModel.Runtime.Settings.LdSerialBindings.Count != 2 || ViewModel.Devices.Count(row => row.Info.Online) != 2)
                 throw new InvalidOperationException("运行时未完成接入替换。");
             foreach (var index in new[] { 1, 2 }) if (!LdInstanceConnected(index)) throw new InvalidOperationException("实例未进入已连接状态：" + index);
-            await ViewModel.RefreshAutomaticScreensAsync(ViewModel.Devices.Select(row => row.Serial).ToArray(), ct);
+            await ViewModel.RefreshAutomaticScreensAsync(ViewModel.Devices.Select(row => row.Serial).ToArray(), CancellationToken.None);
             if (ViewModel.Devices.Any(row => row.Screenshot is null)) throw new InvalidOperationException("接入后截图为空。");
-            UpdateLdPlayerRows(); UpdateUnifiedDirectory(); NavigateTo("设备墙 / 主控");
+            var hiddenAndRestored = false;
+            if (verifyBackgroundWindow)
+            {
+                var player = ViewModel.Runtime.LdPlayer!.Instances.Single(item => item.Index == 1);
+                using var process = Process.GetProcessById(player.ProcessId);
+                ldWindowVisibility ??= new LdWindowVisibility(Path.Combine(ViewModel.DataDirectory, "window-recovery"), Path.GetDirectoryName(ViewModel.Runtime.FrozenConnectionSettings.LdConsolePath)!);
+                try
+                {
+                    if (!await ldWindowVisibility.HideAsync(player, process.StartTime.ToUniversalTime().Ticks)) throw new InvalidOperationException("目标窗口原本不可见，本轮不能证明隐藏行为。");
+                    if (!ldWindowVisibility.IsHidden(1)) throw new InvalidOperationException("目标窗口未隐藏。");
+                    var png = await ViewModel.Runtime.Backend.ScreenshotAsync(approvedCandidate);
+                    var size = PngImage.ReadDimensions(png);
+                    var colors = Enumerable.Range(0, 16).Select(i => PngImage.ColorAt(png, i * (size.Width - 1) / 15, i * (size.Height - 1) / 15)).Distinct().Count();
+                    if (colors < 2) throw new InvalidOperationException("隐藏后的截图未检出有效画面差异。");
+                    await File.WriteAllBytesAsync(Path.Combine(output, "hidden-device.png"), png);
+                }
+                finally { await ldWindowVisibility.ShowAsync(1); }
+                hiddenAndRestored = !ldWindowVisibility.IsHidden(1);
+            }
+            UpdateLdPlayerRows(); UpdateUnifiedDirectory(); NavigateTo("设备墙 / 主控"); SetWallViewMode("list");
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
             SaveRender(Path.Combine(output, "connected.png"));
             await File.WriteAllTextAsync(Path.Combine(output, "result.json"), JsonSerializer.Serialize(new
@@ -6937,11 +7655,10 @@ public partial class MainWindow
                 originalAuthorizationPreserved = true, localInstances = service.Instances.Count,
                 connectedDevices = ViewModel.Devices.Count(row => row.Info.Online),
                 runtimeReplaced = true, screenshotsAvailable = true,
-                emulatorLaunchNotRequested = true, scopeLimitedToApprovedIndices = true
+                emulatorLaunchNotRequested = true, scopeLimitedToApprovedIndices = true,
+                startupConfirmationDialogs = confirmations, backgroundWindowVerified = hiddenAndRestored
             }, JsonDefaults.Options));
-            completed = true;
-        });
-        if (!completed) throw new InvalidOperationException("接入验收未完成：" + ldFeedback.Text);
+        }
     }
 }
 
@@ -6951,9 +7668,12 @@ public partial class MainWindow
 
 ```csharp
 using System.Runtime.InteropServices;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Media;
 using MatrixDevice.Core;
 using MatrixDevice.Host;
@@ -6967,14 +7687,25 @@ public partial class MainWindow
     private CancellationTokenSource? ldOperationCancellation;
     private readonly List<TextBlock> deviceSummaries = [];
     private readonly List<(string Tag, ToggleButton Button)> deviceModes = [];
-    private WrapPanel pendingInstances = null!;
-    private Expander pendingSection = null!;
+    private readonly ObservableCollection<UnifiedDeviceRow> unifiedDevices = [];
+    private ICollectionView unifiedDeviceView = null!;
+    private readonly Dictionary<int, string> launchPhases = [];
+    private readonly List<TextBlock> launchFeedback = [];
+    private readonly List<AsyncCommand> launchCommands = [];
+    private readonly List<ActionCommand> launchCancelCommands = [];
+    private bool updatingUnifiedDirectory;
+    private bool backgroundLaunch = true;
+    private bool operationBackgroundLaunch;
+    private readonly HashSet<int> coldLaunched = [];
+    private readonly Dictionary<int, Task> backgroundHides = [];
+    private LdWindowVisibility? ldWindowVisibility;
+    private Exception? backgroundHideError;
     private DateTimeOffset lastGuestDiscovery;
 
     private FrameworkElement BuildDeviceModes()
     {
         var row = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
-        foreach (var (tag, glyph, label) in new[] { ("设备墙 / 主控", "\uE8A9", "设备群控"), ("雷电实例", "\uE7F4", "本机模拟器") })
+        foreach (var (tag, glyph, label) in new[] { ("设备墙 / 主控", "\uE8A9", "全部设备"), ("雷电实例", "\uE7F4", "高级管理") })
         {
             var choice = WallToggle(glyph, label);
             choice.Click += (_, _) => NavigateTo(tag);
@@ -6985,39 +7716,102 @@ public partial class MainWindow
         return row;
     }
 
-    private FrameworkElement BuildPendingInstances()
+    private void InitializeUnifiedDevices()
     {
-        pendingInstances = new WrapPanel();
-        pendingSection = new Expander
-        {
-            Header = "待接入的本机模拟器", IsExpanded = true, Margin = new Thickness(0, 12, 0, 0),
-            Content = new ScrollViewer { Content = pendingInstances, MaxHeight = 125, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }
-        };
-        return pendingSection;
+        unifiedDeviceView = CollectionViewSource.GetDefaultView(unifiedDevices);
+        unifiedDeviceView.Filter = item => item is UnifiedDeviceRow row
+            && (string.IsNullOrWhiteSpace(ViewModel.Search) || row.Name.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) || row.Serial.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) || row.Number.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase))
+            && (ViewModel.GroupFilter == "全部分组" || row.Group == ViewModel.GroupFilter)
+            && (ViewModel.StatusFilter == "全部状态" || row.Device?.Info.State == ViewModel.StatusFilter);
+        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts) or nameof(WorkspaceViewModel.Search) or nameof(WorkspaceViewModel.GroupFilter) or nameof(WorkspaceViewModel.StatusFilter)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
     }
 
     internal void UpdateUnifiedDirectory()
     {
-        var instances = ViewModel.Runtime.LdPlayer?.Instances ?? [];
-        var connected = ViewModel.Devices.Count(row => row.Info.Online);
-        var admitted = instances.Count(instance => ViewModel.Runtime.Settings.LdSerialBindings.ContainsKey(instance.Index));
-        foreach (var summary in deviceSummaries) summary.Text = $"本机 {instances.Count} 台 · 已接入 {admitted} 台 · 已连接 {connected} 台";
-        foreach (var mode in deviceModes) mode.Button.IsChecked = Equals((tabs.SelectedItem as TabItem)?.Tag, mode.Tag);
-        if (pendingInstances is null) return;
-        pendingInstances.Children.Clear();
-        foreach (var instance in instances.Where(instance => !LdInstanceConnected(instance.Index)))
+        if (updatingUnifiedDirectory || unifiedDeviceView is null) return;
+        updatingUnifiedDirectory = true;
+        try
         {
-            if (!string.IsNullOrWhiteSpace(ViewModel.Search) && !instance.Name.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) && !instance.Index.ToString().Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase)) continue;
-            if (ViewModel.GroupFilter is not ("全部分组" or "未分组")) continue;
-            var item = new StackPanel { Width = 218, Margin = new Thickness(10) };
-            item.Children.Add(new TextBlock { Text = instance.Name, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = instance.Name });
-            item.Children.Add(new TextBlock { Text = $"实例 {instance.Index} · {InstanceConnectionState(instance)}", Foreground = WallMuted, Margin = new Thickness(0, 6, 0, 8) });
-            var index = instance.Index;
-            item.Children.Add(Button("\uE768", instance.AndroidStarted ? "连接" : "启动并连接", () => ConnectLdInstancesAsync([index]), canExecute: () => !ViewModel.Demo && index > 0 && !ldBusy && !captureInProgress && !ViewModel.HasActiveOperations && ViewModel.ConnectionReloadAvailable));
-            pendingInstances.Children.Add(new Border { Child = item, BorderBrush = WallBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Margin = new Thickness(0, 6, 10, 0) });
+        var instances = ViewModel.Runtime.LdPlayer?.Instances ?? [];
+        var admitted = instances.Count(instance => ViewModel.Runtime.Settings.LdSerialBindings.ContainsKey(instance.Index));
+        foreach (var mode in deviceModes) mode.Button.IsChecked = Equals((tabs.SelectedItem as TabItem)?.Tag, mode.Tag);
+        var expected = new HashSet<string>(StringComparer.Ordinal);
+        var boundSerials = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var instance in instances)
+        {
+            ViewModel.Runtime.Settings.LdSerialBindings.TryGetValue(instance.Index, out var serial);
+            var device = ViewModel.Devices.FirstOrDefault(row => row.Serial == serial);
+            if (device is not null) boundSerials.Add(device.Serial);
+            Upsert("ld:" + instance.Index, instance, device, LdInstanceConnected(instance.Index));
         }
-        pendingSection.Visibility = pendingInstances.Children.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        pendingSection.Header = $"待接入的本机模拟器（{pendingInstances.Children.Count}台）";
+        foreach (var device in ViewModel.Devices.Where(row => !boundSerials.Contains(row.Serial))) Upsert("device:" + device.Serial, null, device, device.Info.Online);
+        foreach (var stale in unifiedDevices.Where(row => !expected.Contains(row.Key)).ToArray()) unifiedDevices.Remove(stale);
+        foreach (var summary in deviceSummaries) summary.Text = $"本机 {instances.Count} 台 · 已接入 {admitted} 台 · 已连接 {unifiedDevices.Count(row => row.Connected)} 台";
+        unifiedDeviceView.Refresh(); SynchronizeUnifiedSelection();
+        void Upsert(string key, LdPlayerInstance? instance, DeviceRow? device, bool connected)
+        {
+            expected.Add(key);
+            var row = unifiedDevices.FirstOrDefault(item => item.Key == key);
+            if (row is null)
+            {
+                row = new UnifiedDeviceRow(key, ActivateUnifiedRowAsync, CanActivateUnifiedRow, ShowUnifiedWindowAsync, item => !ldBusy && !ViewModel.Busy && item.Index is { } index && ldWindowVisibility?.IsHidden(index) == true, item => item.Device is null ? Task.CompletedTask : ViewModel.SetMainAsync(item.Device));
+                row.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(UnifiedDeviceRow.IsSelected)) SynchronizeUnifiedSelection(); };
+                unifiedDevices.Add(row);
+            }
+            row.Update(instance, device, connected, instance is not null && launchPhases.TryGetValue(instance.Index, out var phase) ? phase : "");
+        }
+        }
+        finally { updatingUnifiedDirectory = false; }
+    }
+
+    private bool CanStartInstances() => !ldBusy && !captureInProgress && !ViewModel.HasActiveOperations && ViewModel.ConnectionReloadAvailable && scanOperation is not { IsCompleted: false };
+    private bool CanActivateUnifiedRow(UnifiedDeviceRow row) => row.Connected ? !ViewModel.Busy : row.Index is > 0 and < 99999 && !ViewModel.Demo && CanStartInstances();
+    private async Task ActivateUnifiedRowAsync(UnifiedDeviceRow row)
+    {
+        try
+        {
+            if (row.Connected && row.Device is not null) { ViewModel.CurrentDevice = row.Device; NavigateTo("节点"); }
+            else if (row.Index is { } index) await ConnectLdInstancesAsync([index]);
+        }
+        catch (Exception ex) { SetLaunchFeedback("操作失败：" + ViewModel.PresentError(ex)); }
+    }
+    private async Task ShowUnifiedWindowAsync(UnifiedDeviceRow row)
+    {
+        try { if (row.Index is { } index && ldWindowVisibility is not null) await ldWindowVisibility.ShowAsync(index); UpdateUnifiedDirectory(); }
+        catch (Exception ex) { SetLaunchFeedback("显示窗口失败：" + ViewModel.PresentError(ex)); }
+    }
+    private void SetLaunchFeedback(string text) { if (ldFeedback is not null) ldFeedback.Text = text; foreach (var feedback in launchFeedback) feedback.Text = text; }
+    private void SynchronizeUnifiedSelection()
+    {
+        ViewModel.SetPendingLaunchSelection(unifiedDevices.Count(row => row.IsSelected && !row.Connected));
+        workspaceCounts.Text = $"目录 {unifiedDevices.Count} · 已连接 {unifiedDevices.Count(row => row.Connected)} · 筛选 {unifiedDeviceView.Cast<UnifiedDeviceRow>().Count()} · 已选 {unifiedDevices.Count(row => row.IsSelected)}";
+        RefreshLaunchCommands();
+    }
+    private void RefreshLaunchCommands() { foreach (var command in launchCommands) command.Refresh(); foreach (var command in launchCancelCommands) command.Refresh(); foreach (var row in unifiedDevices) row.RefreshCommands(); }
+
+    private FrameworkElement BuildOneClickLaunchTools()
+    {
+        var section = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+        var tools = Toolbar();
+        tools.Children.Add(LaunchButton("\uE768", "启动所选", () => ConnectLdInstancesAsync(unifiedDevices.Where(row => row.IsSelected && !row.Connected && row.Index is > 0 and < 99999).Select(row => row.Index!.Value).ToArray()), () => !ViewModel.Demo && CanStartInstances() && unifiedDevices.Any(row => row.IsSelected && !row.Connected && row.Index is > 0 and < 99999), true));
+        tools.Children.Add(LaunchButton("\uE768", "一键启动全部", StartAllLdInstancesAsync, () => !ViewModel.Demo && CanStartInstances() && unifiedDevices.Any(row => !row.Connected && row.Index is > 0 and < 99999)));
+        var background = WallToggle("\uE7F4", "后台启动"); background.IsChecked = backgroundLaunch; background.ToolTip = "隐藏本次启动的模拟器窗口；并非无头模式，启动初期可能短暂显示";
+        background.Checked += (_, _) => backgroundLaunch = true; background.Unchecked += (_, _) => backgroundLaunch = false; tools.Children.Add(background);
+        tools.Children.Add(LaunchButton("\uE7F4", "显示窗口", async () => { foreach (var row in unifiedDevices.Where(row => row.IsSelected).ToArray()) await ShowUnifiedWindowAsync(row); }, () => !ldBusy && unifiedDevices.Any(row => row.IsSelected && row.Index is { } index && ldWindowVisibility?.IsHidden(index) == true)));
+        var stop = new ActionCommand(() => ldOperationCancellation?.Cancel(), () => ldOperationCancellation is not null);
+        launchCancelCommands.Add(stop);
+        var stopButton = WallButton("\uE71A", "取消启动", stop); stopButton.Content = WallGlyph("\uE71A"); stopButton.Width = 34; stopButton.MinWidth = 0; stopButton.Padding = new Thickness(0); tools.Children.Add(stopButton);
+        ViewModel.PropertyChanged += (_, _) => stop.Refresh();
+        section.Children.Add(tools);
+        var feedback = new TextBlock { Foreground = WallMuted, TextWrapping = TextWrapping.Wrap, MinHeight = 19, Margin = new Thickness(0, 0, 0, 4) }; launchFeedback.Add(feedback); section.Children.Add(feedback);
+        return section;
+    }
+    private Button LaunchButton(string glyph, string label, Func<Task> operation, Func<bool> enabled, bool primary = false)
+    {
+        var command = new AsyncCommand(async () => { try { await operation(); } catch (Exception ex) { SetLaunchFeedback(label + "失败：" + ViewModel.PresentError(ex)); } }, enabled);
+        launchCommands.Add(command); var button = WallButton(glyph, label, command, primary);
+        button.ToolTip = label.StartsWith("启动", StringComparison.Ordinal) || label == "一键启动全部" ? label + "，完成核验后自动连接并加入群控" : label;
+        return button;
     }
 
     private bool LdInstanceConnected(int index) => ViewModel.Runtime.Settings.LdSerialBindings.TryGetValue(index, out var serial)
@@ -7055,7 +7849,7 @@ public partial class MainWindow
         catch (Exception ex)
         {
             ViewModel.Runtime.Log.Write("directory-refresh-error", ex.ToString());
-            ldFeedback.Text = "自动更新失败：" + ViewModel.PresentError(ex);
+            SetLaunchFeedback("自动更新失败：" + ViewModel.PresentError(ex));
         }
     }
 
@@ -7067,41 +7861,79 @@ public partial class MainWindow
         ViewModel.Runtime.RequireFrozenConnectionSettings();
         ldBusy = true; ViewModel.SetExternalBusy(true); RefreshLdButtons();
         using var cancellation = new CancellationTokenSource(); ldOperationCancellation = cancellation;
+        coldLaunched.Clear(); backgroundHides.Clear(); backgroundHideError = null; operationBackgroundLaunch = backgroundLaunch; RefreshLaunchCommands();
+        var complete = false;
         try
         {
             if (directoryOperation is not null) await directoryOperation;
-            ldFeedback.Text = title;
+            SetLaunchFeedback(title);
             await operation(cancellation.Token);
+            complete = true;
             ViewModel.Runtime.Log.Write("ld-workspace-complete", title);
         }
-        catch (OperationCanceledException) { ldFeedback.Text = "已停止等待及后续任务，已启动的实例保持运行。"; ViewModel.Runtime.Log.Write("ld-workspace-cancel", title); }
-        catch (Exception ex) { ldFeedback.Text = title + "失败：" + ViewModel.PresentError(ex); ViewModel.Runtime.Log.Write("ld-workspace-error", ex.ToString()); }
+        catch (OperationCanceledException) { SetLaunchFeedback(backgroundHideError is null ? "已停止等待及后续任务，已启动的实例保持运行。" : "后台隐藏失败：" + ViewModel.PresentError(backgroundHideError)); ViewModel.Runtime.Log.Write("ld-workspace-cancel", title); }
+        catch (Exception ex) { SetLaunchFeedback(title + "失败：" + ViewModel.PresentError(ex)); ViewModel.Runtime.Log.Write("ld-workspace-error", ex.ToString()); }
         finally
         {
+            if (!complete)
+            {
+                try { await Task.WhenAll(backgroundHides.Values); } catch (Exception ex) { ViewModel.Runtime.Log.Write("ld-background-error", ex.ToString()); }
+                foreach (var index in launchPhases.Keys.ToArray())
+                    if (launchPhases[index] is not ("已连接" or "启动失败")) launchPhases[index] = cancellation.IsCancellationRequested ? "已取消" : "未完成";
+                foreach (var index in coldLaunched)
+                {
+                    try { if (ldWindowVisibility is not null) await ldWindowVisibility.ShowAsync(index); }
+                    catch (Exception ex) { SetLaunchFeedback("窗口恢复失败：" + ViewModel.PresentError(ex)); }
+                }
+            }
             ldOperationCancellation = null; ldBusy = false; ViewModel.SetExternalBusy(false);
             UpdateLdPlayerRows(); UpdateUnifiedDirectory(); RefreshLdButtons();
         }
     }
 
-    private IProgress<LdLaunchProgress> LaunchProgress() => new Progress<LdLaunchProgress>(progress =>
+    private sealed class InlineLaunchProgress(MainWindow owner) : IProgress<LdLaunchProgress>
     {
-        ldFeedback.Text = $"实例 {progress.Index}：" + (progress.State switch { "checking-resources" => "检查资源", "starting" => "正在启动", "waiting" => "等待安卓就绪", "ready" or "skipped" => "已启动，等待接入", "cancelled" => "已取消", _ => "启动失败" });
+        public void Report(LdLaunchProgress value) => owner.Dispatcher.Invoke(() => owner.OnLaunchProgress(value));
+    }
+    private IProgress<LdLaunchProgress> LaunchProgress() => new InlineLaunchProgress(this);
+    private void OnLaunchProgress(LdLaunchProgress progress)
+    {
+        var phase = progress.State switch { "checking-resources" => "检查资源", "starting" => "正在启动", "waiting" => "等待安卓就绪", "ready" or "skipped" => "等待连接", "cancelled" => "已取消", _ => "启动失败" };
+        launchPhases[progress.Index] = phase;
+        if (progress.State == "starting") coldLaunched.Add(progress.Index);
+        if (operationBackgroundLaunch && coldLaunched.Contains(progress.Index) && !backgroundHides.ContainsKey(progress.Index) && progress.Instance is { ProcessId: > 0, TopWindow: not 0 } instance)
+            backgroundHides[progress.Index] = HideStartedWindowAsync(instance);
+        SetLaunchFeedback($"实例 {progress.Index}：{phase}");
         ViewModel.Runtime.Log.Write("ld-launch-" + progress.State, $"index={progress.Index}; {progress.Message}");
         UpdateLdPlayerRows(); UpdateUnifiedDirectory();
-    });
+    }
+
+    private async Task HideStartedWindowAsync(LdPlayerInstance instance)
+    {
+        try
+        {
+            ldWindowVisibility ??= new LdWindowVisibility(System.IO.Path.Combine(ViewModel.DataDirectory, "window-recovery"), System.IO.Path.GetDirectoryName(ViewModel.Runtime.FrozenConnectionSettings.LdConsolePath)!);
+            using var process = System.Diagnostics.Process.GetProcessById(instance.ProcessId);
+            await ldWindowVisibility.HideAsync(instance, process.StartTime.ToUniversalTime().Ticks);
+            ViewModel.Runtime.Log.Write("ld-background-hidden", $"index={instance.Index}; pid={instance.ProcessId}");
+        }
+        catch (Exception ex) { backgroundHideError = ex; ldOperationCancellation?.Cancel(); throw; }
+    }
+
+    internal async Task RecoverBackgroundWindowsAsync()
+    {
+        if (ViewModel.Demo || ViewModel.Runtime.LdPlayer is null || string.IsNullOrWhiteSpace(ViewModel.Runtime.FrozenConnectionSettings.LdConsolePath)) return;
+        ldWindowVisibility ??= new LdWindowVisibility(System.IO.Path.Combine(ViewModel.DataDirectory, "window-recovery"), System.IO.Path.GetDirectoryName(ViewModel.Runtime.FrozenConnectionSettings.LdConsolePath)!);
+        var errors = await ldWindowVisibility.RecoverPendingAsync();
+        if (errors.Count > 0) { SetLaunchFeedback("部分后台窗口恢复失败，请检查日志。"); foreach (var error in errors) ViewModel.Runtime.Log.Write("ld-window-recovery-error", error); }
+    }
 
     private async Task StartAllLdInstancesAsync()
     {
-        var confirmedInstances = ViewModel.Runtime.LdPlayer?.Instances.Where(item => item.Index > 0 && item.Index != 99999).ToArray() ?? [];
+        var confirmedInstances = ViewModel.Runtime.LdPlayer?.Instances.Where(item => item.Index > 0 && item.Index != 99999 && !LdInstanceConnected(item.Index)).ToArray() ?? [];
         var indices = confirmedInstances.Select(item => item.Index).ToArray();
         if (indices.Length == 0) throw new DeviceException("没有可启动的独立实例。", 404, 1002);
-        if (!ViewModel.Confirm("启动全部雷电实例", $"将依次检查并启动 {indices.Length} 台独立实例，跳过已运行实例和受保护实例0。\n每台启动前要求至少11 GiB可用内存（8 GiB实例预算及3 GiB系统预留）；资源不足立即停止。\n此操作不会自动授权新设备；启动后可用“接入已运行实例”加入群控。继续？")) return;
-        await RunLdWorkspaceOperationAsync("启动全部实例", async ct =>
-        {
-            var coordinator = new LdLaunchCoordinator(ViewModel.Runtime.LdPlayer!);
-            await coordinator.StartAsync(indices, EnsureLaunchResourcesAsync, LaunchProgress(), ct, expectedInstances: confirmedInstances);
-            ldFeedback.Text = "批次启动完成；新设备待接入。";
-        });
+        await ConnectLdInstancesAsync(indices);
     }
 
     private Task ConnectRunningLdInstancesAsync()
@@ -7110,18 +7942,22 @@ public partial class MainWindow
         return ConnectLdInstancesAsync(indices);
     }
 
-    private async Task ConnectLdInstancesAsync(int[] indices)
+    private async Task ConnectLdInstancesAsync(int[] indices, IReadOnlyDictionary<int, string>? expectedSerials = null)
     {
         if (indices.Length == 0) throw new DeviceException("没有待接入的已运行实例。", 404, 1002);
         if (indices.Any(index => index <= 0 || index == 99999)) throw new DeviceException("实例0受保护，不能自动接入。", 403, 1003);
+        var approvedSerials = expectedSerials is null ? null : new Dictionary<int, string>(expectedSerials);
+        if (approvedSerials is not null && (approvedSerials.Count != indices.Length || indices.Any(index => !approvedSerials.TryGetValue(index, out var serial) || string.IsNullOrWhiteSpace(serial))))
+            throw new DeviceException("验收预批准串号必须与目标实例逐一对应。", 400, 1007);
         var service = ViewModel.Runtime.LdPlayer ?? throw new DeviceException("雷电服务未配置。", 503, 2001);
         var confirmedInstances = indices.Select(index => service.Instances.Single(item => item.Index == index)).ToArray();
         var expectedBirths = confirmedInstances.Where(item => item.VBoxProcessId > 0).ToDictionary(item => item.Index, VBoxBirth);
-        var names = string.Join("\n", confirmedInstances.Select(item => $"{item.Index}：{item.Name}"));
-        if (!ViewModel.Confirm("接入雷电实例", names + "\n将启动已关闭实例，并核验实际ADB连接、安卓启动和截图；通过后保存授权并加入群控。不会登录、清数据、接受协议或授权敏感权限。继续？")) return;
         await RunLdWorkspaceOperationAsync("接入雷电设备", async ct =>
         {
+            foreach (var index in indices) launchPhases[index] = "排队中";
             var started = await new LdLaunchCoordinator(service).StartAsync(indices, EnsureLaunchResourcesAsync, LaunchProgress(), ct, expectedInstances: confirmedInstances);
+            await Task.WhenAll(backgroundHides.Values);
+            if (backgroundHideError is not null) throw backgroundHideError;
             var expected = started.Select(result => result.Instance ?? throw new DeviceException("启动结果缺少实例快照。", 409, 1003)).ToArray();
             foreach (var instance in expected)
                 if (!expectedBirths.ContainsKey(instance.Index)) expectedBirths.Add(instance.Index, VBoxBirth(instance));
@@ -7131,12 +7967,15 @@ public partial class MainWindow
             {
                 try { proofs = await LdConnectionAdmission.ResolveAsync((AdbDeviceBackend)ViewModel.Runtime.Backend, service, indices, expected, expectedBirths, deadline.Token); break; }
                 catch (DeviceException ex) when (ex.Status == 409 && ex.Code == 2002)
-                { ldFeedback.Text = "等待雷电注册ADB连接…"; await Task.Delay(1500, deadline.Token); }
+                { SetLaunchFeedback("等待雷电注册ADB连接…"); await Task.Delay(1500, deadline.Token); }
             }
-            ldFeedback.Text = "正在核验安卓启动与截图…";
+            if (approvedSerials is not null && proofs.Any(proof => !approvedSerials.TryGetValue(proof.Index, out var serial) || serial != proof.Serial))
+                throw new DeviceException("实际连接与验收预批准串号不符，未读取设备或保存授权。", 403, 1003);
+            SetLaunchFeedback("正在核验安卓启动与截图…");
             await ViewModel.ApplyLdConnectionsAsync(proofs, deadline.Token);
-            UpdateLdPlayerRows(); UpdateUnifiedDirectory(); NavigateTo("设备墙 / 主控");
-            ldFeedback.Text = $"已接入 {proofs.Count} 台设备。";
+            foreach (var index in indices) launchPhases[index] = "已连接";
+            UpdateLdPlayerRows(); UpdateUnifiedDirectory();
+            SetLaunchFeedback($"已启动并连接 {proofs.Count} 台设备。");
         });
     }
 
@@ -7211,6 +8050,74 @@ public partial class MainWindow
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GlobalMemoryStatusEx(ref MemoryStatus status);
+}
+
+```
+
+## src/MatrixDevice.Desktop/Views/UnifiedDeviceTile.cs
+
+```csharp
+using System.ComponentModel;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
+using System.Windows.Media;
+
+namespace MatrixDevice.Desktop;
+
+public sealed class UnifiedDeviceTile : Border
+{
+    public static readonly DependencyProperty OwnerProperty = DependencyProperty.Register(nameof(Owner), typeof(MainWindow), typeof(UnifiedDeviceTile), new PropertyMetadata(null, OnChanged));
+    public static readonly DependencyProperty ModeProperty = DependencyProperty.Register(nameof(Mode), typeof(string), typeof(UnifiedDeviceTile), new PropertyMetadata("cards", OnChanged));
+    public MainWindow? Owner { get => (MainWindow?)GetValue(OwnerProperty); set => SetValue(OwnerProperty, value); }
+    public string Mode { get => (string)GetValue(ModeProperty); set => SetValue(ModeProperty, value); }
+    private UnifiedDeviceRow? row;
+    public UnifiedDeviceTile()
+    {
+        DataContextChanged += (_, _) => { if (row is not null) row.PropertyChanged -= RowChanged; row = DataContext as UnifiedDeviceRow; if (IsLoaded && row is not null) row.PropertyChanged += RowChanged; Rebuild(); };
+        Loaded += (_, _) => { if (row is not null) { row.PropertyChanged -= RowChanged; row.PropertyChanged += RowChanged; } Rebuild(); };
+        Unloaded += (_, _) => { if (row is not null) row.PropertyChanged -= RowChanged; };
+    }
+    private static void OnChanged(DependencyObject value, DependencyPropertyChangedEventArgs _) => ((UnifiedDeviceTile)value).Rebuild();
+    private void RowChanged(object? sender, PropertyChangedEventArgs args) { if (args.PropertyName is "" or nameof(UnifiedDeviceRow.Device)) Rebuild(); }
+    private void Rebuild()
+    {
+        if (row is null || Owner is null) { Child = null; return; }
+        BorderThickness = new Thickness(0); Padding = new Thickness(0); Margin = new Thickness(0);
+        if (row.Connected && row.Device is not null && Mode != "list")
+        {
+            Child = new WallDeviceTile { Owner = Owner, Mode = Mode, DataContext = row.Device }; return;
+        }
+        if (Mode == "list") { Child = Actions(); return; }
+        var content = new StackPanel { Margin = new Thickness(Mode == "screens" ? 8 : 18) };
+        var check = new CheckBox { IsEnabled = row.CanSelect, Margin = new Thickness(0, 0, 0, 10) };
+        check.SetBinding(ToggleButton.IsCheckedProperty, new Binding(nameof(UnifiedDeviceRow.IsSelected)) { Mode = BindingMode.TwoWay });
+        check.Content = new TextBlock { Text = row.Name, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = row.Name }; content.Children.Add(check);
+        var state = new TextBlock { Foreground = Brushes.DimGray, Margin = new Thickness(0, 6, 0, 12), TextWrapping = TextWrapping.Wrap };
+        state.SetBinding(TextBlock.TextProperty, new Binding(nameof(UnifiedDeviceRow.State))); content.Children.Add(state);
+        content.Children.Add(new TextBlock { Text = "实例 " + row.Number, Margin = new Thickness(0, 0, 0, 12) });
+        var spacer = new Border { Height = Mode == "screens" ? 170 : 132, Background = new SolidColorBrush(Color.FromRgb(247, 249, 252)), Margin = new Thickness(0, 0, 0, 12), Child = new TextBlock { Text = "\uE7F4", FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 32, Foreground = Brushes.LightSlateGray, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center } };
+        content.Children.Add(spacer); content.Children.Add(Actions());
+        Child = new Border { Child = content, Background = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(228, 232, 240)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Margin = new Thickness(0, 0, 12, 12) };
+    }
+    private FrameworkElement Actions()
+    {
+        var actions = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
+        var label = new TextBlock { VerticalAlignment = VerticalAlignment.Center }; label.SetBinding(TextBlock.TextProperty, new Binding(nameof(UnifiedDeviceRow.PrimaryLabel)));
+        var glyph = new TextBlock { FontFamily = new FontFamily("Segoe MDL2 Assets"), Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center }; glyph.SetBinding(TextBlock.TextProperty, new Binding(nameof(UnifiedDeviceRow.PrimaryGlyph)));
+        var body = new StackPanel { Orientation = Orientation.Horizontal }; body.Children.Add(glyph); body.Children.Add(label);
+        var start = new Button { Content = body, Command = row!.PrimaryCommand, Height = 32, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 6, 0), ToolTip = row.PrimaryLabel };
+        start.SetResourceReference(StyleProperty, "SubtleButton"); actions.Children.Add(start);
+        if (row.Connected && row.Device is not null)
+        {
+            var main = new Button { Content = new TextBlock { Text = "\uE7F4", FontFamily = new FontFamily("Segoe MDL2 Assets") }, Command = row.MainCommand, ToolTip = "设为主控", Margin = new Thickness(0, 0, 6, 0) };
+            main.SetResourceReference(StyleProperty, "IconButton"); actions.Children.Add(main);
+        }
+        var show = new Button { Content = new TextBlock { Text = "\uE8A7", FontFamily = new FontFamily("Segoe MDL2 Assets") }, Command = row.ShowWindowCommand, ToolTip = "显示模拟器窗口", Visibility = row.ShowWindowCommand.CanExecute(null) ? Visibility.Visible : Visibility.Collapsed };
+        show.SetResourceReference(StyleProperty, "IconButton"); actions.Children.Add(show);
+        return actions;
+    }
 }
 
 ```
@@ -7398,7 +8305,7 @@ namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
-    private string wallViewMode = "cards";
+    private string wallViewMode = "list";
     private readonly Dictionary<string, ToggleButton> wallViewChoices = [];
     private Grid wallWorkspace = null!;
     private FrameworkElement wallCards = null!;
@@ -7427,29 +8334,25 @@ public partial class MainWindow
         }
         heading.Children.Add(new TextBlock { Text = "设备群控", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, VerticalAlignment = VerticalAlignment.Center });
         top.Children.Add(heading);
+        top.Children.Add(BuildOneClickLaunchTools());
         var tools = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
-        var select = WallButton("\uE73A", "全选", new ActionCommand(() => ViewModel.SelectFiltered(true))); select.ToolTip = "选择当前筛选中的全部设备"; tools.Children.Add(select);
+        var select = WallButton("\uE73A", "全选", new ActionCommand(() => { foreach (var row in unifiedDeviceView.Cast<UnifiedDeviceRow>().ToArray()) row.IsSelected = true; RefreshLaunchCommands(); })); select.ToolTip = "选择当前筛选中的全部设备"; tools.Children.Add(select);
         tools.Children.Add(WallButton("\uE711", "清空", new ActionCommand(ClearWallSelection)));
         var mouse = WallToggle("\uE962", "同步鼠标"); mouse.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(WorkspaceViewModel.SyncMouse))); tools.Children.Add(mouse);
         var keyboard = WallToggle("\uE765", "同步键盘"); keyboard.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(WorkspaceViewModel.SyncKeyboard))); tools.Children.Add(keyboard);
         var automatic = WallToggle("\uE787", "自动截图"); automatic.IsChecked = true; automatic.Checked += (_, _) => { autoCapture = true; }; automatic.Unchecked += (_, _) => { autoCapture = false; }; tools.Children.Add(automatic);
         wallMainToggle = WallToggle("\uE7F4", "主控面板"); wallMainToggle.Checked += (_, _) => UpdateWallMainPanel(); wallMainToggle.Unchecked += (_, _) => UpdateWallMainPanel(); tools.Children.Add(wallMainToggle);
         tools.Children.Add(BuildWallDensity()); top.Children.Add(tools);
-        var context = new DockPanel { Margin = new Thickness(0, 0, 0, 13) };
-        var mainState = BoundText(nameof(WorkspaceViewModel.MainContext)); mainState.Foreground = WallInk; mainState.TextTrimming = TextTrimming.CharacterEllipsis; mainState.MaxWidth = 330; mainState.SetBinding(ToolTipProperty, new Binding(nameof(WorkspaceViewModel.MainContext))); DockPanel.SetDock(mainState, Dock.Right); context.Children.Add(mainState);
-        var targets = BoundText(nameof(WorkspaceViewModel.TargetContext)); targets.Foreground = WallMuted; targets.TextTrimming = TextTrimming.CharacterEllipsis; targets.Margin = new Thickness(0, 0, 20, 0); targets.SetBinding(ToolTipProperty, new Binding(nameof(WorkspaceViewModel.TargetContext))); context.Children.Add(targets); top.Children.Add(context);
         top.Children.Add(new Border { Height = 1, Background = WallBorder });
         wallWorkspace = new Grid { Margin = new Thickness(22, 18, 22, 18) };
-        wallWorkspace.RowDefinitions.Add(new RowDefinition()); wallWorkspace.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        wallWorkspace.RowDefinitions.Add(new RowDefinition());
         wallWorkspace.ColumnDefinitions.Add(new ColumnDefinition()); wallWorkspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0) });
         var views = new Grid(); wallWorkspace.Children.Add(views);
         wallCards = BuildWallItems("cards"); views.Children.Add(wallCards);
         wallScreens = BuildWallItems("screens"); views.Children.Add(wallScreens);
         wallList = BuildWallList(); views.Children.Add(wallList);
         wallMainPanel = BuildWallMainPanel(); Grid.SetColumn(wallMainPanel, 1); wallWorkspace.Children.Add(wallMainPanel);
-        var pending = BuildPendingInstances(); Grid.SetRow(pending, 1); Grid.SetColumnSpan(pending, 2); wallWorkspace.Children.Add(pending);
-        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Search) or nameof(WorkspaceViewModel.GroupFilter)) UpdateUnifiedDirectory(); };
-        page.Children.Add(wallWorkspace); SetWallViewMode("cards"); return page;
+        page.Children.Add(wallWorkspace); SetWallViewMode("list"); return page;
     }
 
     private FrameworkElement BuildWallDensity()
@@ -7470,13 +8373,13 @@ public partial class MainWindow
     private FrameworkElement BuildWallItems(string mode)
     {
         var grid = new Grid();
-        var items = new ItemsControl { ItemsSource = ViewModel.DeviceView, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        var items = new ItemsControl { ItemsSource = unifiedDeviceView, HorizontalContentAlignment = HorizontalAlignment.Stretch };
         var panel = new FrameworkElementFactory(typeof(UniformGrid));
         var columns = new MultiBinding { Converter = new WallColumnsConverter(mode == "screens" ? 118 : 344, mode == "screens") };
         columns.Bindings.Add(new Binding(nameof(WorkspaceViewModel.WallColumns)) { Source = ViewModel });
         columns.Bindings.Add(new Binding(nameof(ActualWidth)) { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(ScrollViewer), 1) });
         panel.SetBinding(UniformGrid.ColumnsProperty, columns); items.ItemsPanel = new ItemsPanelTemplate(panel);
-        var tile = new FrameworkElementFactory(typeof(WallDeviceTile)); tile.SetBinding(WallDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) }); tile.SetValue(WallDeviceTile.ModeProperty, mode);
+        var tile = new FrameworkElementFactory(typeof(UnifiedDeviceTile)); tile.SetBinding(UnifiedDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) }); tile.SetValue(UnifiedDeviceTile.ModeProperty, mode);
         items.ItemTemplate = new DataTemplate { VisualTree = tile };
         grid.Children.Add(new ScrollViewer { Content = items, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
         var empty = new TextBlock { Text = "当前筛选没有设备", Foreground = WallMuted, FontSize = 14, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
@@ -7485,16 +8388,16 @@ public partial class MainWindow
 
     private FrameworkElement BuildWallList()
     {
-        var grid = new DataGrid { ItemsSource = ViewModel.DeviceView, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Single, HeadersVisibility = DataGridHeadersVisibility.Column, RowHeight = 48, ColumnHeaderHeight = 40, Background = Brushes.White, BorderThickness = new Thickness(0), GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, HorizontalGridLinesBrush = WallBorder, IsReadOnly = false };
-        grid.SetBinding(Selector.SelectedItemProperty, new Binding(nameof(WorkspaceViewModel.CurrentDevice)) { Mode = BindingMode.OneWay });
-        grid.SelectionChanged += (_, _) => { if (wallViewMode == "list" && grid.SelectedItem is DeviceRow row) ViewModel.CurrentDevice = row; };
-        var checkbox = new FrameworkElementFactory(typeof(CheckBox)); checkbox.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center); checkbox.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(DeviceRow.IsSelected)));
+        var grid = new DataGrid { ItemsSource = unifiedDeviceView, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Single, HeadersVisibility = DataGridHeadersVisibility.Column, RowHeight = 48, ColumnHeaderHeight = 40, Background = Brushes.White, BorderThickness = new Thickness(0), GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, HorizontalGridLinesBrush = WallBorder, IsReadOnly = true };
+        grid.SelectionChanged += (_, _) => { if (wallViewMode == "list" && grid.SelectedItem is UnifiedDeviceRow { Device: { } device }) ViewModel.CurrentDevice = device; };
+        var checkbox = new FrameworkElementFactory(typeof(CheckBox)); checkbox.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center); checkbox.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(UnifiedDeviceRow.IsSelected))); checkbox.SetBinding(IsEnabledProperty, new Binding(nameof(UnifiedDeviceRow.CanSelect)));
         grid.Columns.Add(new DataGridTemplateColumn { Header = "选择", Width = 54, CellTemplate = new DataTemplate { VisualTree = checkbox } });
-        TextColumn(grid, "设备名称", nameof(DeviceRow.Name), 170); TextColumn(grid, "状态", nameof(DeviceRow.State), 90);
-        TextColumn(grid, "型号", "Info.Model", 145); TextColumn(grid, "品牌", "Info.Brand", 110); TextColumn(grid, "安卓", "Info.AndroidVersion", 80);
-        TextColumn(grid, "设备序列号", nameof(DeviceRow.Serial), 185); TextColumn(grid, "分辨率", nameof(DeviceRow.Resolution), 120); TextColumn(grid, "分组", nameof(DeviceRow.Group), 110);
-        var actions = new FrameworkElementFactory(typeof(WallDeviceTile)); actions.SetBinding(WallDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) }); actions.SetValue(WallDeviceTile.ModeProperty, "list");
+        TextColumn(grid, "编号", nameof(UnifiedDeviceRow.Number), 58);
+        TextColumn(grid, "设备名称", nameof(UnifiedDeviceRow.Name), 175); TextColumn(grid, "状态", nameof(UnifiedDeviceRow.State), 110);
+        var actions = new FrameworkElementFactory(typeof(UnifiedDeviceTile)); actions.SetBinding(UnifiedDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) }); actions.SetValue(UnifiedDeviceTile.ModeProperty, "list");
         grid.Columns.Add(new DataGridTemplateColumn { Header = "操作", Width = 214, CellTemplate = new DataTemplate { VisualTree = actions } });
+        TextColumn(grid, "型号", nameof(UnifiedDeviceRow.Model), 145); TextColumn(grid, "品牌", nameof(UnifiedDeviceRow.Brand), 110); TextColumn(grid, "安卓", nameof(UnifiedDeviceRow.Android), 80);
+        TextColumn(grid, "设备序列号", nameof(UnifiedDeviceRow.Serial), 185); TextColumn(grid, "分辨率", nameof(UnifiedDeviceRow.Resolution), 120); TextColumn(grid, "分组", nameof(UnifiedDeviceRow.Group), 110);
         var page = new Grid(); page.Children.Add(grid);
         var empty = new TextBlock { Text = "当前筛选没有设备", Foreground = WallMuted, FontSize = 14, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         empty.SetBinding(VisibilityProperty, new Binding(nameof(ItemsControl.HasItems)) { Source = grid, Converter = new WallEmptyVisibilityConverter() }); page.Children.Add(empty); return page;
@@ -7522,8 +8425,9 @@ public partial class MainWindow
 
     internal void ClearWallSelection()
     {
+        foreach (var row in unifiedDevices.ToArray()) row.IsSelected = false;
         foreach (var row in ViewModel.Devices) row.IsSelected = false;
-        ViewModel.UpdateSelection();
+        ViewModel.UpdateSelection(); RefreshLaunchCommands();
     }
 
     internal void SetWallViewMode(string mode)
@@ -7535,6 +8439,7 @@ public partial class MainWindow
         wallList.Visibility = mode == "list" ? Visibility.Visible : Visibility.Collapsed;
         foreach (var choice in wallViewChoices) choice.Value.IsChecked = choice.Key == mode;
         wallDensity.IsEnabled = mode == "screens"; wallMainToggle.IsChecked = mode == "screens"; UpdateWallMainPanel();
+        wallDensity.Visibility = wallMainToggle.Visibility = mode == "screens" ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void UpdateWallMainPanel()
@@ -7625,6 +8530,7 @@ public partial class MainWindow
     private readonly List<FrameworkElement> sidebarCaptions = [];
     private FrameworkElement sidebarStatistics = null!;
     private TextBlock collapseGlyph = null!;
+    private TextBlock workspaceCounts = null!;
     private Window? directoryWindow;
     private Window? scannerWindow;
     private bool sidebarCollapsed;
@@ -7667,7 +8573,7 @@ public partial class MainWindow
         var context = BuildWorkspaceContext(); Grid.SetRow(context, 2); workspace.Children.Add(context);
         var footer = new Grid { Margin = new Thickness(20, 8, 20, 10) };
         footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition());
-        var counts = BoundText(nameof(WorkspaceViewModel.Counts)); counts.FontSize = 11; counts.Foreground = WorkspaceBrush("#63718A"); footer.Children.Add(counts);
+        workspaceCounts = BoundText(nameof(WorkspaceViewModel.Counts)); workspaceCounts.FontSize = 11; workspaceCounts.Foreground = WorkspaceBrush("#63718A"); footer.Children.Add(workspaceCounts);
         var status = BoundText(nameof(WorkspaceViewModel.Status)); status.FontSize = 11; status.TextAlignment = TextAlignment.Right;
         status.TextTrimming = TextTrimming.CharacterEllipsis; status.SetBinding(ToolTipProperty, new Binding(nameof(WorkspaceViewModel.Status)));
         Grid.SetColumn(status, 1); footer.Children.Add(status); Grid.SetRow(footer, 4); workspace.Children.Add(footer);
@@ -7861,6 +8767,7 @@ public sealed class WorkspaceViewModel : ObservableObject
     private string statusFilter = "全部状态";
     private bool busy;
     private bool externalBusy;
+    private int pendingLaunchSelection;
     private bool blockApiWhileBusy = true;
     private string status = "等待发现设备";
     private string error = "";
@@ -7997,7 +8904,7 @@ public sealed class WorkspaceViewModel : ObservableObject
     public string Status { get => LocalizationService.Current.Get(status); private set => Set(ref status, value); }
     public string Error { get => error; private set => Set(ref error, value); }
     public string Counts => $"{LocalizationService.Current.Get("发现")} {Devices.Count}   {LocalizationService.Current.Get("就绪")} {Devices.Count(row => row.Info.Online)}   {LocalizationService.Current.Get("筛选")} {DeviceView.Cast<object>().Count()}   {LocalizationService.Current.Get("选中")} {Devices.Count(row => row.IsSelected)}";
-    public string TargetContext => $"{LocalizationService.Current.Get("目标")} {Targets().Count}: {string.Join(", ", Targets().Select(row => row.Name))}";
+    public string TargetContext => pendingLaunchSelection > 0 ? $"已选目标包含 {pendingLaunchSelection} 台未连接设备" : $"{LocalizationService.Current.Get("目标")} {Targets().Count}: {string.Join(", ", Targets().Select(row => row.Name))}";
     public BitmapSource? DebugImage { get => debugImage; private set => Set(ref debugImage, value); }
     public NodeRow? SelectedNode { get => selectedNode; set { Set(ref selectedNode, value); Changed(nameof(NodeProperties)); NodeSelectionChanged?.Invoke(); } }
     public string NodeProperties => SelectedNode is { } row ? JsonSerializer.Serialize(row.Source with { ChildNodeList = [] }, JsonDefaults.Options) : "未选中节点";
@@ -8023,11 +8930,17 @@ public sealed class WorkspaceViewModel : ObservableObject
     public bool CanWriteTargets() => !Busy && !Transferring && Targets().Count > 0 && Targets().All(row => row.Info.Online && !ScriptBusy(row.Serial));
     public bool CanControlMainInput()
     {
+        if (pendingLaunchSelection > 0 && (SyncMouse || SyncKeyboard)) return false;
         var source = MainDevice ?? CurrentDevice;
         return !Busy && !Transferring && source?.Info.Online == true && !ScriptBusy(source.Serial) &&
             InputTargets(source.Serial, false).All(serial => Devices.Any(row => row.Serial == serial && row.Info.Online && !ScriptBusy(serial)));
     }
-    public IReadOnlyList<DeviceRow> Targets() { var selected = Devices.Where(row => row.IsSelected).ToList(); return selected.Count > 0 ? selected : CurrentDevice is null ? [] : [CurrentDevice]; }
+    public IReadOnlyList<DeviceRow> Targets() { if (pendingLaunchSelection > 0) return []; var selected = Devices.Where(row => row.IsSelected).ToList(); return selected.Count > 0 ? selected : CurrentDevice is null ? [] : [CurrentDevice]; }
+    internal void SetPendingLaunchSelection(int count)
+    {
+        if (pendingLaunchSelection == count) return;
+        pendingLaunchSelection = count; RefreshCommands();
+    }
 
     private AsyncCommand Async(Func<Task> action, Func<bool> canExecute) { var command = new AsyncCommand(action, canExecute); commands.Add(command); return command; }
     private ActionCommand Action(Action action, Func<bool> canExecute) { var command = new ActionCommand(action, canExecute); commands.Add(command); return command; }
@@ -8210,6 +9123,7 @@ public sealed class WorkspaceViewModel : ObservableObject
 
     public Task SendInputAsync(InputSnapshot input) => ExecuteAsync("发送输入", async () =>
     {
+        if (pendingLaunchSelection > 0 && (input.Kind is InputKind.Key or InputKind.Text ? SyncKeyboard : SyncMouse)) throw new DeviceException("同步目标中存在未连接设备，请先连接或取消选择。", 409, 1003);
         if (Transferring) throw new DeviceException("文件传输进行中，完成或停止传输后再控制");
         var source = Devices.FirstOrDefault(row => row.Serial == input.SourceSerial);
         if (input.Kind is InputKind.Tap or InputKind.Swipe && source is not null &&
@@ -8377,6 +9291,7 @@ public sealed class WorkspaceViewModel : ObservableObject
 
     private IReadOnlyList<DeviceRow> RequireTargets()
     {
+        if (pendingLaunchSelection > 0) throw new DeviceException($"选中目标包含 {pendingLaunchSelection} 台未连接设备，请先连接或取消选择；未操作其它设备。", 409, 1003);
         if (Transferring) throw new DeviceException("文件传输进行中，完成或停止传输后再操作");
         var targets = Targets();
         if (targets.Count == 0) throw new InvalidOperationException("未选择设备");

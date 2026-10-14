@@ -8,7 +8,7 @@ namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
-    internal async Task RunUnifiedAccessAcceptanceAsync(string output, string approvedCandidate)
+    internal async Task RunUnifiedAccessAcceptanceAsync(string output, string approvedCandidate, bool verifyBackgroundWindow = false)
     {
         if (ViewModel.Demo || !Path.IsPathFullyQualified(output) || !ViewModel.DataDirectory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("接入验收必须使用artifacts下的独立配置及绝对证据路径。");
@@ -38,13 +38,41 @@ public partial class MainWindow
             }
             if (!ReferenceEquals(before, ViewModel.Runtime) || ViewModel.Runtime.Settings.AdbAllowedSerials.Length != 1)
                 throw new InvalidOperationException("取消接入改变了旧授权或运行时。");
-            await ViewModel.ApplyLdConnectionsAsync(proofs, ct);
-            if (ReferenceEquals(before, ViewModel.Runtime) || ViewModel.Runtime.Settings.LdSerialBindings.Count != 2 || ViewModel.Devices.Count(row => row.Info.Online) != 2)
+            completed = true;
+        });
+        if (!completed) throw new InvalidOperationException("接入取消验收未完成：" + ldFeedback.Text);
+        var previousRuntime = ViewModel.Runtime;
+        var previousConfirm = ViewModel.Confirm; var confirmations = 0;
+        ViewModel.Confirm = (_, _) => { confirmations++; throw new InvalidOperationException("一键启动弹出了确认框。"); };
+        try { await ConnectLdInstancesAsync([1], new Dictionary<int, string> { [1] = approvedCandidate }); }
+        finally { ViewModel.Confirm = previousConfirm; }
+        {
+            if (confirmations != 0 || ReferenceEquals(previousRuntime, ViewModel.Runtime) || ViewModel.Runtime.Settings.LdSerialBindings.GetValueOrDefault(1) != approvedCandidate) throw new InvalidOperationException("一键接入没有通过原批准目标的核验。");
+            if (ViewModel.Runtime.Settings.LdSerialBindings.Count != 2 || ViewModel.Devices.Count(row => row.Info.Online) != 2)
                 throw new InvalidOperationException("运行时未完成接入替换。");
             foreach (var index in new[] { 1, 2 }) if (!LdInstanceConnected(index)) throw new InvalidOperationException("实例未进入已连接状态：" + index);
-            await ViewModel.RefreshAutomaticScreensAsync(ViewModel.Devices.Select(row => row.Serial).ToArray(), ct);
+            await ViewModel.RefreshAutomaticScreensAsync(ViewModel.Devices.Select(row => row.Serial).ToArray(), CancellationToken.None);
             if (ViewModel.Devices.Any(row => row.Screenshot is null)) throw new InvalidOperationException("接入后截图为空。");
-            UpdateLdPlayerRows(); UpdateUnifiedDirectory(); NavigateTo("设备墙 / 主控");
+            var hiddenAndRestored = false;
+            if (verifyBackgroundWindow)
+            {
+                var player = ViewModel.Runtime.LdPlayer!.Instances.Single(item => item.Index == 1);
+                using var process = Process.GetProcessById(player.ProcessId);
+                ldWindowVisibility ??= new LdWindowVisibility(Path.Combine(ViewModel.DataDirectory, "window-recovery"), Path.GetDirectoryName(ViewModel.Runtime.FrozenConnectionSettings.LdConsolePath)!);
+                try
+                {
+                    if (!await ldWindowVisibility.HideAsync(player, process.StartTime.ToUniversalTime().Ticks)) throw new InvalidOperationException("目标窗口原本不可见，本轮不能证明隐藏行为。");
+                    if (!ldWindowVisibility.IsHidden(1)) throw new InvalidOperationException("目标窗口未隐藏。");
+                    var png = await ViewModel.Runtime.Backend.ScreenshotAsync(approvedCandidate);
+                    var size = PngImage.ReadDimensions(png);
+                    var colors = Enumerable.Range(0, 16).Select(i => PngImage.ColorAt(png, i * (size.Width - 1) / 15, i * (size.Height - 1) / 15)).Distinct().Count();
+                    if (colors < 2) throw new InvalidOperationException("隐藏后的截图未检出有效画面差异。");
+                    await File.WriteAllBytesAsync(Path.Combine(output, "hidden-device.png"), png);
+                }
+                finally { await ldWindowVisibility.ShowAsync(1); }
+                hiddenAndRestored = !ldWindowVisibility.IsHidden(1);
+            }
+            UpdateLdPlayerRows(); UpdateUnifiedDirectory(); NavigateTo("设备墙 / 主控"); SetWallViewMode("list");
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
             SaveRender(Path.Combine(output, "connected.png"));
             await File.WriteAllTextAsync(Path.Combine(output, "result.json"), JsonSerializer.Serialize(new
@@ -53,10 +81,9 @@ public partial class MainWindow
                 originalAuthorizationPreserved = true, localInstances = service.Instances.Count,
                 connectedDevices = ViewModel.Devices.Count(row => row.Info.Online),
                 runtimeReplaced = true, screenshotsAvailable = true,
-                emulatorLaunchNotRequested = true, scopeLimitedToApprovedIndices = true
+                emulatorLaunchNotRequested = true, scopeLimitedToApprovedIndices = true,
+                startupConfirmationDialogs = confirmations, backgroundWindowVerified = hiddenAndRestored
             }, JsonDefaults.Options));
-            completed = true;
-        });
-        if (!completed) throw new InvalidOperationException("接入验收未完成：" + ldFeedback.Text);
+        }
     }
 }

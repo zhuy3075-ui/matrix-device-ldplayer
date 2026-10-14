@@ -98,7 +98,7 @@ public partial class MainWindow
         return Button(glyph, label, command);
     }
 
-    private void RefreshLdButtons() { foreach (var command in ldCommands) command.Refresh(); }
+    private void RefreshLdButtons() { foreach (var command in ldCommands) command.Refresh(); RefreshLaunchCommands(); }
     private void UpdateLdPlayerRows()
     {
         var index = ldSelection?.Index;

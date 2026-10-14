@@ -26,6 +26,7 @@ public sealed class WorkspaceViewModel : ObservableObject
     private string statusFilter = "全部状态";
     private bool busy;
     private bool externalBusy;
+    private int pendingLaunchSelection;
     private bool blockApiWhileBusy = true;
     private string status = "等待发现设备";
     private string error = "";
@@ -162,7 +163,7 @@ public sealed class WorkspaceViewModel : ObservableObject
     public string Status { get => LocalizationService.Current.Get(status); private set => Set(ref status, value); }
     public string Error { get => error; private set => Set(ref error, value); }
     public string Counts => $"{LocalizationService.Current.Get("发现")} {Devices.Count}   {LocalizationService.Current.Get("就绪")} {Devices.Count(row => row.Info.Online)}   {LocalizationService.Current.Get("筛选")} {DeviceView.Cast<object>().Count()}   {LocalizationService.Current.Get("选中")} {Devices.Count(row => row.IsSelected)}";
-    public string TargetContext => $"{LocalizationService.Current.Get("目标")} {Targets().Count}: {string.Join(", ", Targets().Select(row => row.Name))}";
+    public string TargetContext => pendingLaunchSelection > 0 ? $"已选目标包含 {pendingLaunchSelection} 台未连接设备" : $"{LocalizationService.Current.Get("目标")} {Targets().Count}: {string.Join(", ", Targets().Select(row => row.Name))}";
     public BitmapSource? DebugImage { get => debugImage; private set => Set(ref debugImage, value); }
     public NodeRow? SelectedNode { get => selectedNode; set { Set(ref selectedNode, value); Changed(nameof(NodeProperties)); NodeSelectionChanged?.Invoke(); } }
     public string NodeProperties => SelectedNode is { } row ? JsonSerializer.Serialize(row.Source with { ChildNodeList = [] }, JsonDefaults.Options) : "未选中节点";
@@ -188,11 +189,17 @@ public sealed class WorkspaceViewModel : ObservableObject
     public bool CanWriteTargets() => !Busy && !Transferring && Targets().Count > 0 && Targets().All(row => row.Info.Online && !ScriptBusy(row.Serial));
     public bool CanControlMainInput()
     {
+        if (pendingLaunchSelection > 0 && (SyncMouse || SyncKeyboard)) return false;
         var source = MainDevice ?? CurrentDevice;
         return !Busy && !Transferring && source?.Info.Online == true && !ScriptBusy(source.Serial) &&
             InputTargets(source.Serial, false).All(serial => Devices.Any(row => row.Serial == serial && row.Info.Online && !ScriptBusy(serial)));
     }
-    public IReadOnlyList<DeviceRow> Targets() { var selected = Devices.Where(row => row.IsSelected).ToList(); return selected.Count > 0 ? selected : CurrentDevice is null ? [] : [CurrentDevice]; }
+    public IReadOnlyList<DeviceRow> Targets() { if (pendingLaunchSelection > 0) return []; var selected = Devices.Where(row => row.IsSelected).ToList(); return selected.Count > 0 ? selected : CurrentDevice is null ? [] : [CurrentDevice]; }
+    internal void SetPendingLaunchSelection(int count)
+    {
+        if (pendingLaunchSelection == count) return;
+        pendingLaunchSelection = count; RefreshCommands();
+    }
 
     private AsyncCommand Async(Func<Task> action, Func<bool> canExecute) { var command = new AsyncCommand(action, canExecute); commands.Add(command); return command; }
     private ActionCommand Action(Action action, Func<bool> canExecute) { var command = new ActionCommand(action, canExecute); commands.Add(command); return command; }
@@ -375,6 +382,7 @@ public sealed class WorkspaceViewModel : ObservableObject
 
     public Task SendInputAsync(InputSnapshot input) => ExecuteAsync("发送输入", async () =>
     {
+        if (pendingLaunchSelection > 0 && (input.Kind is InputKind.Key or InputKind.Text ? SyncKeyboard : SyncMouse)) throw new DeviceException("同步目标中存在未连接设备，请先连接或取消选择。", 409, 1003);
         if (Transferring) throw new DeviceException("文件传输进行中，完成或停止传输后再控制");
         var source = Devices.FirstOrDefault(row => row.Serial == input.SourceSerial);
         if (input.Kind is InputKind.Tap or InputKind.Swipe && source is not null &&
@@ -542,6 +550,7 @@ public sealed class WorkspaceViewModel : ObservableObject
 
     private IReadOnlyList<DeviceRow> RequireTargets()
     {
+        if (pendingLaunchSelection > 0) throw new DeviceException($"选中目标包含 {pendingLaunchSelection} 台未连接设备，请先连接或取消选择；未操作其它设备。", 409, 1003);
         if (Transferring) throw new DeviceException("文件传输进行中，完成或停止传输后再操作");
         var targets = Targets();
         if (targets.Count == 0) throw new InvalidOperationException("未选择设备");

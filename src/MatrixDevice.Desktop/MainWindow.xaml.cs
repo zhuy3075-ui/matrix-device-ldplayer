@@ -86,6 +86,7 @@ public partial class MainWindow : Window
     {
         BuildWorkspaceLayout();
         tabs = new TabControl { Background = Brushes.White, BorderThickness = new Thickness(0), Template = WorkspaceContentTemplate() };
+        InitializeUnifiedDevices();
         AddTab("设备墙 / 主控", BuildWallPage());
         AddTab("雷电实例", BuildLdPlayerPage());
         AddTab("节点", BuildNodesPage());
@@ -100,6 +101,7 @@ public partial class MainWindow : Window
         AddTab("设置", BuildSettingsPage());
         tabs.SelectionChanged += (_, args) => { if (ReferenceEquals(args.Source, tabs)) { UpdateNavigation(); RebuildNodes(); } };
         AttachWorkspacePages();
+        NavigateTo("设备墙 / 主控");
     }
 
 
@@ -178,7 +180,7 @@ public partial class MainWindow : Window
         foreach (var row in ViewModel.Devices) row.Changed(nameof(DeviceRow.FrameLabel));
     }
 
-    private void RefreshWall() { }
+    private void RefreshWall() { UpdateUnifiedDirectory(); }
     private void RefreshScreens()
     {
         if (screenshotImage is null) return;
@@ -228,6 +230,7 @@ public partial class MainWindow : Window
             scanCancellation?.Cancel();
             if (scanOperation is not null) { try { await scanOperation; } catch (OperationCanceledException) { } }
             foreach (var host in nativeHosts.ToList()) host.Restore();
+            if (ldWindowVisibility is not null) await ldWindowVisibility.RestoreAllAsync();
             var saved = ViewModel.Runtime.Settings with { WindowWidth = WindowState == WindowState.Normal ? ActualWidth : RestoreBounds.Width, WindowHeight = WindowState == WindowState.Normal ? ActualHeight : RestoreBounds.Height, WallColumns = ViewModel.WallColumns, SyncMouse = ViewModel.SyncMouse, SyncKeyboard = ViewModel.SyncKeyboard };
             ViewModel.Runtime.Settings = ViewModel.Runtime.SettingsStore.Save(saved);
             await ViewModel.ShutdownAsync();
@@ -255,6 +258,7 @@ public partial class MainWindow : Window
     public async Task RunSmokeAsync(string? screenshotPath = null)
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("启动验收仅允许显式演示模式");
+        if (tabs.SelectedIndex != 0 || wallViewMode != "list") throw new InvalidOperationException("初始页面必须是统一设备列表。");
         if (screenshotPath is not null)
         {
             if (!System.IO.Path.IsPathFullyQualified(screenshotPath)) throw new InvalidOperationException("截图输出必须为绝对路径");
@@ -277,6 +281,8 @@ public partial class MainWindow : Window
         ViewModel.SelectedNode = ViewModel.FlattenNodes().FirstOrDefault(node => node.Source.Clickable);
         await ViewModel.LoadAppsAsync();
         await VerifyOperationGatesAsync();
+        await VerifyOneClickProjectionAsync();
+        await LdWindowVisibilitySmoke.VerifyAsync(System.IO.Path.Combine(ViewModel.DataDirectory, "window-visibility-smoke"));
         ViewModel.SamplePixel(10, 10);
         ViewModel.ShellInput = "wm size"; await ViewModel.ExecuteShellAsync();
         var acceptanceDirectory = ViewModel.DataDirectory;
@@ -480,7 +486,12 @@ public partial class MainWindow : Window
         if (screenshotPath is not null)
             await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".controls.json"), JsonSerializer.Serialize(controlStates, JsonDefaults.Options));
         NavigateTo("设备墙 / 主控");
+        await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
         await Dispatcher.InvokeAsync(() => { UpdateLayout(); }, System.Windows.Threading.DispatcherPriority.Render);
+        var tiles = VisualDescendants<UnifiedDeviceTile>(Shell).Where(tile => tile.IsVisible).ToArray();
+        if (screenshotPath is not null) await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".tiles.json"), JsonSerializer.Serialize(tiles.Select(tile => new { tile.Mode, owner = tile.Owner is not null, context = tile.DataContext?.GetType().Name, child = tile.Child?.GetType().Name, tile.ActualWidth, tile.ActualHeight }), JsonDefaults.Options));
+        if (wallViewMode != "list" && !unifiedDeviceView.IsEmpty && tiles.Length == 0) throw new InvalidOperationException("非空统一目录没有生成可见卡片。");
+        if (tiles.Any(tile => tile.Child is null || tile.ActualHeight < 1)) throw new InvalidOperationException("统一设备视图出现空白条目。");
         if (screenshotPath is not null) SaveRender(screenshotPath);
         var path = System.IO.Path.Combine(ViewModel.DataDirectory, "desktop-smoke.json");
         if (!string.IsNullOrWhiteSpace(ViewModel.Error)) throw new InvalidOperationException("桌面验收产生错误：" + ViewModel.Error);
