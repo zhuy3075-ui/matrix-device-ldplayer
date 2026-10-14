@@ -1,0 +1,53 @@
+  正在确定要还原的项目…
+  所有项目均是最新的，无法还原。
+  MatrixDevice.Core -> E:\矩阵项目（雷电模拟器）\MatrixDevice.Reconstructed\src\MatrixDevice.Core\bin\Release\net10.0\MatrixDevice.Core.dll
+  MatrixDevice.Features -> E:\矩阵项目（雷电模拟器）\MatrixDevice.Reconstructed\src\MatrixDevice.Features\bin\Release\net10.0\MatrixDevice.Features.dll
+  MatrixDevice.Host -> E:\矩阵项目（雷电模拟器）\MatrixDevice.Reconstructed\src\MatrixDevice.Host\bin\Release\net10.0\MatrixDevice.Host.dll
+  MatrixDevice.Cli -> E:\矩阵项目（雷电模拟器）\MatrixDevice.Reconstructed\src\MatrixDevice.Cli\bin\Release\net10.0\MatrixDevice.Cli.dll
+  MatrixDevice.Desktop -> E:\矩阵项目（雷电模拟器）\MatrixDevice.Reconstructed\src\MatrixDevice.Desktop\bin\Release\net10.0-windows\MatrixDevice.Desktop.dll
+  MatrixDevice.Tests -> E:\矩阵项目（雷电模拟器）\MatrixDevice.Reconstructed\tests\MatrixDevice.Tests\bin\Release\net10.0\MatrixDevice.Tests.dll
+
+已成功生成。
+    0 个警告
+    0 个错误
+
+已用时间 00:00:08.87
+PASS coordinate mapping preserves corners and proportions
+PASS touch packet has exact big-endian field layout
+PASS video reader handles flags, short reads and truncated payloads
+PASS PNG crop and pixel sampling use decoded coordinates
+PASS per-serial queue preserves order and allows other devices
+PASS cancelled queue item cannot let successors overtake
+PASS catalog retains offline identity and changes reconnect generation
+PASS sync excludes duplicate source and commits one action per device
+PASS source handoff cancels unfinished gestures and rejects stale actions
+PASS node search is preorder, case-sensitive and nullable-aware
+PASS debug node selection preserves reference and does not tap
+PASS script package roundtrip preserves metadata and validates actions
+PASS script import rejects ZIP traversal and missing entries
+PASS script duplicate start runs only once and stops before next step
+PASS script errors propagate and per-device logs stay at 500
+PASS configuration recovery and three-way merge preserve other writes
+PASS configuration can clear a previously configured nullable field
+PASS unconfigured ADB leaves runtime available for Settings
+PASS occupied startup gateway leaves the Settings runtime available
+PASS corrupt database startup releases its file handle
+PASS target dimension change invalidates catalog generation
+PASS SQLite metadata and entity parameters survive restart
+PASS phone client maps command/package fields and rejects bad envelopes
+PASS phone client normalizes malformed envelope errors
+PASS all 27 Automator routes have an explicit outcome
+PASS HTTP gateways keep distinct envelopes and invalid requests visible
+PASS Automator crop and ordered wait-any return real backend results
+PASS file transfers preserve bytes and device isolation
+PASS occupied device ports are skipped and released ports cool down
+PASS ordinary logs flush at shutdown
+PASS bounded stream accepts its limit and rejects one extra byte
+PASS phone screenshot and dump reject malformed data shapes
+PASS XML dump rejects external entities and excessive depth
+PASS scan rejects invalid or oversized ranges before touching the network
+PASS unsupported device input uses the documented error code
+PASS crop outside the device returns a validation error
+PASS 180 degree rotation invalidates input even with unchanged dimensions
+PASS queued keys and text cannot cross a source reconnect
+RESULT 38/38 passed in 2.51s

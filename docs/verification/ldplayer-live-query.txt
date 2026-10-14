@@ -1,0 +1,74 @@
+PASS coordinate mapping preserves corners and proportions
+PASS touch packet has exact big-endian field layout
+PASS video reader handles flags, short reads and truncated payloads
+PASS PNG crop and pixel sampling use decoded coordinates
+PASS per-serial queue preserves order and allows other devices
+PASS cancelled queue item cannot let successors overtake
+PASS catalog retains offline identity and changes reconnect generation
+PASS sync excludes duplicate source and commits one action per device
+PASS source handoff cancels unfinished gestures and rejects stale actions
+PASS node search is preorder, case-sensitive and nullable-aware
+PASS debug node selection preserves reference and does not tap
+PASS script package roundtrip preserves metadata and validates actions
+PASS script import rejects ZIP traversal and missing entries
+PASS script duplicate start runs only once and stops before next step
+PASS script errors propagate and per-device logs stay at 500
+PASS configuration recovery and three-way merge preserve other writes
+PASS configuration can clear a previously configured nullable field
+PASS unconfigured ADB leaves runtime available for Settings
+PASS occupied startup gateway leaves the Settings runtime available
+PASS corrupt database startup releases its file handle
+PASS target dimension change invalidates catalog generation
+PASS SQLite metadata and entity parameters survive restart
+PASS phone client maps command/package fields and rejects bad envelopes
+PASS phone client normalizes malformed envelope errors
+PASS all 27 Automator routes have an explicit outcome
+PASS HTTP gateways keep distinct envelopes and invalid requests visible
+PASS Automator crop and ordered wait-any return real backend results
+PASS file transfers preserve bytes and device isolation
+PASS occupied device ports are skipped and released ports cool down
+PASS ordinary logs flush at shutdown
+PASS bounded stream accepts its limit and rejects one extra byte
+PASS phone screenshot and dump reject malformed data shapes
+PASS XML dump rejects external entities and excessive depth
+PASS scan rejects invalid or oversized ranges before touching the network
+PASS unsupported device input uses the documented error code
+PASS crop outside the device returns a validation error
+PASS 180 degree rotation invalidates input even with unchanged dimensions
+PASS queued keys and text cannot cross a source reconnect
+PASS LDPlayer parser supports current and legacy Chinese titles
+PASS LDPlayer rejects malformed and duplicate instance rows
+PASS LDPlayer new service epochs reject old clients and remain JSON safe
+PASS LDPlayer generations are stable but invalidate restarted instances
+PASS LDPlayer guards confirmations whitelist and command fields
+PASS LDPlayer removed indices do not reuse old generations
+PASS LDPlayer queued input rejects restart and allows another instance
+PASS LDPlayer real runner preserves argument boundaries and GBK output
+PASS LDPlayer runner cancels times out and limits its own output
+PASS LDPlayer confirmed demo lifecycle reports observed states and fresh tokens
+PASS LDPlayer timeout never kills descendants of its CLI process
+PASS LDPlayer HTTP routes separate support from verified effects
+PASS invalid LDPlayer configuration leaves Chinese settings available
+PASS all device writes reject browser simple and cross-site requests
+PASS serial binding edits cannot mutate the configuration merge baseline
+PASS concurrent serial binding edits merge by instance index
+LIVE-LDPLAYER {
+  "ok": true,
+  "data": [
+    {
+      "index": 0,
+      "name": "\u96F7\u7535\u6A21\u62DF\u5668",
+      "topWindow": 4986608,
+      "bindWindow": 1967810,
+      "androidStarted": true,
+      "processId": 49596,
+      "vBoxProcessId": 75704,
+      "width": 1600,
+      "height": 900,
+      "dpi": 240,
+      "generation": 1077544687431680
+    }
+  ]
+}
+PASS LIVE read-only LDPlayer HTTP list without ADB client
+RESULT 55/55 passed in 5.74s

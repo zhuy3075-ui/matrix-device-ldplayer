@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="src/MatrixDevice.Core/MatrixDevice.Core.csproj" />
+  <Project Path="src/MatrixDevice.Features/MatrixDevice.Features.csproj" />
+  <Project Path="src/MatrixDevice.Host/MatrixDevice.Host.csproj" />
+  <Project Path="src/MatrixDevice.Desktop/MatrixDevice.Desktop.csproj" />
+  <Project Path="src/MatrixDevice.Cli/MatrixDevice.Cli.csproj" />
+  <Project Path="tests/MatrixDevice.Tests/MatrixDevice.Tests.csproj" />
+</Solution>

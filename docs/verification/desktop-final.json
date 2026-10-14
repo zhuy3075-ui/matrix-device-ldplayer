@@ -1,0 +1,15 @@
+{
+  "width": 1440,
+  "height": 900,
+  "deviceCount": 2,
+  "nodes": 5,
+  "selectedNode": "com.matrix.demo:id/tap",
+  "apps": 1,
+  "colors": 1,
+  "shell": 1,
+  "script": "Completed",
+  "tabs": 11,
+  "languageSwitch": "English navigation/settings bindings and Chinese restoration passed",
+  "unavailableControlsDisabled": true,
+  "error": ""
+}

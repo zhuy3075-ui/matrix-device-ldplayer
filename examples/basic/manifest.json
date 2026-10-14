@@ -1,0 +1,7 @@
+{
+  "Id": "matrix.basic-example",
+  "Name": "基础动作验证",
+  "Version": "1.0.0",
+  "Description": "仅在专用测试设备上运行。",
+  "Entry": "script.json"
+}
