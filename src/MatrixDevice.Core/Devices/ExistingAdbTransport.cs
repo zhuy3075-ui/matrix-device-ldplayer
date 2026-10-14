@@ -144,6 +144,217 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
         }
     }
 
+    public async Task StreamScreenVideoAsync(string serial, uint expectedTransport, string remoteServer, string scid, int maximumSize, Stream output, Func<CancellationToken, Task> verifyIdentity, CancellationToken ct)
+    {
+        if (!allowedSerials.Contains(serial)) throw new DeviceException($"ADB serial is not authorized: {serial}.", 403, 1007);
+        try
+        {
+            RequireTransport(serial, expectedTransport);
+            await CheckVersionAsync(ct).ConfigureAwait(false);
+            using var shell = await OpenVerifiedAsync(ct).ConfigureAwait(false);
+            using var serverStop = new CancellationTokenSource();
+            using var shellCancellation = serverStop.Token.Register(shell.Dispose);
+            var device = new DeviceData { Serial = serial, TransportId = expectedTransport.ToString(CultureInfo.InvariantCulture) };
+            await shell.SetDeviceAsync(device, ct).ConfigureAwait(false);
+            var nonce = Guid.NewGuid().ToString("N");
+            var marker = "MATRIX_VIDEO_" + nonce + ":";
+            var command = FormattableString.Invariant($"printf '{marker}%s\\n' $$; cat /proc/$$/stat; CLASSPATH={remoteServer} exec app_process -Dmatrix.video.session={nonce} / com.genymobile.scrcpy.Server 3.3.4 scid={scid} tunnel_forward=true video=true audio=false control=false raw_stream=true cleanup=false video_codec=h264 max_size={maximumSize} max_fps=10 video_bit_rate=1000000 power_on=false clipboard_autosync=false power_off_on_close=false");
+            await shell.SendAdbRequestAsync("shell,v2,raw:" + command, ct).ConfigureAwait(false);
+            await shell.ReadAdbResponseAsync(ct).ConfigureAwait(false);
+            await shell.SendAsync(new byte[] { 4, 0, 0, 0, 0 }, ct).ConfigureAwait(false);
+            using var shellStream = shell.Socket.GetStream();
+            var log = new VideoServerLog(marker);
+            var server = ReadVideoServerAsync(shellStream, log, serverStop.Token);
+            ExistingAdbSocket? video = null;
+            Task? copy = null;
+            using var copying = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            try
+            {
+                using var startup = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                startup.CancelAfter(TimeSpan.FromSeconds(10));
+                while (video is null)
+                {
+                    startup.Token.ThrowIfCancellationRequested();
+                    if (server.IsCompleted) throw new DeviceException($"Video server exited before opening its socket: serial={serial}, {log.Snapshot}", 501, 2001);
+                    RequireTransport(serial, expectedTransport);
+                    var candidate = await OpenVerifiedAsync(startup.Token).ConfigureAwait(false);
+                    try
+                    {
+                        await candidate.SetDeviceAsync(device, startup.Token).ConfigureAwait(false);
+                        await candidate.SendAdbRequestAsync("localabstract:scrcpy_" + scid, startup.Token).ConfigureAwait(false);
+                        await candidate.ReadAdbResponseAsync(startup.Token).ConfigureAwait(false);
+                        video = candidate;
+                    }
+                    catch (AdbException ex) when (IsSocketNotReady(ex))
+                    {
+                        candidate.Dispose();
+                        await Task.Delay(100, startup.Token).ConfigureAwait(false);
+                    }
+                    catch { candidate.Dispose(); throw; }
+                }
+                using var cancellation = copying.Token.Register(video.Dispose);
+                using var stream = video.Socket.GetStream();
+                copy = CopyH264Async(stream, output, copying.Token);
+                var completed = await Task.WhenAny(copy, server).ConfigureAwait(false);
+                if (completed == server)
+                {
+                    var code = await server.ConfigureAwait(false);
+                    throw new DeviceException($"Video server exited: serial={serial}, code={code}, {log.Snapshot}", 503, 2000);
+                }
+                await copy.ConfigureAwait(false);
+                throw new DeviceException($"Video connection closed: serial={serial}, {log.Snapshot}", 503, 2000);
+            }
+            finally
+            {
+                await copying.CancelAsync().ConfigureAwait(false);
+                video?.Dispose();
+                if (copy is not null)
+                {
+                    try { await copy.ConfigureAwait(false); }
+                    catch (Exception ex) when (ex is IOException or DeviceException or OperationCanceledException or ObjectDisposedException) { }
+                }
+                try
+                {
+                    // First let normal socket disconnection terminate the encoder. Kill only a proven owned PID if it stalls.
+                    try { await server.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
+                    catch (Exception ex) when (ex is IOException or OperationCanceledException or TimeoutException)
+                    {
+                        try { await StopOwnedVideoServerAsync(serial, expectedTransport, scid, nonce, log, verifyIdentity).ConfigureAwait(false); }
+                        catch (Exception cleanupError)
+                        {
+                            var unconfirmed = new DeviceException($"视频服务退出清理未确认，已禁止本实例继续叠加会话：serial={serial}, jar={remoteServer}: {cleanupError.Message}", 409, 1003);
+                            unconfirmed.Data["VideoCleanupUnconfirmed"] = true;
+                            throw unconfirmed;
+                        }
+                    }
+                }
+                finally
+                {
+                    await serverStop.CancelAsync().ConfigureAwait(false);
+                    try { await server.ConfigureAwait(false); }
+                    catch (Exception ex) when (serverStop.IsCancellationRequested && ex is IOException or OperationCanceledException or ObjectDisposedException) { }
+                }
+            }
+        }
+        catch (Exception ex) when (ct.IsCancellationRequested && ex is not DeviceException) { throw new OperationCanceledException(ct); }
+        catch (Exception ex) when (ex.GetBaseException() is SocketException or IOException or AdbException or ObjectDisposedException)
+        {
+            throw new DeviceException($"Existing ADB video stream failed: serial={serial}: {ex.Message}", 503, 2000);
+        }
+    }
+
+    private async Task StopOwnedVideoServerAsync(string serial, uint transport, string scid, string nonce, VideoServerLog log, Func<CancellationToken, Task> verifyIdentity)
+    {
+        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var ct = cleanup.Token;
+        if (log.Identity is not { } identity) throw new DeviceException($"视频服务退出未确认，未获得本次进程出生证明；请停止重连并检查实例：serial={serial}。", 409, 1003);
+        await verifyIdentity(ct).ConfigureAwait(false);
+        await RunPinnedAsync(serial, transport, async token =>
+        {
+            var snapshot = Encoding.UTF8.GetString(await ExecuteAsync(serial, ["shell", $"if [ -e /proc/{identity.ProcessId}/stat ]; then cat /proc/{identity.ProcessId}/stat; printf '\\n'; cat /proc/{identity.ProcessId}/cmdline; fi"], token).ConfigureAwait(false));
+            if (snapshot.Length == 0) return true;
+            var lineEnd = snapshot.IndexOf('\n');
+            if (lineEnd < 0 || ParseProcessIdentity(snapshot[..lineEnd]) != identity)
+                throw new DeviceException($"视频服务 PID 已变化，拒绝清理其他进程：serial={serial}, pid={identity.ProcessId}。", 409, 1003);
+            var commandLine = snapshot[(lineEnd + 1)..];
+            var arguments = commandLine.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+            if (!arguments.Contains("-Dmatrix.video.session=" + nonce, StringComparer.Ordinal) ||
+                !arguments.Contains("com.genymobile.scrcpy.Server", StringComparer.Ordinal) ||
+                !arguments.Contains("3.3.4", StringComparer.Ordinal) || !arguments.Contains("scid=" + scid, StringComparer.Ordinal))
+                throw new DeviceException($"无法核验本次视频进程命令行，拒绝终止：serial={serial}, pid={identity.ProcessId}, scid={scid}。", 409, 1003);
+            // Recheck birth immediately in the same shell before signalling this numeric PID.
+            var kill = FormattableString.Invariant($"record=$(cat /proc/{identity.ProcessId}/stat) || exit 41; fields=${{record##*) }}; set -- $fields; shift 19; [ \"$1\" = \"{identity.StartedTicks}\" ] || exit 42; kill -TERM {identity.ProcessId}");
+            await ExecuteAsync(serial, ["shell", kill], token).ConfigureAwait(false);
+            for (var attempt = 0; attempt < 10; attempt++)
+            {
+                var after = Encoding.UTF8.GetString(await ExecuteAsync(serial, ["shell", $"if [ -e /proc/{identity.ProcessId}/stat ]; then cat /proc/{identity.ProcessId}/stat; fi"], token).ConfigureAwait(false)).Trim();
+                if (after.Length == 0 || ParseProcessIdentity(after) != identity) return true;
+                await Task.Delay(100, token).ConfigureAwait(false);
+            }
+            throw new DeviceException($"本次视频进程终止未确认，请停止重连并检查实例：serial={serial}, pid={identity.ProcessId}。", 409, 1003);
+        }, ct).ConfigureAwait(false);
+    }
+
+    private static VideoProcessIdentity? ParseProcessIdentity(string stat)
+    {
+        var open = stat.IndexOf('('); var close = stat.LastIndexOf(')');
+        if (open < 1 || close <= open || !int.TryParse(stat.AsSpan(0, open).Trim(), out var pid) || pid < 1) return null;
+        var fields = stat[(close + 1)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return fields.Length > 19 && ulong.TryParse(fields[19], NumberStyles.None, CultureInfo.InvariantCulture, out var ticks) && ticks > 0 ? new(pid, ticks) : null;
+    }
+
+    private sealed record VideoProcessIdentity(int ProcessId, ulong StartedTicks);
+
+    private static bool IsSocketNotReady(AdbException error) =>
+        error.Message.Contains("connect", StringComparison.OrdinalIgnoreCase) ||
+        error.Message.Contains("closed", StringComparison.OrdinalIgnoreCase) ||
+        error.Message.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+        error.Message.Contains("No such file", StringComparison.OrdinalIgnoreCase);
+
+    private static async Task CopyH264Async(Stream stream, Stream output, CancellationToken ct)
+    {
+        var prefix = new byte[512];
+        var count = 0;
+        while (count < 5)
+        {
+            var read = await stream.ReadAsync(prefix.AsMemory(count), ct).ConfigureAwait(false);
+            if (read == 0) break;
+            count += read;
+        }
+        var start = count >= 5 && prefix[0] == 0 && prefix[1] == 0
+            ? prefix[2] == 1 ? 3 : prefix[2] == 0 && prefix[3] == 1 ? 4 : -1 : -1;
+        if (start < 0 || (prefix[start] & 0x1f) is < 1 or > 12)
+            throw new DeviceException("Video server did not produce raw H.264 Annex-B data.", 501, 2001);
+        await output.WriteAsync(prefix.AsMemory(0, count), ct).ConfigureAwait(false);
+        await stream.CopyToAsync(output, 64 * 1024, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<int> ReadVideoServerAsync(Stream stream, VideoServerLog log, CancellationToken ct)
+    {
+        var header = new byte[5];
+        var block = new byte[4096];
+        while (true)
+        {
+            await stream.ReadExactlyAsync(header, ct).ConfigureAwait(false);
+            var remaining = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(1));
+            if (header[0] is not (1 or 2 or 3) || (header[0] == 3 && remaining != 1)) throw new IOException("Malformed video server shell packet.");
+            if (header[0] == 3) { await stream.ReadExactlyAsync(block.AsMemory(0, 1), ct).ConfigureAwait(false); return block[0]; }
+            while (remaining > 0)
+            {
+                var length = (int)Math.Min(remaining, (uint)block.Length);
+                await stream.ReadExactlyAsync(block.AsMemory(0, length), ct).ConfigureAwait(false);
+                log.Append(Encoding.UTF8.GetString(block, 0, length));
+                remaining -= (uint)length;
+            }
+        }
+    }
+
+    private sealed class VideoServerLog(string marker)
+    {
+        private readonly StringBuilder text = new();
+        private VideoProcessIdentity? identity;
+        public VideoProcessIdentity? Identity { get { lock (text) return identity; } }
+        public string Snapshot { get { lock (text) return text.ToString(); } }
+        public void Append(string value)
+        {
+            lock (text)
+            {
+                text.Append(value);
+                if (identity is null)
+                {
+                    var snapshot = text.ToString(); var start = snapshot.IndexOf(marker, StringComparison.Ordinal);
+                    if (start >= 0)
+                    {
+                        var pidEnd = snapshot.IndexOf('\n', start); var statEnd = pidEnd < 0 ? -1 : snapshot.IndexOf('\n', pidEnd + 1);
+                        if (statEnd > pidEnd && int.TryParse(snapshot.AsSpan(start + marker.Length, pidEnd - start - marker.Length).Trim(), out var pid) && ParseProcessIdentity(snapshot[(pidEnd + 1)..statEnd]) is { } parsed && parsed.ProcessId == pid)
+                            identity = parsed;
+                    }
+                }
+                if (text.Length > 8192) text.Remove(0, text.Length - 8192);
+            }
+        }
+    }
+
     private async Task CheckVersionAsync(CancellationToken ct)
     {
         using var socket = await OpenVerifiedAsync(ct).ConfigureAwait(false);

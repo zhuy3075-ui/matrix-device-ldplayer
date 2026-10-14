@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
@@ -19,8 +20,14 @@ public sealed class AdbDeviceBackend : IDeviceBackend
     private readonly ConcurrentDictionary<string, PhoneAgentClient> _agents = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Func<string, CancellationToken, Task>> _unicodeInputs = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Func<CancellationToken, Task>> _identityGuards = new(StringComparer.Ordinal);
+    private readonly object _videoGate = new();
+    private readonly CancellationTokenSource _videoShutdown = new();
+    private readonly Dictionary<string, TaskCompletionSource> _videoLeases = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _blockedVideos = new(StringComparer.Ordinal);
     public const int MaximumStdoutBytes = 32 * 1024 * 1024;
     public const int MaximumStderrBytes = 1024 * 1024;
+    public const string MonitorServerVersion = "3.3.4";
+    public const string MonitorServerSha256 = "8588238c9a5a00aa542906b6ec7e6d5541d9ffb9b5d0f6e1bc0e365e2303079e";
     private int _disposed;
     public AdbDeviceBackend(AppSettings settings, IPEndPoint? serverEndpoint = null)
     {
@@ -79,6 +86,10 @@ public sealed class AdbDeviceBackend : IDeviceBackend
     public async Task<IReadOnlyList<AdbRegisteredDevice>> ListRegisteredDevicesAsync(CancellationToken ct = default)
     {
         var output = Decode(await ExecuteAsync(null, ["devices", "-l"], ct).ConfigureAwait(false));
+        return ParseRegisteredDevices(output);
+    }
+    private static IReadOnlyList<AdbRegisteredDevice> ParseRegisteredDevices(string output)
+    {
         var devices = new List<AdbRegisteredDevice>();
         foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
@@ -333,6 +344,114 @@ public sealed class AdbDeviceBackend : IDeviceBackend
         return RunDeviceAsync(serial, token => agent.SetNodeTextAsync(selector, text, token), ct);
     }
 
+    public async Task StreamScreenVideoAsync(string serial, int width, int height, Stream output, CancellationToken ct = default)
+    {
+        AuthorizeSerial(serial);
+        ArgumentNullException.ThrowIfNull(output);
+        if (!output.CanWrite) throw new ArgumentException("Video output must be writable.", nameof(output));
+        if (width is < 16 or > 1920 || height is < 16 or > 1920 || width % 2 != 0 || height % 2 != 0 || (long)width * height > 2073600)
+            throw new DeviceException($"Invalid video dimensions: {width}x{height}; require even dimensions 16..1920 and at most 2073600 pixels.", 400, 1007);
+        if (!_identityGuards.TryGetValue(serial, out var verify)) throw new DeviceException($"Video requires an explicitly bound device identity: serial={serial}.", 403, 1003);
+        var expected = _transport.CurrentTransport(serial) ?? throw new DeviceException($"ADB transport has not been discovered: {serial}; refresh devices first.", 503, 2000);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationTokenSource running;
+        lock (_videoGate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            if (_blockedVideos.TryGetValue(serial, out var reason)) throw new DeviceException(reason, 409, 1003);
+            if (!_videoLeases.TryAdd(serial, finished)) throw new DeviceException($"A video stream is already active: serial={serial}.", 409, 1003);
+            running = CancellationTokenSource.CreateLinkedTokenSource(ct, _videoShutdown.Token);
+        }
+        var scid = RandomNumberGenerator.GetInt32(1, int.MaxValue).ToString("x8", CultureInfo.InvariantCulture);
+        var remoteServer = "/data/local/tmp/matrix-scrcpy-" + Guid.NewGuid().ToString("N") + ".jar";
+        var uploaded = false;
+        Exception? failure = null;
+        try
+        {
+            await VerifyVideoIdentityAsync(serial, expected, verify, running.Token).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(_settings.MonitorServerPath) || !File.Exists(_settings.MonitorServerPath))
+                throw new DeviceException("官方视频服务组件未配置或不存在；请配置经过校验的 scrcpy-server 3.3.4。", 501, 2001);
+            // Keep a read-only file handle open through push so the validated artifact cannot be replaced mid-upload.
+            using (var artifact = File.OpenRead(_settings.MonitorServerPath))
+            {
+                var digest = Convert.ToHexString(await SHA256.HashDataAsync(artifact, running.Token).ConfigureAwait(false));
+                if (!digest.Equals(MonitorServerSha256, StringComparison.OrdinalIgnoreCase))
+                    throw new DeviceException($"视频服务组件 SHA256 不匹配：expected={MonitorServerSha256}, actual={digest}。", 403, 1007);
+                uploaded = true;
+                await _transport.RunPinnedAsync(serial, expected, token => _transport.ExecuteAsync(serial, ["push", Path.GetFullPath(_settings.MonitorServerPath), remoteServer], token), running.Token).ConfigureAwait(false);
+            }
+            await VerifyVideoIdentityAsync(serial, expected, verify, running.Token).ConfigureAwait(false);
+            var watch = WatchVideoIdentityAsync(serial, expected, verify, running.Token);
+            var stream = _transport.StreamScreenVideoAsync(serial, expected, remoteServer, scid, Math.Max(width, height), output,
+                token => VerifyVideoIdentityAsync(serial, expected, verify, token, allowDisposed: true), running.Token);
+            try
+            {
+                var completed = await Task.WhenAny(watch, stream).ConfigureAwait(false);
+                await completed.ConfigureAwait(false);
+                if (watch.IsFaulted) await watch.ConfigureAwait(false);
+            }
+            finally
+            {
+                await running.CancelAsync().ConfigureAwait(false);
+                try { await Task.WhenAll(watch, stream).ConfigureAwait(false); }
+                catch
+                {
+                    var cleanupError = stream.Exception?.GetBaseException();
+                    if (cleanupError?.Data.Contains("VideoCleanupUnconfirmed") == true)
+                    {
+                        lock (_videoGate) _blockedVideos[serial] = cleanupError.Message;
+                        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cleanupError).Throw();
+                    }
+                }
+            }
+        }
+        catch (Exception ex) { failure = ex; throw; }
+        finally
+        {
+            bool blocked;
+            lock (_videoGate) blocked = _blockedVideos.ContainsKey(serial);
+            if (uploaded && !blocked)
+            {
+                try
+                {
+                    using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                    await VerifyVideoIdentityAsync(serial, expected, verify, cleanup.Token, allowDisposed: true).ConfigureAwait(false);
+                    await _transport.RunPinnedAsync(serial, expected, token => _transport.ExecuteAsync(serial, ["shell", "rm -f " + Quote(remoteServer)], token), cleanup.Token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is DeviceException or IOException or OperationCanceledException or ObjectDisposedException)
+                {
+                    if (failure is not null) failure.Data["VideoServerFileCleanupError"] = ex.Message;
+                    else failure = ex;
+                }
+            }
+            lock (_videoGate) _videoLeases.Remove(serial);
+            running.Dispose();
+            finished.TrySetResult();
+        }
+    }
+
+    private async Task VerifyVideoIdentityAsync(string serial, uint expected, Func<CancellationToken, Task> verify, CancellationToken ct, bool allowDisposed = false)
+    {
+        _transport.RequireTransport(serial, expected);
+        await verify(ct).ConfigureAwait(false);
+        var rows = allowDisposed
+            ? ParseRegisteredDevices(Decode(await _transport.ExecuteAsync(null, ["devices", "-l"], ct).ConfigureAwait(false)))
+            : await ListRegisteredDevicesAsync(ct).ConfigureAwait(false);
+        var matches = rows.Where(row => row.Serial == serial).ToArray();
+        if (matches.Length != 1 || matches[0].State != "device" || matches[0].TransportId != expected)
+            throw new DeviceException($"Video device identity or transport changed: serial={serial}, expected={expected}.", 409, 1003);
+        _transport.RequireTransport(serial, expected);
+    }
+
+    private async Task WatchVideoIdentityAsync(string serial, uint expected, Func<CancellationToken, Task> verify, CancellationToken ct)
+    {
+        while (true)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+            await VerifyVideoIdentityAsync(serial, expected, verify, ct).ConfigureAwait(false);
+        }
+    }
+
     private Task CommandAsync(string serial, string command, CancellationToken ct) => RunDeviceAsync(serial, async token => { await ExecuteAsync(serial, ["shell", command], token); }, ct);
     private Task<T> RunDeviceAsync<T>(string serial, Func<CancellationToken, Task<T>> action, CancellationToken ct)
     {
@@ -364,7 +483,20 @@ public sealed class AdbDeviceBackend : IDeviceBackend
     private static void ValidatePackage(string value) { if (value != "android" && !Regex.IsMatch(value ?? "", @"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")) throw new DeviceException($"Invalid package name: {value}.", 400, 1007); }
     private static void ValidateLocalFile(string path) { if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) throw new DeviceException($"Local file does not exist: {path}.", 400, 1007); }
     private static void ValidateRemotePath(string path) { if (string.IsNullOrWhiteSpace(path) || !path.StartsWith('/') || path.Contains('\0') || path.Contains('\n')) throw new DeviceException($"Invalid absolute Android path: {path}.", 400, 1007); }
-    public async ValueTask DisposeAsync() { if (Interlocked.Exchange(ref _disposed, 1) != 0) return; await _queue.DisposeAsync(); foreach (var agent in _agents.Values) await agent.DisposeAsync(); }
+    public async ValueTask DisposeAsync()
+    {
+        Task[] videos;
+        lock (_videoGate)
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            videos = _videoLeases.Values.Select(lease => lease.Task).ToArray();
+        }
+        await _videoShutdown.CancelAsync().ConfigureAwait(false);
+        await Task.WhenAll(videos).ConfigureAwait(false);
+        _videoShutdown.Dispose();
+        await _queue.DisposeAsync();
+        foreach (var agent in _agents.Values) await agent.DisposeAsync();
+    }
 }
 
 public sealed record AdbRegisteredDevice(string Serial, string State, uint? TransportId);

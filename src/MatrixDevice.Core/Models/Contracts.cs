@@ -119,6 +119,8 @@ public sealed record AppSettings
     public string LdConsolePath { get; init; } = "";
     public Dictionary<int, string> LdSerialBindings { get; init; } = [];
     public string AdbPath { get; init; } = "";
+    public string MonitorServerPath { get; init; } = "";
+    public string MonitorFfmpegPath { get; init; } = "";
     public string[] AdbAllowedSerials { get; init; } = [];
     public string ScrcpyPath { get; init; } = "";
     public string? AgentBaseUrl { get; init; }

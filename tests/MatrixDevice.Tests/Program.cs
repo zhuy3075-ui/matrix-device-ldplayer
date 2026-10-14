@@ -67,6 +67,7 @@ if (args.Length > 0 && args[0] == "--ldconsole-test-child")
 var tests = new List<(string Name, Func<Task> Run)>();
 void Test(string name, Func<Task> run) => tests.Add((name, run));
 ExistingAdbTests.Register(Test);
+ScreenVideoTests.Register(Test);
 LdWorkspaceTests.Register(Test);
 MonitorResourceTests.Register(Test);
 Test("LD admission applies only unique explicit local proofs and never mutates old authorization", async () =>
