@@ -62,7 +62,7 @@ public sealed class ScreenVideoSession : IAsyncDisposable
             _status("正在启动 H.264 视频流");
             await RunSegmentAsync(ct).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (Exception ex) when (ct.IsCancellationRequested && ex is OperationCanceledException or IOException or ObjectDisposedException && !HasUnconfirmedCleanup(ex))
         {
             _status("视频流已停止");
         }
@@ -88,6 +88,7 @@ public sealed class ScreenVideoSession : IAsyncDisposable
         try
         {
             var completed = await Task.WhenAny(stream, frames, exit).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
             if (completed == exit)
             {
                 await exit.ConfigureAwait(false);
@@ -197,9 +198,18 @@ public sealed class ScreenVideoSession : IAsyncDisposable
     private static async Task ObserveCleanupAsync(Task task)
     {
         try { await task.WaitAsync(TimeSpan.FromSeconds(15)).ConfigureAwait(false); }
-        catch (TimeoutException ex) { throw new IOException("视频会话清理超过 15 秒，退出状态未确认。", ex); }
+        catch (TimeoutException ex)
+        {
+            var unconfirmed = new IOException("视频会话清理超过 15 秒，退出状态未确认。", ex);
+            unconfirmed.Data["VideoCleanupUnconfirmed"] = true;
+            throw unconfirmed;
+        }
         catch (Exception) { /* The main task retains failures; cleanup only drains already stopped owned streams. */ }
     }
+
+    private static bool HasUnconfirmedCleanup(Exception error) => error.Data.Contains("VideoCleanupUnconfirmed") ||
+        error is AggregateException aggregate && aggregate.InnerExceptions.Any(HasUnconfirmedCleanup) ||
+        error.InnerException is { } inner && HasUnconfirmedCleanup(inner);
 
     public async ValueTask DisposeAsync()
     {

@@ -17,6 +17,7 @@ internal static class ScreenVideoTests
         test("video rejects an untrusted server digest before uploading or launching it", ServerDigestAsync);
         test("video decoder publishes complete timestamped frames and rejects truncation without synthetic FPS", FramesAsync);
         test("video decoder process arguments force H264 BGRA passthrough with no shell", DecoderArgumentsAsync);
+        test("video decoder preserves cleanup failures through wrapped cancellation errors", CleanupClassificationAsync);
         if (FindServer() is null)
         {
             Console.WriteLine("SKIP video component integration fixtures: set MATRIX_TEST_SCRCPY_SERVER to official scrcpy-server 3.3.4.");
@@ -29,6 +30,8 @@ internal static class ScreenVideoTests
         test("video backend disposal drains owned video streams", DisposalAsync);
         test("video stalled cleanup signals only the session PID after birth verification", OwnedCleanupAsync);
         test("video mismatched cleanup proof blocks another stream on the same serial", CleanupRefusalAsync);
+        test("video cancellation during startup OKAY handshake blocks unproven retry and preserves its artifact", StartupCancellationAsync);
+        test("video disconnect after startup OKAY never releases an unproven session for retry", StartupDisconnectAsync);
         if (FindFfmpeg() is not null) test("video local official components decode H264 frames and dispose the owned decoder", DecoderIntegrationAsync);
     }
 
@@ -177,7 +180,10 @@ internal static class ScreenVideoTests
         var copy = generator.StandardOutput.BaseStream.CopyToAsync(fixture); var errors = generator.StandardError.ReadToEndAsync();
         await Task.WhenAll(copy, generator.WaitForExitAsync()).WaitAsync(TimeSpan.FromSeconds(5));
         Assert(generator.ExitCode == 0, "H264 fixture generation failed: " + await errors);
-        await using var server = new FakeScreenVideoServer { VideoBytes = fixture.ToArray() };
+        for (var iteration = 0; iteration < 5; iteration++)
+        {
+        var unconfirmed = iteration == 4;
+        await using var server = new FakeScreenVideoServer { VideoBytes = fixture.ToArray(), StallAfterDisconnect = unconfirmed, ChangedProcessBirth = unconfirmed };
         await using var backend = Backend(server);
         backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
         await backend.DiscoverAsync();
@@ -189,9 +195,20 @@ internal static class ScreenVideoTests
         await ready.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await session.DisposeAsync();
         var count = frames.Count;
-        Assert(session.LastError is null && !session.IsRunning && count is >= 3 and <= 8, "Real decoder failed or fabricated frames: " + session.LastError);
+        Assert((unconfirmed ? session.LastError?.Contains("清理未确认", StringComparison.Ordinal) == true : session.LastError is null) && !session.IsRunning && count is >= 3 and <= 8, "Real decoder misclassified shutdown or fabricated frames: " + session.LastError);
         Assert(frames.All(frame => frame.Bgra.Length == 32 * 32 * 4) && frames.First().Bgra.Distinct().Count() > 10, "FFmpeg did not decode actual image pixels.");
         Assert(frames.Count == count, "Frame callbacks continued after disposal.");
+        }
+    }
+
+    private static Task CleanupClassificationAsync()
+    {
+        var method = typeof(ScreenVideoSession).GetMethod("HasUnconfirmedCleanup", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var cleanup = new DeviceException("Owned process exit unconfirmed."); cleanup.Data["VideoCleanupUnconfirmed"] = true;
+        foreach (var error in new Exception[] { cleanup, new IOException("Decoder cancelled.", cleanup), new AggregateException(new OperationCanceledException(), cleanup) })
+            Assert((bool)method.Invoke(null, [error])!, "Wrapped cleanup failure could be suppressed as normal cancellation.");
+        Assert(!(bool)method.Invoke(null, [new IOException("Decoder stopped after cancellation.")])!, "Expected decoder cancellation was classified as unconfirmed cleanup.");
+        return Task.CompletedTask;
     }
 
     private static async Task OwnedCleanupAsync()
@@ -222,6 +239,38 @@ internal static class ScreenVideoTests
         var count = server.Requests.Count;
         await Expect(409, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null));
         Assert(server.Requests.Count == count && server.Requests.All(request => !request.Contains("kill -TERM", StringComparison.Ordinal)), "Unproven cleanup killed a replacement or permitted overlapping retry.");
+    }
+
+    private static async Task StartupCancellationAsync()
+    {
+        await using var server = new FakeScreenVideoServer { HoldServerOkay = true };
+        await using var backend = Backend(server);
+        backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+        await backend.DiscoverAsync();
+        using var stop = new CancellationTokenSource();
+        var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null, stop.Token);
+        await server.ServerRequestEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        stop.Cancel();
+        await AssertUnprovenStartupAsync(server, backend, video);
+    }
+
+    private static async Task StartupDisconnectAsync()
+    {
+        await using var server = new FakeScreenVideoServer { DisconnectAfterServerOkay = true };
+        await using var backend = Backend(server);
+        backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+        await backend.DiscoverAsync();
+        var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null);
+        await AssertUnprovenStartupAsync(server, backend, video);
+    }
+
+    private static async Task AssertUnprovenStartupAsync(FakeScreenVideoServer server, AdbDeviceBackend backend, Task video)
+    {
+        await Expect(409, () => video.WaitAsync(TimeSpan.FromSeconds(6)));
+        var count = server.Requests.Count;
+        await Expect(409, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null));
+        Assert(server.Requests.Count == count, "Unproven startup permitted another guest request.");
+        Assert(server.Requests.All(request => !request.Contains("kill -TERM", StringComparison.Ordinal) && !request.StartsWith("shell,v2,raw:rm -f", StringComparison.Ordinal)), "Unproven startup signalled a PID or removed its evidence artifact.");
     }
 
     private static async Task FramesAsync()
@@ -296,6 +345,9 @@ internal sealed class FakeScreenVideoServer : IAsyncDisposable
     public byte[]? VideoBytes { get; set; }
     public bool StallAfterDisconnect { get; set; }
     public bool ChangedProcessBirth { get; set; }
+    public bool HoldServerOkay { get; set; }
+    public bool DisconnectAfterServerOkay { get; set; }
+    public TaskCompletionSource ServerRequestEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _processAlive = true;
     private string _processCommandLine = "";
     private static string Stat(bool changed = false) => "12345 (matrix (test)) S " + string.Join(' ', Enumerable.Repeat("0", 18)) + (changed ? " 999 0\n" : " 789 0\n");
@@ -325,7 +377,14 @@ internal sealed class FakeScreenVideoServer : IAsyncDisposable
                     var request = Encoding.UTF8.GetString(body); Requests.Enqueue(request);
                     if (request == "host:version") { await HostAsync(stream, "0029"); return; }
                     if (request == "host:devices-l") { await HostAsync(stream, $"allowed\tdevice model:Fixture transport_id:{TransportId}\n"); return; }
+                    var startsServer = request.Contains("com.genymobile.scrcpy.Server", StringComparison.Ordinal);
+                    if (startsServer)
+                    {
+                        ServerRequestEntered.TrySetResult();
+                        if (HoldServerOkay) await Task.Delay(Timeout.Infinite, _stop.Token);
+                    }
                     await stream.WriteAsync("OKAY"u8.ToArray(), _stop.Token);
+                    if (startsServer && DisconnectAfterServerOkay) return;
                     if (request.StartsWith("host:transport-id:", StringComparison.Ordinal)) continue;
                     if (request == "sync:") { await SyncAsync(stream); return; }
                     if (request.StartsWith("localabstract:scrcpy_", StringComparison.Ordinal))

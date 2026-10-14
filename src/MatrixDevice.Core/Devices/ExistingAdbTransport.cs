@@ -159,17 +159,22 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
             var nonce = Guid.NewGuid().ToString("N");
             var marker = "MATRIX_VIDEO_" + nonce + ":";
             var command = FormattableString.Invariant($"printf '{marker}%s\\n' $$; cat /proc/$$/stat; CLASSPATH={remoteServer} exec app_process -Dmatrix.video.session={nonce} / com.genymobile.scrcpy.Server 3.3.4 scid={scid} tunnel_forward=true video=true audio=false control=false raw_stream=true cleanup=false video_codec=h264 max_size={maximumSize} max_fps=10 video_bit_rate=1000000 power_on=false clipboard_autosync=false power_off_on_close=false");
-            await shell.SendAdbRequestAsync("shell,v2,raw:" + command, ct).ConfigureAwait(false);
-            await shell.ReadAdbResponseAsync(ct).ConfigureAwait(false);
-            await shell.SendAsync(new byte[] { 4, 0, 0, 0, 0 }, ct).ConfigureAwait(false);
             using var shellStream = shell.Socket.GetStream();
             var log = new VideoServerLog(marker);
-            var server = ReadVideoServerAsync(shellStream, log, serverStop.Token);
+            Task<int>? server = null;
             ExistingAdbSocket? video = null;
             Task? copy = null;
+            var startRequestIssued = false;
             using var copying = CancellationTokenSource.CreateLinkedTokenSource(ct);
             try
             {
+                ct.ThrowIfCancellationRequested();
+                // Once any start-request byte may reach adbd, cancellation needs proven cleanup or a blocked lease.
+                startRequestIssued = true;
+                await shell.SendAdbRequestAsync("shell,v2,raw:" + command, ct).ConfigureAwait(false);
+                await shell.ReadAdbResponseAsync(ct).ConfigureAwait(false);
+                await shell.SendAsync(new byte[] { 4, 0, 0, 0, 0 }, ct).ConfigureAwait(false);
+                server = ReadVideoServerAsync(shellStream, log, serverStop.Token);
                 using var startup = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 startup.CancelAfter(TimeSpan.FromSeconds(10));
                 while (video is null)
@@ -211,12 +216,18 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
                 if (copy is not null)
                 {
                     try { await copy.ConfigureAwait(false); }
-                    catch (Exception ex) when (ex is IOException or DeviceException or OperationCanceledException or ObjectDisposedException) { }
+                    catch (Exception) { /* The main copy await preserves its failure; server cleanup must always run. */ }
                 }
                 try
                 {
+                    if (server is null && startRequestIssued)
+                    {
+                        var unconfirmed = new DeviceException($"视频启动握手未完成，无法确认本次服务是否已启动；已禁止本实例继续叠加会话：serial={serial}, jar={remoteServer}。", 409, 1003);
+                        unconfirmed.Data["VideoCleanupUnconfirmed"] = true;
+                        throw unconfirmed;
+                    }
                     // First let normal socket disconnection terminate the encoder. Kill only a proven owned PID if it stalls.
-                    try { await server.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
+                    try { if (server is not null) await server.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
                     catch (Exception ex) when (ex is IOException or OperationCanceledException or TimeoutException)
                     {
                         try { await StopOwnedVideoServerAsync(serial, expectedTransport, scid, nonce, log, verifyIdentity).ConfigureAwait(false); }
@@ -231,7 +242,7 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
                 finally
                 {
                     await serverStop.CancelAsync().ConfigureAwait(false);
-                    try { await server.ConfigureAwait(false); }
+                    try { if (server is not null) await server.ConfigureAwait(false); }
                     catch (Exception ex) when (serverStop.IsCancellationRequested && ex is IOException or OperationCanceledException or ObjectDisposedException) { }
                 }
             }
