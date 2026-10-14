@@ -11,6 +11,7 @@ public static class LdWorkspaceTests
         test("LD workspace launch timeout never retries or starts later instances", LaunchTimeoutAsync);
         test("LD workspace launch cancellation leaves launched instances alone", LaunchCancellationAsync);
         test("LD workspace launch resource rejection stops the remaining batch", ResourceRejectionAsync);
+        test("LD workspace launch rejects changed generations after the resource callback", ResourceGenerationAsync);
         test("LD workspace launch rejects changed instance identity while waiting", LaunchIdentityAsync);
         test("LD workspace coordinator serializes overlapping batches", OverlappingBatchesAsync);
         test("LD workspace create validates names before console calls", CreateValidationAsync);
@@ -101,6 +102,24 @@ public static class LdWorkspaceTests
         await using var service = new LdPlayerService(runner);
         await Expect(409, () => Coordinator(service).StartAsync([1, 2], _ => Task.CompletedTask));
         Assert(runner.Count("launch") == 1, "Changed target identity was retried or another target started.");
+    }
+
+    private static async Task ResourceGenerationAsync()
+    {
+        var runner = new FakeConsole(); runner.Instances.Add(new(2, "B"));
+        await using var service = new LdPlayerService(runner);
+        var resourceChecks = 0;
+        await Expect(409, () => Coordinator(service).StartAsync([1, 2], async ct =>
+        {
+            resourceChecks++;
+            var instance = runner.Instances[0];
+            var width = instance.Width;
+            instance.Width++;
+            await service.RefreshAsync(ct);
+            instance.Width = width;
+            await service.RefreshAsync(ct);
+        }));
+        Assert(resourceChecks == 1 && runner.Count("launch") == 0, "Changed original generation was silently replaced or a later target started.");
     }
 
     private static async Task OverlappingBatchesAsync()

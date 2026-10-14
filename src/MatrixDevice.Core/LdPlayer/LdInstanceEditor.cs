@@ -81,7 +81,7 @@ public sealed class LdInstanceEditor(ILdConsoleRunner runner, LdPlayerService se
             }
             var after = service.Instances.FirstOrDefault(instance => instance.Index == index);
             return new(index, "modify", true, false,
-                "资源配置命令已返回；尚未核验实际 CPU、内存或 Android 分辨率，需要启动后另行验证。未修改型号、设备身份或 root。", after);
+                "资源配置命令已返回；尚未核验实际 CPU、内存或 Android 分辨率，需要启动后另行验证。未请求修改型号、设备身份或 root。", after);
         }
         finally { edits.Release(); }
     }

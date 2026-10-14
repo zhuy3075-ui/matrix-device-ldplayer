@@ -54,6 +54,8 @@ public sealed class LdLaunchCoordinator
                         token.ThrowIfCancellationRequested();
                         await service.RefreshAsync(token).ConfigureAwait(false);
                         var before = RequireSameIdentity(original);
+                        if (before.Generation != original.Generation)
+                            throw new DeviceException($"资源检查期间实例代次已变化：索引={index}，原代次={original.Generation}，当前={before.Generation}；未提交启动命令，请刷新后重新确认。", 409, 1003);
                         if (IsStopped(before))
                         {
                             progress?.Report(new(index, "starting", "正在提交一次启动命令；取消或超时不会关闭已启动实例。", before));
