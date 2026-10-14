@@ -68,6 +68,7 @@ var tests = new List<(string Name, Func<Task> Run)>();
 void Test(string name, Func<Task> run) => tests.Add((name, run));
 ExistingAdbTests.Register(Test);
 LdWorkspaceTests.Register(Test);
+MonitorResourceTests.Register(Test);
 Test("LD admission applies only unique explicit local proofs and never mutates old authorization", async () =>
 {
     var original = new AppSettings { AdbAllowedSerials = ["emulator-5556"], LdSerialBindings = new() { [1] = "emulator-5556" } };
