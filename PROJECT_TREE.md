@@ -35,7 +35,12 @@ MatrixDevice.Reconstructed/
 |   |   |-- REPORT.md
 |   |   |-- TEST_CASES.md
 |   |   |-- TEST_LOG.md
-|   |   +-- TEST_RESULTS.md
+|   |   |-- TEST_RESULTS.md
+|   |   +-- unified-devices/
+|   |       |-- OFFICIAL-RESEARCH.md
+|   |       |-- PLAN.md
+|   |       |-- REPORT.md
+|   |       +-- TEST_LOG.md
 |   |-- UI_REDESIGN.md
 |   |-- verification/
 |   |   |-- build-and-tests.txt
@@ -158,6 +163,8 @@ MatrixDevice.Reconstructed/
 |   |   |-- LdPlayer/
 |   |   |   |-- DemoLdConsoleRunner.cs
 |   |   |   |-- LdConsoleRunner.cs
+|   |   |   |-- LdInstanceEditor.cs
+|   |   |   |-- LdLaunchCoordinator.cs
 |   |   |   |-- LdPlayerAdbBinding.cs
 |   |   |   |-- LdPlayerModels.cs
 |   |   |   +-- LdPlayerService.cs
@@ -202,6 +209,8 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- ShellView.cs
 |   |   |   |-- TextView.cs
 |   |   |   |-- UiControlAudit.cs
+|   |   |   |-- UnifiedDevicesAcceptance.cs
+|   |   |   |-- UnifiedDevicesView.cs
 |   |   |   |-- WallDeviceTile.cs
 |   |   |   |-- WallView.cs
 |   |   |   +-- WorkspaceShell.cs
@@ -231,6 +240,7 @@ MatrixDevice.Reconstructed/
 |       |   +-- ApiServiceManager.cs
 |       |-- Diagnostics/
 |       |   +-- RollingLog.cs
+|       |-- LdConnectionAdmission.cs
 |       |-- MatrixDevice.Host.csproj
 |       |-- MatrixRuntime.cs
 |       |-- packages.lock.json
@@ -240,6 +250,7 @@ MatrixDevice.Reconstructed/
 |-- tests/
 |   +-- MatrixDevice.Tests/
 |       |-- ExistingAdbTests.cs
+|       |-- LdWorkspaceTests.cs
 |       |-- LiveAcceptance.cs
 |       |-- MatrixDevice.Tests.csproj
 |       |-- MultiInstanceAcceptance.cs

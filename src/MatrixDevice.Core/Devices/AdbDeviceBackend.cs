@@ -18,6 +18,7 @@ public sealed class AdbDeviceBackend : IDeviceBackend
     private readonly SemaphoreSlim _discoveryGate = new(1, 1);
     private readonly ConcurrentDictionary<string, PhoneAgentClient> _agents = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Func<string, CancellationToken, Task>> _unicodeInputs = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Func<CancellationToken, Task>> _identityGuards = new(StringComparer.Ordinal);
     public const int MaximumStdoutBytes = 32 * 1024 * 1024;
     public const int MaximumStderrBytes = 1024 * 1024;
     private int _disposed;
@@ -56,12 +57,41 @@ public sealed class AdbDeviceBackend : IDeviceBackend
         AuthorizeSerial(serial); ArgumentNullException.ThrowIfNull(send);
         if (!_unicodeInputs.TryAdd(serial, send)) throw new DeviceException($"Unicode input is already bound: serial={serial}.");
     }
+    public void RegisterIdentityGuard(string serial, Func<CancellationToken, Task> verify)
+    {
+        AuthorizeSerial(serial); ArgumentNullException.ThrowIfNull(verify);
+        if (!_identityGuards.TryAdd(serial, verify)) throw new DeviceException($"An identity guard is already bound: serial={serial}.", 409, 1003);
+    }
+    public void InheritServerEpoch(AdbDeviceBackend source) => _transport.InheritServerEpoch(source._transport);
+    public Task VerifyIdentityAsync(string serial, CancellationToken ct = default)
+    {
+        AuthorizeSerial(serial);
+        if (!_identityGuards.ContainsKey(serial)) throw new DeviceException("设备身份尚未绑定。", 403, 1003);
+        return RunDeviceAsync(serial, async token => { await ExecuteAsync(null, ["devices", "-l"], token).ConfigureAwait(false); }, ct);
+    }
 
     public async Task<IReadOnlyList<DeviceInfo>> DiscoverAsync(CancellationToken ct = default)
     {
         await _discoveryGate.WaitAsync(ct).ConfigureAwait(false);
         try { return await DiscoverCoreAsync(ct).ConfigureAwait(false); }
         finally { _discoveryGate.Release(); }
+    }
+    public async Task<IReadOnlyList<AdbRegisteredDevice>> ListRegisteredDevicesAsync(CancellationToken ct = default)
+    {
+        var output = Decode(await ExecuteAsync(null, ["devices", "-l"], ct).ConfigureAwait(false));
+        var devices = new List<AdbRegisteredDevice>();
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var value = line.Trim();
+            if (value.StartsWith("List of devices", StringComparison.Ordinal) || value.StartsWith('*') || value.Length == 0) continue;
+            var fields = Regex.Split(value, @"\s+");
+            if (fields.Length < 2) throw new DeviceException("Malformed ADB host directory row.", 502, 2000);
+            ValidateSerial(fields[0]);
+            var identity = fields.FirstOrDefault(field => field.StartsWith("transport_id:", StringComparison.Ordinal));
+            uint? transport = uint.TryParse(identity?[13..], NumberStyles.None, CultureInfo.InvariantCulture, out var number) && number > 0 ? number : null;
+            devices.Add(new(fields[0], fields[1], transport));
+        }
+        return devices.AsReadOnly();
     }
     private async Task<IReadOnlyList<DeviceInfo>> DiscoverCoreAsync(CancellationToken ct)
     {
@@ -308,7 +338,11 @@ public sealed class AdbDeviceBackend : IDeviceBackend
     {
         AuthorizeSerial(serial);
         var expected = _transport.CurrentTransport(serial) ?? throw new DeviceException($"ADB transport has not been discovered: {serial}; refresh devices first.", 503, 2000);
-        return _queue.RunAsync(serial, token => _transport.RunPinnedAsync(serial, expected, action, token), ct);
+        return _queue.RunAsync(serial, token => _transport.RunPinnedAsync(serial, expected, async pinned =>
+        {
+            if (_identityGuards.TryGetValue(serial, out var verify)) await verify(pinned).ConfigureAwait(false);
+            return await action(pinned).ConfigureAwait(false);
+        }, token), ct);
     }
     internal uint? ObservedTransportId(string serial) => _transport.CurrentTransport(serial);
     private Task RunDeviceAsync(string serial, Func<CancellationToken, Task> action, CancellationToken ct) => RunDeviceAsync(serial, async token => { await action(token).ConfigureAwait(false); return true; }, ct);
@@ -332,3 +366,5 @@ public sealed class AdbDeviceBackend : IDeviceBackend
     private static void ValidateRemotePath(string path) { if (string.IsNullOrWhiteSpace(path) || !path.StartsWith('/') || path.Contains('\0') || path.Contains('\n')) throw new DeviceException($"Invalid absolute Android path: {path}.", 400, 1007); }
     public async ValueTask DisposeAsync() { if (Interlocked.Exchange(ref _disposed, 1) != 0) return; await _queue.DisposeAsync(); foreach (var agent in _agents.Values) await agent.DisposeAsync(); }
 }
+
+public sealed record AdbRegisteredDevice(string Serial, string State, uint? TransportId);

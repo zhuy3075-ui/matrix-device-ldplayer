@@ -67,6 +67,51 @@ if (args.Length > 0 && args[0] == "--ldconsole-test-child")
 var tests = new List<(string Name, Func<Task> Run)>();
 void Test(string name, Func<Task> run) => tests.Add((name, run));
 ExistingAdbTests.Register(Test);
+LdWorkspaceTests.Register(Test);
+Test("LD admission applies only unique explicit local proofs and never mutates old authorization", async () =>
+{
+    var original = new AppSettings { AdbAllowedSerials = ["emulator-5556"], LdSerialBindings = new() { [1] = "emulator-5556" } };
+    var proof = new LdConnectionProof(2, "test", 1, "emulator-5558", 2, 123, 456);
+    var applied = LdConnectionAdmission.Apply(original, [proof]);
+    Check(applied.AdbAllowedSerials.Length == 2 && applied.LdSerialBindings[2] == proof.Serial && !applied.AutoStartApi, "New authorization missing.");
+    Check(original.AdbAllowedSerials.Length == 1 && !original.LdSerialBindings.ContainsKey(2), "Original settings mutated.");
+    foreach (var invalid in new[] { proof with { Index = 0 }, proof with { Serial = "" }, proof with { Serial = "10.0.0.1:5555" }, proof with { Generation = 0 }, proof with { TransportId = 0 } })
+        await Throws<DeviceException>(() => { LdConnectionAdmission.Apply(original, [invalid]); return Task.CompletedTask; });
+    await Throws<DeviceException>(() => { LdConnectionAdmission.Apply(original, [proof, proof]); return Task.CompletedTask; });
+    await Throws<DeviceException>(() => { LdConnectionAdmission.Apply(original, [proof with { Serial = "emulator-5556" }]); return Task.CompletedTask; });
+});
+Test("saved connection path changes require restart before LD workspace edits", async () =>
+{
+    await using var runtime = await MatrixRuntime.CreateAsync(new(), Temp(), true);
+    runtime.RequireFrozenConnectionSettings();
+    runtime.Settings = runtime.Settings with { LdConsolePath = "other-installation.exe" };
+    await Throws<DeviceException>(() => { runtime.RequireFrozenConnectionSettings(); return Task.CompletedTask; });
+});
+Test("LD admission cannot replace the confirmed subject while waiting for ADB", async () =>
+{
+    var frozen = LdPlayerService.ParseList2("1,Original,1,2,1,123,456,1280,720,240").Single();
+    LdConnectionAdmission.RequireExpectedInstances([frozen], [1], [frozen]);
+    foreach (var changed in new[] { frozen with { Name = "Replacement" }, frozen with { Generation = frozen.Generation + 1 }, frozen with { VBoxProcessId = 999 } })
+        await Throws<DeviceException>(() => { LdConnectionAdmission.RequireExpectedInstances([changed], [1], [frozen]); return Task.CompletedTask; });
+    await Throws<DeviceException>(() => { LdConnectionAdmission.RequireExpectedInstances([frozen], [1], []); return Task.CompletedTask; });
+});
+Test("HTTP admission drain counter includes in-flight SDK identity checks", async () =>
+{
+    var port = Port(); await using var runtime = await MatrixRuntime.CreateAsync(new() { BasicApiPort = port }, Temp(), true);
+    await runtime.Api.StartBasicAsync(port);
+    var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    runtime.Api.LdCommandIdentityGuard = async (_, _, _) => { entered.TrySetResult(); await release.Task; };
+    using var http = new HttpClient();
+    var generation = runtime.LdPlayer!.Instances.Single(item => item.Index == 0).Generation;
+    var request = http.PostAsJsonAsync($"http://localhost:{port}/ldplayer/instances/0/keyevent", new { expectedGeneration = generation, key = "home" });
+    try { await entered.Task.WaitAsync(TimeSpan.FromSeconds(3)); Check(runtime.Api.HasActiveRequests, "In-flight request was not counted."); }
+    finally { release.TrySetResult(); }
+    using var response = await request; Check(response.IsSuccessStatusCode, "Released request did not complete.");
+    var deadline = DateTime.UtcNow.AddSeconds(3);
+    while (runtime.Api.HasActiveRequests && DateTime.UtcNow < deadline) await Task.Delay(10);
+    Check(!runtime.Api.HasActiveRequests, "Completed request did not drain.");
+});
 Test("both differentiated workload script roles follow the existing swipe format", () =>
 {
     var first = MultiInstanceAcceptance.SettingsScript(1, 0, 150, 50, 360, 640);

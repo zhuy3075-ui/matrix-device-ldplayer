@@ -14,7 +14,7 @@ namespace MatrixDevice.Desktop;
 
 public sealed class WorkspaceViewModel : ObservableObject
 {
-    private readonly MatrixRuntime runtime;
+    private MatrixRuntime runtime;
     private readonly string dataDirectory;
     private readonly bool demo;
     private readonly List<object> commands = [];
@@ -48,9 +48,9 @@ public sealed class WorkspaceViewModel : ObservableObject
     private string deviceGroup = "";
     private string settingsNotice = "";
 
-    public WorkspaceViewModel(MatrixRuntime runtime, string dataDirectory, bool demo)
+    public WorkspaceViewModel(MatrixRuntime initialRuntime, string dataDirectory, bool demo)
     {
-        this.runtime = runtime;
+        runtime = initialRuntime;
         this.dataDirectory = dataDirectory;
         this.demo = demo;
         error = string.Join("\n", new[] { runtime.DiscoveryError, runtime.ApiStartupError }.Where(message => message is not null));
@@ -222,9 +222,16 @@ public sealed class WorkspaceViewModel : ObservableObject
         catch (Exception logError) { System.Diagnostics.Trace.WriteLine("界面诊断日志写入失败：" + logError); }
         return UiErrorPresentation.Describe(error);
     }
-    public Task RefreshDevicesAsync() => ExecuteAsync("发现设备", async () =>
+    public Task RefreshDevicesAsync() => ExecuteAsync("发现设备", () => RefreshDeviceSnapshotAsync());
+
+    internal async Task RefreshDeviceSnapshotAsync(CancellationToken ct = default)
     {
-        await runtime.RefreshAsync(CancellationToken.None);
+        await runtime.RefreshAsync(ct);
+        await ApplyCachedDeviceSnapshotAsync();
+    }
+
+    private async Task ApplyCachedDeviceSnapshotAsync()
+    {
         var rows = runtime.GetDevices();
         foreach (var info in rows)
         {
@@ -250,7 +257,58 @@ public sealed class WorkspaceViewModel : ObservableObject
         RefreshApiRows();
         RefreshFilter();
         if (demo && CurrentDevice is null) CurrentDevice = Devices.FirstOrDefault();
-    });
+    }
+
+    internal bool ConnectionReloadAvailable => !Transferring && !Devices.Any(row => ScriptBusy(row.Serial)) && !runtime.Api.BasicRunning && !runtime.Api.AutomatorRunning && runtime.Api.DevicePorts.Count == 0 && !runtime.Api.HasActiveRequests;
+
+    internal async Task ApplyLdConnectionsAsync(IReadOnlyList<LdConnectionProof> proofs, CancellationToken ct)
+    {
+        if (!ConnectionReloadAvailable) throw new DeviceException("请先停止接口服务、脚本和文件传输，再接入设备。", 409, 1003);
+        runtime.RequireFrozenConnectionSettings();
+        var old = runtime;
+        var source = old.Backend as AdbDeviceBackend ?? throw new DeviceException("演示模式不接入真实设备。", 409, 1003);
+        var service = old.LdPlayer ?? throw new DeviceException("雷电服务未配置。", 409, 1003);
+        var settings = LdConnectionAdmission.Apply(old.Settings, proofs);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(TimeSpan.FromSeconds(60));
+        await old.Input.HandoffAsync(null, deadline.Token);
+        await using (var probe = new AdbDeviceBackend(settings with { AdbAllowedSerials = proofs.Select(proof => proof.Serial).ToArray(), CommandTimeoutSeconds = 15 }))
+        {
+            probe.InheritServerEpoch(source);
+            foreach (var proof in proofs)
+                probe.RegisterIdentityGuard(proof.Serial, token => LdPlayerAdbBinding.VerifyAsync(proof.Serial, proof.VBoxPid, proof.VBoxBirth, token));
+            var observed = await probe.DiscoverAsync(deadline.Token);
+            foreach (var proof in proofs)
+            {
+                if (!observed.Any(device => device.Serial == proof.Serial && device.Online && device.TransportId == proof.TransportId)) throw new DeviceException("已核验实例的ADB连接已变化。", 409, 1003);
+                while ((await probe.ShellAsync(proof.Serial, "getprop sys.boot_completed", ct: deadline.Token)).Trim() != "1") await Task.Delay(500, deadline.Token);
+                PngImage.ReadDimensions(await probe.ScreenshotAsync(proof.Serial, deadline.Token));
+                var current = (await service.RefreshAsync(deadline.Token)).Single(item => item.Index == proof.Index);
+                if (current.Generation != proof.Generation) throw new DeviceException("接入过程中实例发生变化，未保存新授权。", 409, 1003);
+            }
+        }
+        MatrixRuntime? replacement = null;
+        try
+        {
+            replacement = await MatrixRuntime.CreateAsync(settings, dataDirectory, false, proofs, source, deadline.Token);
+            foreach (var proof in proofs)
+                if (!replacement.GetDevices().Any(device => device.Serial == proof.Serial && device.Online && device.TransportId == proof.TransportId)) throw new DeviceException("新连接未就绪，原工作区保持不变。", 409, 1003);
+            if (!ConnectionReloadAvailable) throw new DeviceException("工作区出现活动任务，取消接入。", 409, 1003);
+            deadline.Token.ThrowIfCancellationRequested();
+            replacement.Settings = replacement.SettingsStore.Save(settings);
+        }
+        catch { if (replacement is not null) await replacement.DisposeAsync(); throw; }
+        old.Scripts.EntryAdded -= OnScriptLog; old.Scripts.StatusChanged -= OnScriptStatus;
+        runtime = replacement;
+        runtime.Scripts.EntryAdded += OnScriptLog; runtime.Scripts.StatusChanged += OnScriptStatus;
+        SyncApiWriteGuard();
+        Settings.AdbSerialsJson = JsonSerializer.Serialize(runtime.Settings.AdbAllowedSerials, JsonDefaults.Options);
+        Settings.LdBindingsJson = JsonSerializer.Serialize(runtime.Settings.LdSerialBindings, JsonDefaults.Options);
+        Settings.Changed(nameof(SettingsEditor.AdbSerialsJson)); Settings.Changed(nameof(SettingsEditor.LdBindingsJson));
+        MainDevice = null; ClearNodes(); Apps.Clear();
+        try { await old.DisposeAsync(); } catch (Exception ex) { runtime.Log.Write("previous-runtime-cleanup-error", ex.ToString()); }
+        await ApplyCachedDeviceSnapshotAsync();
+        Changed(nameof(ApiSummary)); AddActivity($"已接入{proofs.Count}台雷电设备");
+    }
 
     public Task SaveMetadataAsync() => ExecuteAsync("保存设备信息", async () =>
     {
@@ -294,6 +352,21 @@ public sealed class WorkspaceViewModel : ObservableObject
         }
         WallChanged?.Invoke();
     });
+
+    internal async Task RefreshAutomaticScreensAsync(string[] serials, CancellationToken ct)
+    {
+        foreach (var serial in serials)
+        {
+            ct.ThrowIfCancellationRequested();
+            var row = Devices.FirstOrDefault(item => item.Serial == serial && item.Info.Online);
+            if (row is null) continue;
+            try { row.Screenshot = DecodeImage(await runtime.Backend.ScreenshotAsync(serial, ct)); row.CapturedAt = DateTimeOffset.UtcNow; row.ScreenState = "截图可用"; }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { row.ScreenState = "截图失败：" + PresentError(ex); runtime.Log.Write("auto-screenshot-error", ex.Message, serial); }
+        }
+        if (CurrentDevice is not null) { ClearNodes(); DebugImage = CurrentDevice.Screenshot; }
+        WallChanged?.Invoke();
+    }
 
     public async Task SetMainAsync(DeviceRow row)
     {

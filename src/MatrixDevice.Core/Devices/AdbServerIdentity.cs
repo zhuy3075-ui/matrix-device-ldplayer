@@ -59,6 +59,7 @@ internal sealed class AdbServerEpoch
 {
     private readonly object gate = new();
     private AdbServerIdentity? observed;
+    public AdbServerIdentity Snapshot { get { lock (gate) return observed ?? throw new DeviceException("尚未核验ADB服务身份，不能继承连接。", 409, 1003); } }
     public void Require(AdbServerIdentity current)
     {
         lock (gate)

@@ -12,6 +12,41 @@ internal static class ExistingAdbTests
     public static void Register(Action<string, Func<Task>> test)
     {
         test("existing ADB process replacement cannot reuse old transport or receive a request", ProcessReplacementAsync);
+        test("host ADB registration inventory never authorizes or queries guests", async () =>
+        {
+            await using var server = new FakeAdbServer();
+            await using var backend = new AdbDeviceBackend(new AppSettings(), server.Endpoint);
+            var registered = await backend.ListRegisteredDevicesAsync();
+            Assert(registered.Any(item => item.Serial == "allowed" && item.TransportId > 0), "Host inventory missing registration.");
+            Assert(server.Requests.All(request => request is "host:version" or "host:devices-l"), "Inventory queried guest.");
+            await Expect(403, () => backend.KeyEventAsync("allowed", 3));
+        });
+        test("frozen identity guard rejects ASCII files screenshots apps and Unicode before guest I/O", async () =>
+        {
+            await using var server = new FakeAdbServer();
+            await using var backend = new AdbDeviceBackend(new AppSettings { AdbAllowedSerials = ["allowed"] }, server.Endpoint);
+            var valid = true; var unicode = 0;
+            backend.RegisterIdentityGuard("allowed", _ => valid ? Task.CompletedTask : Task.FromException(new DeviceException("rejoin required", 409, 1003)));
+            backend.RegisterUnicodeInput("allowed", (_, _) => { unicode++; return Task.CompletedTask; });
+            await backend.DiscoverAsync();
+            valid = false;
+            var count = server.Requests.Count;
+            var local = typeof(ExistingAdbTests).Assembly.Location;
+            foreach (var operation in new Func<Task>[] { () => backend.KeyEventAsync("allowed", 3), () => backend.TextAsync("allowed", "ASCII"), () => backend.TextAsync("allowed", "中文"), () => backend.ScreenshotAsync("allowed"), () => backend.PushAsync("allowed", local, "/sdcard/test.bin"), () => backend.InstallAsync("allowed", local), () => backend.VerifyIdentityAsync("allowed") })
+                await Expect(409, operation);
+            Assert(unicode == 0 && server.Requests.Count == count, "Identity rejection reached guest/Unicode callback.");
+            var rows = await backend.DiscoverAsync();
+            Assert(rows.Single().State == "Failed", "Changed identity remained controllable.");
+        });
+        test("connection epoch inheritance requires an observed server and preserves its identity", async () =>
+        {
+            await using var server = new FakeAdbServer();
+            await using var source = new AdbDeviceBackend(new AppSettings(), server.Endpoint);
+            await using var next = new AdbDeviceBackend(new AppSettings(), server.Endpoint);
+            await Expect(409, () => { next.InheritServerEpoch(source); return Task.CompletedTask; });
+            await source.ListRegisteredDevicesAsync(); next.InheritServerEpoch(source);
+            Assert((await next.ListRegisteredDevicesAsync()).Count > 0, "Observed epoch was not reusable.");
+        });
         test("LDPlayer binding candidate must belong to the expected process and sends no ADB request", async () =>
         {
             await using var peer = new FakeAdbServer(); using var process = Process.GetCurrentProcess();
@@ -157,6 +192,9 @@ internal static class ExistingAdbTests
             await old.DiscoverAsync(); await Stop(first); first = null!;
             var receipt = Path.Combine(directory, "second.txt"); second = await Start(port, receipt);
             await Expect(409, () => old.KeyEventAsync("allowed", 3)); await Expect(409, () => old.DiscoverAsync());
+            await using var inherited = new AdbDeviceBackend(new AppSettings(), new(IPAddress.Loopback, port));
+            inherited.InheritServerEpoch(old);
+            await Expect(409, () => inherited.ListRegisteredDevicesAsync());
             Assert(!File.Exists(receipt) || new FileInfo(receipt).Length == 0, "Replacement server received a request from the old client.");
             await using var fresh = new AdbDeviceBackend(new AppSettings { AdbAllowedSerials = ["allowed"] }, new(IPAddress.Loopback, port));
             Assert((await fresh.DiscoverAsync()).Single().Online, "Fresh discovery could not establish a new epoch.");

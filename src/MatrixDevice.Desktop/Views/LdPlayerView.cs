@@ -24,11 +24,17 @@ public partial class MainWindow
     private FrameworkElement BuildLdPlayerPage()
     {
         var page = Page();
+        var modes = BuildDeviceModes(); DockPanel.SetDock(modes, Dock.Top); page.Children.Add(modes);
         var toolbar = Toolbar();
-        toolbar.Children.Add(LdButton("\uE72C", "刷新实例", RefreshLdPlayerUiAsync, requireSelection: false));
-        toolbar.Children.Add(LdButton("\uE768", "启动实例", () => ExecuteLdPlayerAsync("launch"), requireStopped: true));
+        toolbar.Children.Add(LdButton("\uE768", "启动并连接", () => ConnectLdInstancesAsync([ldSelection!.Index])));
+        toolbar.Children.Add(LdButton("\uE768", "一键启动全部", StartAllLdInstancesAsync, requireSelection: false));
+        toolbar.Children.Add(LdButton("\uE8D4", "接入已运行实例", ConnectRunningLdInstancesAsync, requireSelection: false));
+        toolbar.Children.Add(LdButton("\uE710", "新建空白实例", () => EditLdInstanceAsync(true), requireSelection: false));
+        toolbar.Children.Add(LdButton("\uE713", "资源配置", () => EditLdInstanceAsync(false), requireStopped: true));
         toolbar.Children.Add(LdButton("\uE71A", "关闭实例", () => ExecuteLdPlayerAsync("quit"), requireProcess: true));
         toolbar.Children.Add(LdButton("\uE777", "重启实例", () => ExecuteLdPlayerAsync("reboot"), requireProcess: true));
+        var stop = new Button { Content = ShellGlyph("\uE71A"), ToolTip = "停止等待和后续启动，不关闭已运行实例", Width = 34, Height = 34, Margin = new Thickness(0, 0, 0, 6) };
+        stop.Click += (_, _) => ldOperationCancellation?.Cancel(); toolbar.Children.Add(stop);
         DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
         ldFeedback = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 9, 0, 9), Foreground = Brushes.DimGray };
         DockPanel.SetDock(ldFeedback, Dock.Top); page.Children.Add(ldFeedback);
@@ -36,6 +42,7 @@ public partial class MainWindow
         ldGrid = new DataGrid { ItemsSource = ldRows, IsReadOnly = true, SelectionMode = DataGridSelectionMode.Single };
         TextColumn(ldGrid, "实例编号", nameof(LdInstanceRow.Index), 80);
         TextColumn(ldGrid, "名称", nameof(LdInstanceRow.Name), 175);
+        TextColumn(ldGrid, "连接状态", nameof(LdInstanceRow.ConnectionState), 110);
         TextColumn(ldGrid, "安卓状态", nameof(LdInstanceRow.AndroidState), 110);
         TextColumn(ldGrid, "进程状态", nameof(LdInstanceRow.ProcessState), 110);
         TextColumn(ldGrid, "播放器进程", nameof(LdInstanceRow.ProcessId), 110);
@@ -85,7 +92,7 @@ public partial class MainWindow
         {
             try { await action(); }
             catch (Exception error) { ldFeedback.Text = label + "失败：" + ViewModel.PresentError(error); }
-        }, () => !ldBusy && !ViewModel.HasActiveOperations && ViewModel.Runtime.LdPlayer is not null && (!requireSelection || ldSelection is not null) && (!requirePackage || !string.IsNullOrWhiteSpace(ldPackage?.Text)) && (!requireText || !string.IsNullOrWhiteSpace(ldText?.Text)) && (!requireStarted || ldSelection?.Instance.AndroidStarted == true) && (!requireStopped || ldSelection?.Instance is { AndroidStarted: false, ProcessId: <= 0 }) && (!requireProcess || ldSelection?.Instance is { ProcessId: > 0 } || ldSelection?.Instance.AndroidStarted == true));
+        }, () => !ldBusy && !captureInProgress && !ViewModel.HasActiveOperations && ViewModel.ConnectionReloadAvailable && ViewModel.Runtime.LdPlayer is not null && (!requireSelection || ldSelection is not null && (ViewModel.Demo || ldSelection.Index > 0)) && (!requirePackage || !string.IsNullOrWhiteSpace(ldPackage?.Text)) && (!requireText || !string.IsNullOrWhiteSpace(ldText?.Text)) && (!requireStarted || ldSelection?.Instance.AndroidStarted == true && (ViewModel.Demo || LdInstanceConnected(ldSelection.Index))) && (!requireStopped || ldSelection?.Instance is { IsStarting: false, AndroidStarted: false, ProcessId: <= 0, VBoxProcessId: <= 0, TopWindow: 0, BindWindow: 0 }) && (!requireProcess || ldSelection?.Instance is { ProcessId: > 0 } || ldSelection?.Instance.AndroidStarted == true));
         ldCommands.Add(command);
         ldCommandsByLabel.Add(label, command);
         return Button(glyph, label, command);
@@ -104,11 +111,11 @@ public partial class MainWindow
         foreach (var instance in service.Instances)
         {
             var binding = ViewModel.Runtime.Settings.LdSerialBindings.TryGetValue(instance.Index, out var serial) ? serial + "（配置绑定，尚未核验）" : "尚未绑定";
-            ldRows.Add(new LdInstanceRow(instance, binding));
+            ldRows.Add(new LdInstanceRow(instance, binding, InstanceConnectionState(instance)));
         }
         ldGrid.SelectedItem = index is { } selected ? ldRows.FirstOrDefault(row => row.Index == selected) : null;
         if (ViewModel.Runtime.LdPlayerError is { } error) ldFeedback.Text = "雷电实例发现失败：" + ViewModel.PresentError(new InvalidOperationException(error));
-        else ldFeedback.Text = $"已发现 {ldRows.Count} 个雷电实例" + (ViewModel.Demo ? " · 演示模式，不连接真实雷电" : " · 本机实例");
+        else if (string.IsNullOrWhiteSpace(ldFeedback.Text)) ldFeedback.Text = ViewModel.Demo ? "演示模式" : "";
         RefreshLdButtons();
     }
 
@@ -126,6 +133,8 @@ public partial class MainWindow
         if (ViewModel.HasActiveOperations) throw new DeviceException("请先结束界面操作、脚本或文件传输，再操作雷电实例");
         var selected = ldSelection ?? throw new InvalidOperationException("未选择雷电实例");
         var service = ViewModel.Runtime.LdPlayer ?? throw new InvalidOperationException("雷电命令行能力尚未接入");
+        if (!ViewModel.Demo && selected.Index <= 0) throw new DeviceException("实例0受保护。", 403, 1003);
+        if (!ViewModel.Demo && operation is not ("launch" or "quit" or "reboot") && !LdInstanceConnected(selected.Index)) throw new DeviceException("请先接入该实例，再执行应用或输入操作。", 403, 1003);
         body ??= new JsonObject(); body["expectedGeneration"] = selected.Generation;
         if (operation is "quit" or "reboot")
         {
@@ -136,16 +145,19 @@ public partial class MainWindow
         ldBusy = true; ViewModel.SetExternalBusy(true); ldFeedback.Text = "正在执行所选实例命令…"; RefreshLdButtons();
         try
         {
+            ViewModel.Runtime.RequireFrozenConnectionSettings();
+            if (ViewModel.Runtime.Api.LdCommandIdentityGuard is { } verify) await verify(selected.Index, operation, CancellationToken.None);
             var result = await service.ExecuteAsync(selected.Index, operation, body, CancellationToken.None);
             UpdateLdPlayerRows();
-            ldFeedback.Text = $"实例 {result.Index}：{result.Message}\n接受状态：{(result.Accepted ? "已接受" : "未接受")}；结果核验：{(result.Verified ? "已核验" : "待核验")}";
+            ViewModel.Runtime.Log.Write("ld-command-result", $"index={result.Index}; accepted={result.Accepted}; verified={result.Verified}; {result.Message}");
+            ldFeedback.Text = $"实例 {result.Index}：" + (result.Verified ? "操作已完成" : "命令已提交，等待状态更新");
         }
         catch (Exception error) { UpdateLdPlayerRows(); ldFeedback.Text = $"实例 {selected.Index} 操作失败：{ViewModel.PresentError(error)}"; }
         finally { ldBusy = false; ViewModel.SetExternalBusy(false); RefreshLdButtons(); }
     }
 }
 
-public sealed class LdInstanceRow(LdPlayerInstance instance, string binding)
+public sealed class LdInstanceRow(LdPlayerInstance instance, string binding, string connectionState = "待接入")
 {
     public LdPlayerInstance Instance { get; } = instance;
     public int Index => Instance.Index;
@@ -158,4 +170,5 @@ public sealed class LdInstanceRow(LdPlayerInstance instance, string binding)
     public string Dpi => Instance.Dpi?.ToString() ?? "未核验";
     public long Generation => Instance.Generation;
     public string Binding { get; } = binding;
+    public string ConnectionState { get; } = connectionState;
 }

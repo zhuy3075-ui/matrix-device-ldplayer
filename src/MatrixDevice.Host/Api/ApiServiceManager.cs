@@ -19,6 +19,14 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
     private readonly Dictionary<int, DateTimeOffset> _cooldown = [];
     private int _basicPort;
     private int _automatorPort;
+    private int activeRequests;
+    public bool HasActiveRequests => Volatile.Read(ref activeRequests) != 0;
+    private async Task TrackRequestAsync(Func<Task> action)
+    {
+        Interlocked.Increment(ref activeRequests);
+        try { await action(); }
+        finally { Interlocked.Decrement(ref activeRequests); }
+    }
     public bool BasicRunning => _basic is not null;
     public bool AutomatorRunning => _automator is not null;
     public int? RunningBasicPort => BasicRunning ? _basicPort : null;
@@ -30,6 +38,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
     public Func<string, bool>? ScriptWriteBusy { get; set; }
     public Func<bool>? AnyScriptWriteBusy { get; set; }
     public Func<int, string?>? LdSerialForWriteGuard { get; set; }
+    public Func<int, string, CancellationToken, Task>? LdCommandIdentityGuard { get; set; }
     private void RequireWriteAvailable(string? serial = null)
     {
         if (UiWriteBusy || (serial is null ? AnyScriptWriteBusy?.Invoke() == true : ScriptWriteBusy?.Invoke(serial) == true))
@@ -50,7 +59,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             ValidatePort(port);
             if (_automatorPort == port || _devices.Values.Any(x => x.Port == port)) throw new DeviceException("Port already reserved: " + port);
             var app = CreateServer(port);
-            app.Run(context => HandleBasicGatewayAsync(context, port));
+            app.Run(context => TrackRequestAsync(() => HandleBasicGatewayAsync(context, port)));
             await StartServerAsync(app, ct);
             _basic = app;
             _basicPort = port;
@@ -70,7 +79,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             ValidatePort(port);
             if (_basicPort == port || _devices.Values.Any(x => x.Port == port)) throw new DeviceException("Port already reserved: " + port);
             var app = CreateServer(port);
-            app.Run(HandleAutomatorAsync);
+            app.Run(context => TrackRequestAsync(() => HandleAutomatorAsync(context)));
             await StartServerAsync(app, ct);
             _automator = app;
             _automatorPort = port;
@@ -91,7 +100,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
                 if (port == _basicPort || port == _automatorPort || _devices.Values.Any(x => x.Port == port) || _cooldown.ContainsKey(port)) continue;
                 var app = CreateServer(port);
                 var reservedPort = port;
-                app.Run(context => HandleDeviceAsync(context, serial, reservedPort));
+                app.Run(context => TrackRequestAsync(() => HandleDeviceAsync(context, serial, reservedPort)));
                 try
                 {
                     await app.StartAsync(ct);
@@ -193,6 +202,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
                 var service = LdPlayer ?? throw new DeviceException("尚未配置雷电命令行程序", 503, 2001);
                 var body = await ReadBodyAsync(context);
                 RequireWriteAvailable(LdSerialForWriteGuard?.Invoke(index));
+                if (LdCommandIdentityGuard is not null) await LdCommandIdentityGuard(index, parts[3], context.RequestAborted);
                 data = await service.ExecuteAsync(index, parts[3], JsonNode.Parse(body.GetRawText())!.AsObject(), context.RequestAborted);
                 log.Write("ldplayer-command", $"index={index}, operation={parts[3]}");
             }

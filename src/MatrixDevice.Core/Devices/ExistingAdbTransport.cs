@@ -16,6 +16,7 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
     private readonly AdbServerEpoch serverEpoch = new();
     private Dictionary<string, uint> transports = new(StringComparer.Ordinal);
     private readonly AsyncLocal<uint?> pinnedTransport = new();
+    public void InheritServerEpoch(ExistingAdbTransport source) => serverEpoch.Require(source.serverEpoch.Snapshot);
     public uint? CurrentTransport(string serial) { lock (transportGate) return transports.TryGetValue(serial, out var id) ? id : null; }
     public void ReplaceTransports(Dictionary<string, uint> current) { lock (transportGate) transports = current; }
     public void InvalidateTransport(string serial) { lock (transportGate) transports.Remove(serial); }

@@ -29,6 +29,7 @@ public partial class MainWindow
         var page = new DockPanel { LastChildFill = true, Background = Brushes.White };
         var top = new StackPanel { Margin = new Thickness(22, 18, 22, 0) };
         DockPanel.SetDock(top, Dock.Top); page.Children.Add(top);
+        top.Children.Add(BuildDeviceModes());
         var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 18) };
         var modes = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var modeFrame = new Border { Child = modes, Background = new SolidColorBrush(Color.FromRgb(245, 247, 251)), CornerRadius = new CornerRadius(6), Padding = new Thickness(3) }; DockPanel.SetDock(modeFrame, Dock.Right); heading.Children.Add(modeFrame);
@@ -43,10 +44,9 @@ public partial class MainWindow
         var tools = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
         var select = WallButton("\uE73A", "全选", new ActionCommand(() => ViewModel.SelectFiltered(true))); select.ToolTip = "选择当前筛选中的全部设备"; tools.Children.Add(select);
         tools.Children.Add(WallButton("\uE711", "清空", new ActionCommand(ClearWallSelection)));
-        tools.Children.Add(WallButton("\uE72C", "刷新截图", ViewModel.WallRefreshCommand, primary: true));
         var mouse = WallToggle("\uE962", "同步鼠标"); mouse.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(WorkspaceViewModel.SyncMouse))); tools.Children.Add(mouse);
         var keyboard = WallToggle("\uE765", "同步键盘"); keyboard.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(WorkspaceViewModel.SyncKeyboard))); tools.Children.Add(keyboard);
-        var automatic = WallToggle("\uE787", "自动刷新"); automatic.Checked += (_, _) => { autoCapture = true; captureTimer.Start(); }; automatic.Unchecked += (_, _) => { autoCapture = false; captureTimer.Stop(); }; tools.Children.Add(automatic);
+        var automatic = WallToggle("\uE787", "自动截图"); automatic.IsChecked = true; automatic.Checked += (_, _) => { autoCapture = true; }; automatic.Unchecked += (_, _) => { autoCapture = false; }; tools.Children.Add(automatic);
         wallMainToggle = WallToggle("\uE7F4", "主控面板"); wallMainToggle.Checked += (_, _) => UpdateWallMainPanel(); wallMainToggle.Unchecked += (_, _) => UpdateWallMainPanel(); tools.Children.Add(wallMainToggle);
         tools.Children.Add(BuildWallDensity()); top.Children.Add(tools);
         var context = new DockPanel { Margin = new Thickness(0, 0, 0, 13) };
@@ -54,12 +54,15 @@ public partial class MainWindow
         var targets = BoundText(nameof(WorkspaceViewModel.TargetContext)); targets.Foreground = WallMuted; targets.TextTrimming = TextTrimming.CharacterEllipsis; targets.Margin = new Thickness(0, 0, 20, 0); targets.SetBinding(ToolTipProperty, new Binding(nameof(WorkspaceViewModel.TargetContext))); context.Children.Add(targets); top.Children.Add(context);
         top.Children.Add(new Border { Height = 1, Background = WallBorder });
         wallWorkspace = new Grid { Margin = new Thickness(22, 18, 22, 18) };
+        wallWorkspace.RowDefinitions.Add(new RowDefinition()); wallWorkspace.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         wallWorkspace.ColumnDefinitions.Add(new ColumnDefinition()); wallWorkspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0) });
         var views = new Grid(); wallWorkspace.Children.Add(views);
         wallCards = BuildWallItems("cards"); views.Children.Add(wallCards);
         wallScreens = BuildWallItems("screens"); views.Children.Add(wallScreens);
         wallList = BuildWallList(); views.Children.Add(wallList);
         wallMainPanel = BuildWallMainPanel(); Grid.SetColumn(wallMainPanel, 1); wallWorkspace.Children.Add(wallMainPanel);
+        var pending = BuildPendingInstances(); Grid.SetRow(pending, 1); Grid.SetColumnSpan(pending, 2); wallWorkspace.Children.Add(pending);
+        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Search) or nameof(WorkspaceViewModel.GroupFilter)) UpdateUnifiedDirectory(); };
         page.Children.Add(wallWorkspace); SetWallViewMode("cards"); return page;
     }
 

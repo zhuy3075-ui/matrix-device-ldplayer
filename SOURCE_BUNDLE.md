@@ -1147,6 +1147,7 @@ public sealed class AdbDeviceBackend : IDeviceBackend
     private readonly SemaphoreSlim _discoveryGate = new(1, 1);
     private readonly ConcurrentDictionary<string, PhoneAgentClient> _agents = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Func<string, CancellationToken, Task>> _unicodeInputs = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Func<CancellationToken, Task>> _identityGuards = new(StringComparer.Ordinal);
     public const int MaximumStdoutBytes = 32 * 1024 * 1024;
     public const int MaximumStderrBytes = 1024 * 1024;
     private int _disposed;
@@ -1185,12 +1186,41 @@ public sealed class AdbDeviceBackend : IDeviceBackend
         AuthorizeSerial(serial); ArgumentNullException.ThrowIfNull(send);
         if (!_unicodeInputs.TryAdd(serial, send)) throw new DeviceException($"Unicode input is already bound: serial={serial}.");
     }
+    public void RegisterIdentityGuard(string serial, Func<CancellationToken, Task> verify)
+    {
+        AuthorizeSerial(serial); ArgumentNullException.ThrowIfNull(verify);
+        if (!_identityGuards.TryAdd(serial, verify)) throw new DeviceException($"An identity guard is already bound: serial={serial}.", 409, 1003);
+    }
+    public void InheritServerEpoch(AdbDeviceBackend source) => _transport.InheritServerEpoch(source._transport);
+    public Task VerifyIdentityAsync(string serial, CancellationToken ct = default)
+    {
+        AuthorizeSerial(serial);
+        if (!_identityGuards.ContainsKey(serial)) throw new DeviceException("设备身份尚未绑定。", 403, 1003);
+        return RunDeviceAsync(serial, async token => { await ExecuteAsync(null, ["devices", "-l"], token).ConfigureAwait(false); }, ct);
+    }
 
     public async Task<IReadOnlyList<DeviceInfo>> DiscoverAsync(CancellationToken ct = default)
     {
         await _discoveryGate.WaitAsync(ct).ConfigureAwait(false);
         try { return await DiscoverCoreAsync(ct).ConfigureAwait(false); }
         finally { _discoveryGate.Release(); }
+    }
+    public async Task<IReadOnlyList<AdbRegisteredDevice>> ListRegisteredDevicesAsync(CancellationToken ct = default)
+    {
+        var output = Decode(await ExecuteAsync(null, ["devices", "-l"], ct).ConfigureAwait(false));
+        var devices = new List<AdbRegisteredDevice>();
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var value = line.Trim();
+            if (value.StartsWith("List of devices", StringComparison.Ordinal) || value.StartsWith('*') || value.Length == 0) continue;
+            var fields = Regex.Split(value, @"\s+");
+            if (fields.Length < 2) throw new DeviceException("Malformed ADB host directory row.", 502, 2000);
+            ValidateSerial(fields[0]);
+            var identity = fields.FirstOrDefault(field => field.StartsWith("transport_id:", StringComparison.Ordinal));
+            uint? transport = uint.TryParse(identity?[13..], NumberStyles.None, CultureInfo.InvariantCulture, out var number) && number > 0 ? number : null;
+            devices.Add(new(fields[0], fields[1], transport));
+        }
+        return devices.AsReadOnly();
     }
     private async Task<IReadOnlyList<DeviceInfo>> DiscoverCoreAsync(CancellationToken ct)
     {
@@ -1437,7 +1467,11 @@ public sealed class AdbDeviceBackend : IDeviceBackend
     {
         AuthorizeSerial(serial);
         var expected = _transport.CurrentTransport(serial) ?? throw new DeviceException($"ADB transport has not been discovered: {serial}; refresh devices first.", 503, 2000);
-        return _queue.RunAsync(serial, token => _transport.RunPinnedAsync(serial, expected, action, token), ct);
+        return _queue.RunAsync(serial, token => _transport.RunPinnedAsync(serial, expected, async pinned =>
+        {
+            if (_identityGuards.TryGetValue(serial, out var verify)) await verify(pinned).ConfigureAwait(false);
+            return await action(pinned).ConfigureAwait(false);
+        }, token), ct);
     }
     internal uint? ObservedTransportId(string serial) => _transport.CurrentTransport(serial);
     private Task RunDeviceAsync(string serial, Func<CancellationToken, Task> action, CancellationToken ct) => RunDeviceAsync(serial, async token => { await action(token).ConfigureAwait(false); return true; }, ct);
@@ -1461,6 +1495,8 @@ public sealed class AdbDeviceBackend : IDeviceBackend
     private static void ValidateRemotePath(string path) { if (string.IsNullOrWhiteSpace(path) || !path.StartsWith('/') || path.Contains('\0') || path.Contains('\n')) throw new DeviceException($"Invalid absolute Android path: {path}.", 400, 1007); }
     public async ValueTask DisposeAsync() { if (Interlocked.Exchange(ref _disposed, 1) != 0) return; await _queue.DisposeAsync(); foreach (var agent in _agents.Values) await agent.DisposeAsync(); }
 }
+
+public sealed record AdbRegisteredDevice(string Serial, string State, uint? TransportId);
 
 ```
 
@@ -1528,6 +1564,7 @@ internal sealed class AdbServerEpoch
 {
     private readonly object gate = new();
     private AdbServerIdentity? observed;
+    public AdbServerIdentity Snapshot { get { lock (gate) return observed ?? throw new DeviceException("尚未核验ADB服务身份，不能继承连接。", 409, 1003); } }
     public void Require(AdbServerIdentity current)
     {
         lock (gate)
@@ -1925,6 +1962,7 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
     private readonly AdbServerEpoch serverEpoch = new();
     private Dictionary<string, uint> transports = new(StringComparer.Ordinal);
     private readonly AsyncLocal<uint?> pinnedTransport = new();
+    public void InheritServerEpoch(ExistingAdbTransport source) => serverEpoch.Require(source.serverEpoch.Snapshot);
     public uint? CurrentTransport(string serial) { lock (transportGate) return transports.TryGetValue(serial, out var id) ? id : null; }
     public void ReplaceTransports(Dictionary<string, uint> current) { lock (transportGate) transports = current; }
     public void InvalidateTransport(string serial) { lock (transportGate) transports.Remove(serial); }
@@ -2721,6 +2759,242 @@ public sealed class LdConsoleRunner : ILdConsoleRunner
 
 ```
 
+## src/MatrixDevice.Core/LdPlayer/LdInstanceEditor.cs
+
+```csharp
+using System.Globalization;
+
+namespace MatrixDevice.Core;
+
+public sealed record LdInstanceConfiguration(int Cpu, int MemoryMb, int Width, int Height, int Dpi);
+public sealed record LdInstanceCreationResult(LdPlayerInstance Instance, bool CommandReportedFailure, string Message);
+
+public sealed class LdInstanceEditor(ILdConsoleRunner runner, LdPlayerService service)
+{
+    public const int MaximumNameLength = 80;
+    public const int MinimumScreenDimension = 240;
+    public const int MaximumScreenDimension = 4096;
+    public const int MinimumDpi = 72;
+    public const int MaximumDpi = 640;
+    private readonly ILdConsoleRunner runner = runner ?? throw new ArgumentNullException(nameof(runner));
+    private readonly LdPlayerService service = service ?? throw new ArgumentNullException(nameof(service));
+    private readonly SemaphoreSlim edits = new(1, 1);
+
+    public async Task<LdInstanceCreationResult> CreateAsync(string name, CancellationToken ct = default)
+    {
+        var hasControlCharacters = name?.Any(char.IsControl) == true;
+        name = name?.Trim() ?? "";
+        if (name.Length is 0 or > MaximumNameLength || name.StartsWith("--", StringComparison.Ordinal) || hasControlCharacters || name.Contains(','))
+            throw new DeviceException($"实例名称必须为 1 至 {MaximumNameLength} 字符，不能含控制字符、逗号或选项前缀。", 400, 1007);
+        await edits.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var before = await service.RefreshAsync(ct).ConfigureAwait(false);
+            if (before.Any(instance => instance.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                throw new DeviceException($"实例名称已经存在：{name}；未创建或复制任何实例。", 409, 1003);
+            DeviceException? commandFailure = null;
+            try { await runner.RunAsync(["add", "--name", name], ct).ConfigureAwait(false); }
+            catch (DeviceException error) when (error.Status == 503) { commandFailure = error; }
+            ct.ThrowIfCancellationRequested();
+            IReadOnlyList<LdPlayerInstance> after;
+            try { after = await service.RefreshAsync(ct).ConfigureAwait(false); }
+            catch (DeviceException error)
+            {
+                throw new DeviceException($"创建命令之后无法核对目录：{error.Message}；结果未知，未再次创建，请手动刷新。" +
+                    (commandFailure is null ? "" : $" 原命令错误：{commandFailure.Message}"), error.Status, error.Code);
+            }
+            var oldIndices = before.Select(instance => instance.Index).ToHashSet();
+            var added = after.Where(instance => !oldIndices.Contains(instance.Index)).ToArray();
+            if (added.Length != 1 || added[0].Index <= 0 || added[0].Index == 99999 || added[0].Name != name || before.Any(instance => !after.Any(current => current.Index == instance.Index)))
+            {
+                var observed = string.Join(", ", added.Select(instance => $"{instance.Index}:{instance.Name}"));
+                throw new DeviceException($"无法唯一确认新建实例：名称={name}，新增目录=[{observed}]；未重试、复制或删除实例，请刷新目录检查。" +
+                    (commandFailure is null ? "" : $" 原命令错误：{commandFailure.Message}"), 409, 1003);
+            }
+            var message = commandFailure is null
+                ? "目录差集已确认唯一新实例；未自动启动、安装应用或核验 ADB。"
+                : $"命令报告失败，但目录差集确认了唯一同名新实例；未重发 add，也未自动启动。原命令错误：{commandFailure.Message}";
+            return new(added[0], commandFailure is not null, message);
+        }
+        finally { edits.Release(); }
+    }
+
+    public async Task<LdPlayerCommandResult> ConfigureAsync(int index, long expectedGeneration,
+        LdInstanceConfiguration configuration, CancellationToken ct = default)
+    {
+        if (index <= 0 || index == 99999) throw new DeviceException($"资源配置不允许实例编号 {index}；原实例 0 与桌面编号受保护。", 400, 1007);
+        if (expectedGeneration <= 0) throw new DeviceException("expectedGeneration 必须为正整数。", 400, 1007);
+        Validate(configuration);
+        await edits.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await service.RefreshAsync(ct).ConfigureAwait(false);
+            var before = service.Instances.FirstOrDefault(instance => instance.Index == index)
+                ?? throw new DeviceException($"雷电实例不存在：索引={index}", 404, 1002);
+            if (before.Generation != expectedGeneration)
+                throw new DeviceException($"实例代次已变化：索引={index}，请求={expectedGeneration}，当前={before.Generation}；未修改资源。", 409, 1003);
+            if (before.IsStarting || before.AndroidStarted || before.ProcessId > 0 || before.VBoxProcessId > 0 || before.TopWindow != 0 || before.BindWindow != 0)
+                throw new DeviceException($"实例 {index} 尚未完全停止；请确认播放器、虚拟机与窗口全部退出后配置。", 409, 1003);
+            await runner.RunAsync(["modify", "--index", Number(index), "--cpu", Number(configuration.Cpu),
+                "--memory", Number(configuration.MemoryMb), "--resolution",
+                string.Join(',', Number(configuration.Width), Number(configuration.Height), Number(configuration.Dpi))], ct).ConfigureAwait(false);
+            try { await service.RefreshAsync(ct).ConfigureAwait(false); }
+            catch (DeviceException error)
+            {
+                return new(index, "modify", true, false, $"资源配置命令已返回，但目录复查失败：{error.Message}；结果待核验，不自动重试。", null);
+            }
+            var after = service.Instances.FirstOrDefault(instance => instance.Index == index);
+            return new(index, "modify", true, false,
+                "资源配置命令已返回；尚未核验实际 CPU、内存或 Android 分辨率，需要启动后另行验证。未请求修改型号、设备身份或 root。", after);
+        }
+        finally { edits.Release(); }
+    }
+
+    public static void Validate(LdInstanceConfiguration configuration)
+    {
+        if (configuration is null) throw new DeviceException("资源配置不能为空。", 400, 1007);
+        if (configuration.Cpu is not (1 or 2 or 3 or 4)) throw new DeviceException($"CPU 核数必须为 1、2、3 或 4：{configuration.Cpu}", 400, 1007);
+        if (configuration.MemoryMb is not (256 or 512 or 768 or 1024 or 1536 or 2048 or 4096 or 8192))
+            throw new DeviceException($"内存值不在雷电官方枚举中：{configuration.MemoryMb} MiB", 400, 1007);
+        if (configuration.Width is < MinimumScreenDimension or > MaximumScreenDimension || configuration.Height is < MinimumScreenDimension or > MaximumScreenDimension)
+            throw new DeviceException($"宽高必须分别为 {MinimumScreenDimension} 至 {MaximumScreenDimension} 的正整数：{configuration.Width}x{configuration.Height}", 400, 1007);
+        if (configuration.Dpi is < MinimumDpi or > MaximumDpi)
+            throw new DeviceException($"DPI 必须为 {MinimumDpi} 至 {MaximumDpi} 的正整数：{configuration.Dpi}", 400, 1007);
+    }
+
+    private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
+}
+
+```
+
+## src/MatrixDevice.Core/LdPlayer/LdLaunchCoordinator.cs
+
+```csharp
+namespace MatrixDevice.Core;
+
+public sealed record LdLaunchProgress(int Index, string State, string Message, LdPlayerInstance? Instance = null);
+
+public sealed class LdLaunchCoordinator
+{
+    private readonly LdPlayerService service;
+    private readonly TimeSpan instanceTimeout;
+    private readonly TimeSpan pollInterval;
+    private readonly SemaphoreSlim batch = new(1, 1);
+
+    public LdLaunchCoordinator(LdPlayerService service, TimeSpan? instanceTimeout = null, TimeSpan? pollInterval = null)
+    {
+        this.service = service ?? throw new ArgumentNullException(nameof(service));
+        this.instanceTimeout = instanceTimeout ?? TimeSpan.FromMinutes(3);
+        this.pollInterval = pollInterval ?? TimeSpan.FromSeconds(2);
+        if (this.instanceTimeout <= TimeSpan.Zero || this.instanceTimeout > TimeSpan.FromMinutes(10))
+            throw new ArgumentOutOfRangeException(nameof(instanceTimeout), "实例启动等待必须大于零且不超过十分钟。");
+        if (this.pollInterval <= TimeSpan.Zero || this.pollInterval > this.instanceTimeout)
+            throw new ArgumentOutOfRangeException(nameof(pollInterval), "轮询间隔必须大于零且不超过实例等待期限。");
+    }
+
+    public async Task<IReadOnlyList<LdLaunchProgress>> StartAsync(int[] indices,
+        Func<CancellationToken, Task> ensureResourceReserve, IProgress<LdLaunchProgress>? progress = null,
+        CancellationToken ct = default, IReadOnlyList<LdPlayerInstance>? expectedInstances = null)
+    {
+        if (indices is null || indices.Length == 0 || indices.Any(index => index <= 0 || index == 99999) || indices.Distinct().Count() != indices.Length)
+            throw new DeviceException("启动批次必须包含不同的正整数实例编号，不允许原实例 0 或桌面编号 99999。", 400, 1007);
+        ArgumentNullException.ThrowIfNull(ensureResourceReserve);
+        var requested = indices.ToArray();
+        var expected = expectedInstances?.ToArray();
+        if (expected is not null && (expected.Length != requested.Length || expected.Any(instance => instance is null) ||
+            !expected.Select(instance => instance.Index).ToHashSet().SetEquals(requested)))
+            throw new DeviceException("确认快照必须完整且唯一地对应本次启动编号，不能缺少、重复或包含额外实例。", 400, 1007);
+        var confirmed = expected?.ToDictionary(instance => instance.Index);
+        await batch.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var results = new List<LdLaunchProgress>();
+            foreach (var index in requested)
+            {
+                ct.ThrowIfCancellationRequested();
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                deadline.CancelAfter(instanceTimeout);
+                var token = deadline.Token;
+                try
+                {
+                    await service.RefreshAsync(token).ConfigureAwait(false);
+                    var original = Require(index);
+                    if (confirmed is not null && (original.Generation != confirmed[index].Generation || original.Name != confirmed[index].Name))
+                        throw new DeviceException($"确认后实例身份或代次已变化：索引={index}；未提交启动命令，请刷新后重新确认。", 409, 1003);
+                    if (IsReady(original))
+                    {
+                        var skipped = new LdLaunchProgress(index, "skipped", "实例已运行，未重复启动；尚未核验 ADB、设备授权或应用页面。", original);
+                        progress?.Report(skipped); results.Add(skipped); continue;
+                    }
+                    if (IsStopped(original))
+                    {
+                        progress?.Report(new(index, "checking-resources", "正在检查本次启动的资源预留，不推测未知实例内存。", original));
+                        await ensureResourceReserve(token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
+                        await service.RefreshAsync(token).ConfigureAwait(false);
+                        var before = RequireSameIdentity(original);
+                        if (before.Generation != original.Generation)
+                            throw new DeviceException($"资源检查期间实例代次已变化：索引={index}，原代次={original.Generation}，当前={before.Generation}；未提交启动命令，请刷新后重新确认。", 409, 1003);
+                        if (IsStopped(before))
+                        {
+                            progress?.Report(new(index, "starting", "正在提交一次启动命令；取消或超时不会关闭已启动实例。", before));
+                            await service.ExecuteAsync(index, "launch", new System.Text.Json.Nodes.JsonObject
+                            { ["expectedGeneration"] = before.Generation }, token).ConfigureAwait(false);
+                        }
+                    }
+                    while (true)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        await service.RefreshAsync(token).ConfigureAwait(false);
+                        var observed = RequireSameIdentity(original);
+                        if (IsReady(observed))
+                        {
+                            var ready = new LdLaunchProgress(index, "ready", "雷电目录已确认安卓启动标志及播放器、虚拟机进程；尚未核验 ADB、设备授权或应用页面。", observed);
+                            progress?.Report(ready); results.Add(ready); break;
+                        }
+                        progress?.Report(new(index, "waiting", "等待现有启动过程，不重复提交 launch；ADB 尚未核验。", observed));
+                        await Task.Delay(pollInterval, token).ConfigureAwait(false);
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    progress?.Report(new(index, "cancelled", "已取消本程序等待及后续启动；未关闭任何已启动实例。"));
+                    throw;
+                }
+                catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+                {
+                    var message = $"实例 {index} 在 {instanceTimeout.TotalSeconds:0.###} 秒内未确认启动完成；结果未知，不重发 launch，不启动后续实例，也不关闭已启动实例。";
+                    progress?.Report(new(index, "failed", message));
+                    throw new DeviceException(message, 504, 2000);
+                }
+                catch (Exception error)
+                {
+                    progress?.Report(new(index, "failed", $"实例启动批次已停止：{error.Message}；未关闭已启动实例。"));
+                    throw;
+                }
+            }
+            return results.AsReadOnly();
+        }
+        finally { batch.Release(); }
+    }
+
+    private LdPlayerInstance Require(int index) => service.Instances.FirstOrDefault(instance => instance.Index == index)
+        ?? throw new DeviceException($"雷电实例不存在：索引={index}", 404, 1002);
+
+    private LdPlayerInstance RequireSameIdentity(LdPlayerInstance original)
+    {
+        var current = Require(original.Index);
+        if (current.Name != original.Name || current.Width != original.Width || current.Height != original.Height || current.Dpi != original.Dpi)
+            throw new DeviceException($"等待期间实例身份或配置已变化：索引={original.Index}；停止当前批次，请刷新目录后重新确认。", 409, 1003);
+        return current;
+    }
+
+    private static bool IsReady(LdPlayerInstance instance) => !instance.IsStarting && instance.AndroidStarted && instance.ProcessId > 0 && instance.VBoxProcessId > 0;
+    private static bool IsStopped(LdPlayerInstance instance) => !instance.IsStarting && !instance.AndroidStarted && instance.ProcessId <= 0 && instance.VBoxProcessId <= 0 && instance.TopWindow == 0 && instance.BindWindow == 0;
+}
+
+```
+
 ## src/MatrixDevice.Core/LdPlayer/LdPlayerAdbBinding.cs
 
 ```csharp
@@ -2767,7 +3041,7 @@ namespace MatrixDevice.Core;
 public sealed record LdPlayerInstance(
     int Index, string Name, long TopWindow, long BindWindow, bool AndroidStarted,
     int ProcessId, int VBoxProcessId, int? Width = null, int? Height = null, int? Dpi = null,
-    long Generation = 1);
+    long Generation = 1, bool IsStarting = false);
 
 public sealed record LdPlayerCommandResult(
     int Index, string Operation, bool Accepted, bool Verified, string Message,
@@ -3027,7 +3301,7 @@ public sealed class LdPlayerService : IAsyncDisposable
                 var knownStartupTransition = suffix == 8 && numbers[2] == 2;
                 if (numbers[0] < 0 || numbers[1] < 0 || numbers[2] is not (0 or 1) && !knownStartupTransition || numbers[3] is < -1 or > int.MaxValue || numbers[4] is < -1 or > int.MaxValue) return false;
                 if (suffix == 8 && numbers.Skip(5).Any(value => value is <= 0 or > int.MaxValue)) return false;
-                instance = new(index, name, numbers[0], numbers[1], numbers[2] == 1, (int)numbers[3], (int)numbers[4], suffix == 8 ? (int)numbers[5] : null, suffix == 8 ? (int)numbers[6] : null, suffix == 8 ? (int)numbers[7] : null);
+                instance = new(index, name, numbers[0], numbers[1], numbers[2] == 1, (int)numbers[3], (int)numbers[4], suffix == 8 ? (int)numbers[5] : null, suffix == 8 ? (int)numbers[6] : null, suffix == 8 ? (int)numbers[7] : null, IsStarting: knownStartupTransition);
                 return true;
             }
             var oldValid = Candidate(5, out var old);
@@ -3519,6 +3793,8 @@ public partial class App : Application
         {
             var smoke = e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
             var liveVerification = e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase);
+            var unifiedVerification = e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase);
+            string? unifiedCandidate = null;
             var demo = smoke || e.Args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
             var dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MatrixDevice.Reconstructed", demo ? "demo" : "data");
             var directoryIndex = Array.FindIndex(e.Args, arg => arg.Equals("--data-dir", StringComparison.OrdinalIgnoreCase));
@@ -3544,11 +3820,20 @@ public partial class App : Application
                 if (widthIndex >= 0 && widthIndex + 1 < e.Args.Length && double.TryParse(e.Args[widthIndex + 1], out var width)) settings = settings with { WindowWidth = Math.Clamp(width, 1000, 2400) };
                 if (heightIndex >= 0 && heightIndex + 1 < e.Args.Length && double.TryParse(e.Args[heightIndex + 1], out var height)) settings = settings with { WindowHeight = Math.Clamp(height, 700, 1800) };
             }
+            if (unifiedVerification)
+            {
+                if (directoryIndex < 0 || !dataDirectory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("接入验收必须使用artifacts下的独立配置。");
+                if (!settings.LdSerialBindings.TryGetValue(2, out var approved) || !settings.AdbAllowedSerials.Contains(approved, StringComparer.Ordinal)) throw new ArgumentException("独立实例2未在复制配置中授权。");
+                if (!settings.LdSerialBindings.TryGetValue(1, out var candidate) || !settings.AdbAllowedSerials.Contains(candidate, StringComparer.Ordinal) || candidate == approved) throw new ArgumentException("接入验收仅允许复制配置中已经明确授权的独立实例1/2。");
+                unifiedCandidate = candidate;
+                settings = settings with { AutoStartApi = false, AutoConnect = false, AdbAllowedSerials = [approved], LdSerialBindings = new() { [2] = approved } };
+            }
             runtime = await MatrixRuntime.CreateAsync(settings, dataDirectory, demo);
             var window = new MainWindow(new WorkspaceViewModel(runtime, dataDirectory, demo));
             MainWindow = window;
             window.Show();
-            if (demo || runtime.Settings.AutoConnect) await window.ViewModel.RefreshDevicesAsync();
+            await window.ViewModel.RefreshDevicesAsync();
+            window.UpdateUnifiedDirectory();
             if (runtime.Settings.AutoStartApi) await window.ViewModel.StartApisAsync();
             if (smoke)
             {
@@ -3563,10 +3848,14 @@ public partial class App : Application
                 if (directoryIndex < 0 || outputIndex < 0 || outputIndex + 1 >= e.Args.Length) throw new ArgumentException("实机界面验收必须提供独立 --data-dir 和绝对 --evidence-dir");
                 await window.RunLiveUiAcceptanceAsync(e.Args[outputIndex + 1]); window.Close();
             }
+            if (unifiedVerification)
+            {
+                await window.RunUnifiedAccessAcceptanceAsync(Path.Combine(dataDirectory, "evidence"), unifiedCandidate!); window.Close();
+            }
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
+            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
             else MessageBox.Show(UiErrorPresentation.Describe(ex), "矩阵设备启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             try
@@ -3690,6 +3979,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<NodeRow, TreeViewItem> nodeTreeItems = [];
     private readonly Dictionary<NodeRow, Rectangle> nodeRectangles = [];
     private readonly DispatcherTimerAdapter captureTimer;
+    private readonly DispatcherTimerAdapter directoryTimer;
     private TabControl tabs = null!;
     private TreeView nodeTree = null!;
     private Canvas nodeCanvas = null!;
@@ -3711,7 +4001,9 @@ public partial class MainWindow : Window
     private bool closing;
     private bool closeApproved;
     private bool captureInProgress;
-    private bool autoCapture;
+    private Task? captureOperation;
+    private int captureCursor;
+    private bool autoCapture = true;
     public WorkspaceViewModel ViewModel { get; }
 
     public MainWindow(WorkspaceViewModel viewModel)
@@ -3731,7 +4023,9 @@ public partial class MainWindow : Window
         viewModel.WallChanged = RefreshWall;
         BuildShell();
         LocalizationService.Current.LanguageChanged += OnLanguageChanged;
-        captureTimer = new DispatcherTimerAdapter(TimeSpan.FromSeconds(2), CaptureTickAsync);
+        captureTimer = new DispatcherTimerAdapter(TimeSpan.FromSeconds(5), CaptureTickAsync);
+        directoryTimer = new DispatcherTimerAdapter(TimeSpan.FromSeconds(5), UpdateDeviceDirectoryAsync);
+        if (!viewModel.Demo) { directoryTimer.Start(); captureTimer.Start(); }
         Closing += WindowClosing;
         Deactivated += async (_, _) =>
         {
@@ -3860,8 +4154,16 @@ public partial class MainWindow : Window
 
     private async Task CaptureTickAsync()
     {
-        if (!autoCapture || captureInProgress || ViewModel.Busy || tabs.SelectedIndex != 0) return;
-        captureInProgress = true; try { await ViewModel.RefreshWallAsync(); } finally { captureInProgress = false; }
+        if (!autoCapture || captureInProgress || closing || ldBusy || ViewModel.HasActiveOperations || directoryOperation is { IsCompleted: false } || tabs.SelectedIndex != 0 || !IsActive) return;
+        var rows = ViewModel.DeviceView.Cast<DeviceRow>().Where(row => row.Info.Online).ToArray();
+        if (rows.Length == 0) return;
+        var targets = rows.Skip(captureCursor % rows.Length).Concat(rows.Take(captureCursor % rows.Length)).Take(4).Select(row => row.Serial).ToArray();
+        captureCursor += targets.Length;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(directoryCancellation.Token); deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        captureInProgress = true;
+        try { captureOperation = ViewModel.RefreshAutomaticScreensAsync(targets, deadline.Token); await captureOperation; }
+        catch (OperationCanceledException) { }
+        finally { captureInProgress = false; }
     }
 
     private async void WindowClosing(object? sender, CancelEventArgs e)
@@ -3871,7 +4173,11 @@ public partial class MainWindow : Window
         if (closing) return;
         if (ldBusy || ViewModel.Busy) { MessageBox.Show(this, "当前操作尚未结束，请等待操作完成后退出。", "操作进行中", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         if (ViewModel.HasActiveOperations && !ViewModel.Confirm("退出矩阵设备", "仍有脚本或文件传输正在运行。停止这些任务并退出？\n设备与模拟器将保持运行。")) return;
-        closing = true; captureTimer.Stop();
+        closing = true;
+        directoryCancellation.Cancel();
+        directoryTimer.Stop(); captureTimer.Stop();
+        if (directoryOperation is not null) { try { await directoryOperation; } catch (OperationCanceledException) { } }
+        if (captureOperation is not null) { try { await captureOperation; } catch (OperationCanceledException) { } }
         try
         {
             scanCancellation?.Cancel();
@@ -3891,6 +4197,7 @@ public partial class MainWindow : Window
     {
         closing = closeApproved = true;
         captureTimer?.Stop();
+        directoryTimer?.Stop(); directoryCancellation.Cancel();
         scanCancellation?.Cancel();
         Close();
     }
@@ -3969,12 +4276,16 @@ public partial class MainWindow : Window
         await RefreshLdPlayerUiAsync();
         if (ldRows.Count != 2) throw new InvalidOperationException("演示雷电实例目录不完整");
         if (tabs.Items.Count != 12) throw new InvalidOperationException("桌面页面数量不完整");
+        if (navigation.Count != 11 || navigation.ContainsKey("雷电实例") || deviceModes.Count != 4) throw new InvalidOperationException("设备管理统一入口不完整");
+        NavigateTo("设备墙 / 主控");
+        var removedLabels = new[] { "刷新设备", "扫描设备", "刷新截图" };
+        if (VisualDescendants<TextBlock>(Shell).Any(text => removedLabels.Contains(text.Text))) throw new InvalidOperationException("旧重复刷新入口仍可见");
         ldPackage.Text = "com.example.demo"; ldText.Text = "中文演示";
         ldGrid.SelectedItem = ldRows.Single(row => !row.Instance.AndroidStarted);
         var runningOnly = new[] { "启动应用", "停止应用", "安装应用", "发送文字", "主页", "返回", "增大音量", "减小音量" };
-        if (!ldCommandsByLabel["启动实例"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的操作状态不正确");
+        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的操作状态不正确");
         ldGrid.SelectedItem = ldRows.Single(row => row.Instance.AndroidStarted);
-        if (ldCommandsByLabel["启动实例"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的操作状态不正确");
+        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的连接入口或操作状态不正确");
         ldBusy = true; ldFeedback.Text = "正在执行所选实例命令…"; RefreshLdButtons();
         if (ldCommands.Any(command => command.CanExecute(null)) || !ldFeedback.Text.Contains("正在执行", StringComparison.Ordinal)) throw new InvalidOperationException("雷电忙状态未锁定操作");
         ldBusy = false; RefreshLdButtons();
@@ -3998,8 +4309,10 @@ public partial class MainWindow : Window
         cropRectangle.Width = cropRectangle.Height = 40; Canvas.SetLeft(cropRectangle, 10); Canvas.SetTop(cropRectangle, 10);
         foreach (var route in WorkspacePages)
         {
-            navigation[route.Tag].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-            if (!Equals((tabs.SelectedItem as TabItem)?.Tag, route.Tag) || navigation.Count(item => item.Value.IsChecked == true) != 1 || navigation[route.Tag].IsChecked != true)
+            if (route.Tag == "雷电实例") deviceModes.First(mode => mode.Tag == route.Tag).Button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            else navigation[route.Tag].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            var sidebarTag = route.Tag == "雷电实例" ? "设备墙 / 主控" : route.Tag;
+            if (!Equals((tabs.SelectedItem as TabItem)?.Tag, route.Tag) || navigation.Count(item => item.Value.IsChecked == true) != 1 || navigation[sidebarTag].IsChecked != true)
                 throw new InvalidOperationException("侧栏导航或选中态失效：" + route.Label);
         }
         if (!ReferenceEquals(currentBeforeNavigation, ViewModel.CurrentDevice) || !ReferenceEquals(mainBeforeNavigation, ViewModel.MainDevice) ||
@@ -4081,7 +4394,7 @@ public partial class MainWindow : Window
         var controlStates = new List<object>();
         foreach (TabItem tab in tabs.Items)
         {
-            navigation[tab.Tag.ToString()!].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            NavigateTo(tab.Tag.ToString()!);
             await Dispatcher.InvokeAsync(() => { UpdateLayout(); }, System.Windows.Threading.DispatcherPriority.Render);
             var pageName = tab.Tag.ToString()!;
             controlStates.AddRange(CaptureControlStates(pageName, "idle", Shell));
@@ -5722,11 +6035,17 @@ public partial class MainWindow
     private FrameworkElement BuildLdPlayerPage()
     {
         var page = Page();
+        var modes = BuildDeviceModes(); DockPanel.SetDock(modes, Dock.Top); page.Children.Add(modes);
         var toolbar = Toolbar();
-        toolbar.Children.Add(LdButton("\uE72C", "刷新实例", RefreshLdPlayerUiAsync, requireSelection: false));
-        toolbar.Children.Add(LdButton("\uE768", "启动实例", () => ExecuteLdPlayerAsync("launch"), requireStopped: true));
+        toolbar.Children.Add(LdButton("\uE768", "启动并连接", () => ConnectLdInstancesAsync([ldSelection!.Index])));
+        toolbar.Children.Add(LdButton("\uE768", "一键启动全部", StartAllLdInstancesAsync, requireSelection: false));
+        toolbar.Children.Add(LdButton("\uE8D4", "接入已运行实例", ConnectRunningLdInstancesAsync, requireSelection: false));
+        toolbar.Children.Add(LdButton("\uE710", "新建空白实例", () => EditLdInstanceAsync(true), requireSelection: false));
+        toolbar.Children.Add(LdButton("\uE713", "资源配置", () => EditLdInstanceAsync(false), requireStopped: true));
         toolbar.Children.Add(LdButton("\uE71A", "关闭实例", () => ExecuteLdPlayerAsync("quit"), requireProcess: true));
         toolbar.Children.Add(LdButton("\uE777", "重启实例", () => ExecuteLdPlayerAsync("reboot"), requireProcess: true));
+        var stop = new Button { Content = ShellGlyph("\uE71A"), ToolTip = "停止等待和后续启动，不关闭已运行实例", Width = 34, Height = 34, Margin = new Thickness(0, 0, 0, 6) };
+        stop.Click += (_, _) => ldOperationCancellation?.Cancel(); toolbar.Children.Add(stop);
         DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
         ldFeedback = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 9, 0, 9), Foreground = Brushes.DimGray };
         DockPanel.SetDock(ldFeedback, Dock.Top); page.Children.Add(ldFeedback);
@@ -5734,6 +6053,7 @@ public partial class MainWindow
         ldGrid = new DataGrid { ItemsSource = ldRows, IsReadOnly = true, SelectionMode = DataGridSelectionMode.Single };
         TextColumn(ldGrid, "实例编号", nameof(LdInstanceRow.Index), 80);
         TextColumn(ldGrid, "名称", nameof(LdInstanceRow.Name), 175);
+        TextColumn(ldGrid, "连接状态", nameof(LdInstanceRow.ConnectionState), 110);
         TextColumn(ldGrid, "安卓状态", nameof(LdInstanceRow.AndroidState), 110);
         TextColumn(ldGrid, "进程状态", nameof(LdInstanceRow.ProcessState), 110);
         TextColumn(ldGrid, "播放器进程", nameof(LdInstanceRow.ProcessId), 110);
@@ -5783,7 +6103,7 @@ public partial class MainWindow
         {
             try { await action(); }
             catch (Exception error) { ldFeedback.Text = label + "失败：" + ViewModel.PresentError(error); }
-        }, () => !ldBusy && !ViewModel.HasActiveOperations && ViewModel.Runtime.LdPlayer is not null && (!requireSelection || ldSelection is not null) && (!requirePackage || !string.IsNullOrWhiteSpace(ldPackage?.Text)) && (!requireText || !string.IsNullOrWhiteSpace(ldText?.Text)) && (!requireStarted || ldSelection?.Instance.AndroidStarted == true) && (!requireStopped || ldSelection?.Instance is { AndroidStarted: false, ProcessId: <= 0 }) && (!requireProcess || ldSelection?.Instance is { ProcessId: > 0 } || ldSelection?.Instance.AndroidStarted == true));
+        }, () => !ldBusy && !captureInProgress && !ViewModel.HasActiveOperations && ViewModel.ConnectionReloadAvailable && ViewModel.Runtime.LdPlayer is not null && (!requireSelection || ldSelection is not null && (ViewModel.Demo || ldSelection.Index > 0)) && (!requirePackage || !string.IsNullOrWhiteSpace(ldPackage?.Text)) && (!requireText || !string.IsNullOrWhiteSpace(ldText?.Text)) && (!requireStarted || ldSelection?.Instance.AndroidStarted == true && (ViewModel.Demo || LdInstanceConnected(ldSelection.Index))) && (!requireStopped || ldSelection?.Instance is { IsStarting: false, AndroidStarted: false, ProcessId: <= 0, VBoxProcessId: <= 0, TopWindow: 0, BindWindow: 0 }) && (!requireProcess || ldSelection?.Instance is { ProcessId: > 0 } || ldSelection?.Instance.AndroidStarted == true));
         ldCommands.Add(command);
         ldCommandsByLabel.Add(label, command);
         return Button(glyph, label, command);
@@ -5802,11 +6122,11 @@ public partial class MainWindow
         foreach (var instance in service.Instances)
         {
             var binding = ViewModel.Runtime.Settings.LdSerialBindings.TryGetValue(instance.Index, out var serial) ? serial + "（配置绑定，尚未核验）" : "尚未绑定";
-            ldRows.Add(new LdInstanceRow(instance, binding));
+            ldRows.Add(new LdInstanceRow(instance, binding, InstanceConnectionState(instance)));
         }
         ldGrid.SelectedItem = index is { } selected ? ldRows.FirstOrDefault(row => row.Index == selected) : null;
         if (ViewModel.Runtime.LdPlayerError is { } error) ldFeedback.Text = "雷电实例发现失败：" + ViewModel.PresentError(new InvalidOperationException(error));
-        else ldFeedback.Text = $"已发现 {ldRows.Count} 个雷电实例" + (ViewModel.Demo ? " · 演示模式，不连接真实雷电" : " · 本机实例");
+        else if (string.IsNullOrWhiteSpace(ldFeedback.Text)) ldFeedback.Text = ViewModel.Demo ? "演示模式" : "";
         RefreshLdButtons();
     }
 
@@ -5824,6 +6144,8 @@ public partial class MainWindow
         if (ViewModel.HasActiveOperations) throw new DeviceException("请先结束界面操作、脚本或文件传输，再操作雷电实例");
         var selected = ldSelection ?? throw new InvalidOperationException("未选择雷电实例");
         var service = ViewModel.Runtime.LdPlayer ?? throw new InvalidOperationException("雷电命令行能力尚未接入");
+        if (!ViewModel.Demo && selected.Index <= 0) throw new DeviceException("实例0受保护。", 403, 1003);
+        if (!ViewModel.Demo && operation is not ("launch" or "quit" or "reboot") && !LdInstanceConnected(selected.Index)) throw new DeviceException("请先接入该实例，再执行应用或输入操作。", 403, 1003);
         body ??= new JsonObject(); body["expectedGeneration"] = selected.Generation;
         if (operation is "quit" or "reboot")
         {
@@ -5834,16 +6156,19 @@ public partial class MainWindow
         ldBusy = true; ViewModel.SetExternalBusy(true); ldFeedback.Text = "正在执行所选实例命令…"; RefreshLdButtons();
         try
         {
+            ViewModel.Runtime.RequireFrozenConnectionSettings();
+            if (ViewModel.Runtime.Api.LdCommandIdentityGuard is { } verify) await verify(selected.Index, operation, CancellationToken.None);
             var result = await service.ExecuteAsync(selected.Index, operation, body, CancellationToken.None);
             UpdateLdPlayerRows();
-            ldFeedback.Text = $"实例 {result.Index}：{result.Message}\n接受状态：{(result.Accepted ? "已接受" : "未接受")}；结果核验：{(result.Verified ? "已核验" : "待核验")}";
+            ViewModel.Runtime.Log.Write("ld-command-result", $"index={result.Index}; accepted={result.Accepted}; verified={result.Verified}; {result.Message}");
+            ldFeedback.Text = $"实例 {result.Index}：" + (result.Verified ? "操作已完成" : "命令已提交，等待状态更新");
         }
         catch (Exception error) { UpdateLdPlayerRows(); ldFeedback.Text = $"实例 {selected.Index} 操作失败：{ViewModel.PresentError(error)}"; }
         finally { ldBusy = false; ViewModel.SetExternalBusy(false); RefreshLdButtons(); }
     }
 }
 
-public sealed class LdInstanceRow(LdPlayerInstance instance, string binding)
+public sealed class LdInstanceRow(LdPlayerInstance instance, string binding, string connectionState = "待接入")
 {
     public LdPlayerInstance Instance { get; } = instance;
     public int Index => Instance.Index;
@@ -5856,6 +6181,7 @@ public sealed class LdInstanceRow(LdPlayerInstance instance, string binding)
     public string Dpi => Instance.Dpi?.ToString() ?? "未核验";
     public long Generation => Instance.Generation;
     public string Binding { get; } = binding;
+    public string ConnectionState { get; } = connectionState;
 }
 
 ```
@@ -6553,6 +6879,342 @@ public partial class MainWindow
 
 ```
 
+## src/MatrixDevice.Desktop/Views/UnifiedDevicesAcceptance.cs
+
+```csharp
+using System.Diagnostics;
+using System.IO;
+using System.Text.Json;
+using MatrixDevice.Core;
+using MatrixDevice.Host;
+
+namespace MatrixDevice.Desktop;
+
+public partial class MainWindow
+{
+    internal async Task RunUnifiedAccessAcceptanceAsync(string output, string approvedCandidate)
+    {
+        if (ViewModel.Demo || !Path.IsPathFullyQualified(output) || !ViewModel.DataDirectory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("接入验收必须使用artifacts下的独立配置及绝对证据路径。");
+        var runtime = ViewModel.Runtime;
+        var service = runtime.LdPlayer ?? throw new InvalidOperationException("未配置雷电。");
+        if (runtime.Settings.AdbAllowedSerials.Length != 1 || runtime.Settings.LdSerialBindings.Count != 1 || !runtime.Settings.LdSerialBindings.ContainsKey(2))
+            throw new InvalidOperationException("验收初始配置必须仅授权独立测试实例2。");
+        var target = service.Instances.Single(item => item.Index == 1);
+        if (!target.Name.StartsWith("MatrixAcceptance-", StringComparison.Ordinal) || !target.AndroidStarted)
+            throw new InvalidOperationException("只允许已运行的独立验收实例1；本验收不会启动模拟器。");
+        var previouslyOnline = ViewModel.Devices.Where(row => row.Info.Online).Select(row => row.Serial).ToArray();
+        if (previouslyOnline.Length != 1) throw new InvalidOperationException("原授权实例2未就绪。");
+        Directory.CreateDirectory(output);
+        var completed = false;
+        await RunLdWorkspaceOperationAsync("独立实例接入验收", async ct =>
+        {
+            using var process = Process.GetProcessById(target.VBoxProcessId);
+            var proofs = await LdConnectionAdmission.ResolveAsync((AdbDeviceBackend)runtime.Backend, service, [1], [target], new Dictionary<int, long> { [1] = process.StartTime.ToUniversalTime().Ticks }, ct);
+            if (proofs.Single().Serial != approvedCandidate) throw new InvalidOperationException("验收目标串号与复制配置中预先批准的串号不符。");
+            if (proofs.Single().Serial == previouslyOnline[0]) throw new InvalidOperationException("接入目标与原设备串号重复。");
+            var before = ViewModel.Runtime;
+            using (var cancelled = new CancellationTokenSource())
+            {
+                cancelled.Cancel();
+                try { await ViewModel.ApplyLdConnectionsAsync(proofs, cancelled.Token); throw new InvalidOperationException("取消未生效。"); }
+                catch (OperationCanceledException) when (cancelled.IsCancellationRequested) { }
+            }
+            if (!ReferenceEquals(before, ViewModel.Runtime) || ViewModel.Runtime.Settings.AdbAllowedSerials.Length != 1)
+                throw new InvalidOperationException("取消接入改变了旧授权或运行时。");
+            await ViewModel.ApplyLdConnectionsAsync(proofs, ct);
+            if (ReferenceEquals(before, ViewModel.Runtime) || ViewModel.Runtime.Settings.LdSerialBindings.Count != 2 || ViewModel.Devices.Count(row => row.Info.Online) != 2)
+                throw new InvalidOperationException("运行时未完成接入替换。");
+            foreach (var index in new[] { 1, 2 }) if (!LdInstanceConnected(index)) throw new InvalidOperationException("实例未进入已连接状态：" + index);
+            await ViewModel.RefreshAutomaticScreensAsync(ViewModel.Devices.Select(row => row.Serial).ToArray(), ct);
+            if (ViewModel.Devices.Any(row => row.Screenshot is null)) throw new InvalidOperationException("接入后截图为空。");
+            UpdateLdPlayerRows(); UpdateUnifiedDirectory(); NavigateTo("设备墙 / 主控");
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            SaveRender(Path.Combine(output, "connected.png"));
+            await File.WriteAllTextAsync(Path.Combine(output, "result.json"), JsonSerializer.Serialize(new
+            {
+                passed = true, existingIndex = 2, admittedIndex = 1, cancellationPreservedRuntime = true,
+                originalAuthorizationPreserved = true, localInstances = service.Instances.Count,
+                connectedDevices = ViewModel.Devices.Count(row => row.Info.Online),
+                runtimeReplaced = true, screenshotsAvailable = true,
+                emulatorLaunchNotRequested = true, scopeLimitedToApprovedIndices = true
+            }, JsonDefaults.Options));
+            completed = true;
+        });
+        if (!completed) throw new InvalidOperationException("接入验收未完成：" + ldFeedback.Text);
+    }
+}
+
+```
+
+## src/MatrixDevice.Desktop/Views/UnifiedDevicesView.cs
+
+```csharp
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Media;
+using MatrixDevice.Core;
+using MatrixDevice.Host;
+
+namespace MatrixDevice.Desktop;
+
+public partial class MainWindow
+{
+    private readonly CancellationTokenSource directoryCancellation = new();
+    private Task? directoryOperation;
+    private CancellationTokenSource? ldOperationCancellation;
+    private readonly List<TextBlock> deviceSummaries = [];
+    private readonly List<(string Tag, ToggleButton Button)> deviceModes = [];
+    private WrapPanel pendingInstances = null!;
+    private Expander pendingSection = null!;
+    private DateTimeOffset lastGuestDiscovery;
+
+    private FrameworkElement BuildDeviceModes()
+    {
+        var row = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
+        foreach (var (tag, glyph, label) in new[] { ("设备墙 / 主控", "\uE8A9", "设备群控"), ("雷电实例", "\uE7F4", "本机模拟器") })
+        {
+            var choice = WallToggle(glyph, label);
+            choice.Click += (_, _) => NavigateTo(tag);
+            deviceModes.Add((tag, choice)); row.Children.Add(choice);
+        }
+        var summary = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Foreground = WallMuted, Margin = new Thickness(8, 0, 0, 6), TextWrapping = TextWrapping.Wrap };
+        deviceSummaries.Add(summary); row.Children.Add(summary);
+        return row;
+    }
+
+    private FrameworkElement BuildPendingInstances()
+    {
+        pendingInstances = new WrapPanel();
+        pendingSection = new Expander
+        {
+            Header = "待接入的本机模拟器", IsExpanded = true, Margin = new Thickness(0, 12, 0, 0),
+            Content = new ScrollViewer { Content = pendingInstances, MaxHeight = 125, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }
+        };
+        return pendingSection;
+    }
+
+    internal void UpdateUnifiedDirectory()
+    {
+        var instances = ViewModel.Runtime.LdPlayer?.Instances ?? [];
+        var connected = ViewModel.Devices.Count(row => row.Info.Online);
+        var admitted = instances.Count(instance => ViewModel.Runtime.Settings.LdSerialBindings.ContainsKey(instance.Index));
+        foreach (var summary in deviceSummaries) summary.Text = $"本机 {instances.Count} 台 · 已接入 {admitted} 台 · 已连接 {connected} 台";
+        foreach (var mode in deviceModes) mode.Button.IsChecked = Equals((tabs.SelectedItem as TabItem)?.Tag, mode.Tag);
+        if (pendingInstances is null) return;
+        pendingInstances.Children.Clear();
+        foreach (var instance in instances.Where(instance => !LdInstanceConnected(instance.Index)))
+        {
+            if (!string.IsNullOrWhiteSpace(ViewModel.Search) && !instance.Name.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) && !instance.Index.ToString().Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase)) continue;
+            if (ViewModel.GroupFilter is not ("全部分组" or "未分组")) continue;
+            var item = new StackPanel { Width = 218, Margin = new Thickness(10) };
+            item.Children.Add(new TextBlock { Text = instance.Name, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = instance.Name });
+            item.Children.Add(new TextBlock { Text = $"实例 {instance.Index} · {InstanceConnectionState(instance)}", Foreground = WallMuted, Margin = new Thickness(0, 6, 0, 8) });
+            var index = instance.Index;
+            item.Children.Add(Button("\uE768", instance.AndroidStarted ? "连接" : "启动并连接", () => ConnectLdInstancesAsync([index]), canExecute: () => !ViewModel.Demo && index > 0 && !ldBusy && !captureInProgress && !ViewModel.HasActiveOperations && ViewModel.ConnectionReloadAvailable));
+            pendingInstances.Children.Add(new Border { Child = item, BorderBrush = WallBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Margin = new Thickness(0, 6, 10, 0) });
+        }
+        pendingSection.Visibility = pendingInstances.Children.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        pendingSection.Header = $"待接入的本机模拟器（{pendingInstances.Children.Count}台）";
+    }
+
+    private bool LdInstanceConnected(int index) => ViewModel.Runtime.Settings.LdSerialBindings.TryGetValue(index, out var serial)
+        && ViewModel.Runtime.Api.LdSerialForWriteGuard?.Invoke(index) == serial
+        && ViewModel.Devices.Any(row => row.Serial == serial && row.Info.Online);
+
+    private string InstanceConnectionState(LdPlayerInstance instance) => instance.Index == 0 && !ViewModel.Demo ? "受保护" : LdInstanceConnected(instance.Index) ? "已连接"
+        : instance.IsStarting || (!instance.AndroidStarted && (instance.ProcessId > 0 || instance.VBoxProcessId > 0)) ? "启动中"
+        : !instance.AndroidStarted ? "已关闭" : ViewModel.Runtime.Settings.LdSerialBindings.ContainsKey(instance.Index) ? "需重新接入" : "待接入";
+
+    private Task UpdateDeviceDirectoryAsync()
+    {
+        if (ViewModel.Demo || closing || directoryCancellation.IsCancellationRequested || ldBusy || captureInProgress || ViewModel.HasActiveOperations || directoryOperation is { IsCompleted: false }) return Task.CompletedTask;
+        directoryOperation = RefreshDirectoryCoreAsync();
+        return directoryOperation;
+    }
+
+    private async Task RefreshDirectoryCoreAsync()
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(directoryCancellation.Token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        try
+        {
+            if (ViewModel.Runtime.LdPlayer is not null) await ViewModel.Runtime.RefreshLdPlayerAsync(deadline.Token);
+            UpdateLdPlayerRows();
+            if (DateTimeOffset.UtcNow - lastGuestDiscovery >= TimeSpan.FromSeconds(15))
+            {
+                lastGuestDiscovery = DateTimeOffset.UtcNow;
+                await ViewModel.RefreshDeviceSnapshotAsync(deadline.Token);
+            }
+            if (ldFeedback.Text.StartsWith("自动更新失败：", StringComparison.Ordinal)) ldFeedback.Text = "";
+            UpdateUnifiedDirectory();
+        }
+        catch (OperationCanceledException) when (directoryCancellation.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            ViewModel.Runtime.Log.Write("directory-refresh-error", ex.ToString());
+            ldFeedback.Text = "自动更新失败：" + ViewModel.PresentError(ex);
+        }
+    }
+
+    private async Task RunLdWorkspaceOperationAsync(string title, Func<CancellationToken, Task> operation)
+    {
+        if (ldBusy || captureInProgress || ViewModel.HasActiveOperations || scanOperation is { IsCompleted: false }) throw new DeviceException("请等待当前操作或网络扫描结束。", 409, 1003);
+        if (!ViewModel.ConnectionReloadAvailable) throw new DeviceException("请先停止接口服务、脚本和文件传输。", 409, 1003);
+        if (ViewModel.Demo) throw new DeviceException("演示模式不会操作真实模拟器。", 409, 1003);
+        ViewModel.Runtime.RequireFrozenConnectionSettings();
+        ldBusy = true; ViewModel.SetExternalBusy(true); RefreshLdButtons();
+        using var cancellation = new CancellationTokenSource(); ldOperationCancellation = cancellation;
+        try
+        {
+            if (directoryOperation is not null) await directoryOperation;
+            ldFeedback.Text = title;
+            await operation(cancellation.Token);
+            ViewModel.Runtime.Log.Write("ld-workspace-complete", title);
+        }
+        catch (OperationCanceledException) { ldFeedback.Text = "已停止等待及后续任务，已启动的实例保持运行。"; ViewModel.Runtime.Log.Write("ld-workspace-cancel", title); }
+        catch (Exception ex) { ldFeedback.Text = title + "失败：" + ViewModel.PresentError(ex); ViewModel.Runtime.Log.Write("ld-workspace-error", ex.ToString()); }
+        finally
+        {
+            ldOperationCancellation = null; ldBusy = false; ViewModel.SetExternalBusy(false);
+            UpdateLdPlayerRows(); UpdateUnifiedDirectory(); RefreshLdButtons();
+        }
+    }
+
+    private IProgress<LdLaunchProgress> LaunchProgress() => new Progress<LdLaunchProgress>(progress =>
+    {
+        ldFeedback.Text = $"实例 {progress.Index}：" + (progress.State switch { "checking-resources" => "检查资源", "starting" => "正在启动", "waiting" => "等待安卓就绪", "ready" or "skipped" => "已启动，等待接入", "cancelled" => "已取消", _ => "启动失败" });
+        ViewModel.Runtime.Log.Write("ld-launch-" + progress.State, $"index={progress.Index}; {progress.Message}");
+        UpdateLdPlayerRows(); UpdateUnifiedDirectory();
+    });
+
+    private async Task StartAllLdInstancesAsync()
+    {
+        var confirmedInstances = ViewModel.Runtime.LdPlayer?.Instances.Where(item => item.Index > 0 && item.Index != 99999).ToArray() ?? [];
+        var indices = confirmedInstances.Select(item => item.Index).ToArray();
+        if (indices.Length == 0) throw new DeviceException("没有可启动的独立实例。", 404, 1002);
+        if (!ViewModel.Confirm("启动全部雷电实例", $"将依次检查并启动 {indices.Length} 台独立实例，跳过已运行实例和受保护实例0。\n每台启动前要求至少11 GiB可用内存（8 GiB实例预算及3 GiB系统预留）；资源不足立即停止。\n此操作不会自动授权新设备；启动后可用“接入已运行实例”加入群控。继续？")) return;
+        await RunLdWorkspaceOperationAsync("启动全部实例", async ct =>
+        {
+            var coordinator = new LdLaunchCoordinator(ViewModel.Runtime.LdPlayer!);
+            await coordinator.StartAsync(indices, EnsureLaunchResourcesAsync, LaunchProgress(), ct, expectedInstances: confirmedInstances);
+            ldFeedback.Text = "批次启动完成；新设备待接入。";
+        });
+    }
+
+    private Task ConnectRunningLdInstancesAsync()
+    {
+        var indices = ViewModel.Runtime.LdPlayer?.Instances.Where(item => item.Index > 0 && item.Index != 99999 && item.AndroidStarted && !LdInstanceConnected(item.Index)).Select(item => item.Index).ToArray() ?? [];
+        return ConnectLdInstancesAsync(indices);
+    }
+
+    private async Task ConnectLdInstancesAsync(int[] indices)
+    {
+        if (indices.Length == 0) throw new DeviceException("没有待接入的已运行实例。", 404, 1002);
+        if (indices.Any(index => index <= 0 || index == 99999)) throw new DeviceException("实例0受保护，不能自动接入。", 403, 1003);
+        var service = ViewModel.Runtime.LdPlayer ?? throw new DeviceException("雷电服务未配置。", 503, 2001);
+        var confirmedInstances = indices.Select(index => service.Instances.Single(item => item.Index == index)).ToArray();
+        var expectedBirths = confirmedInstances.Where(item => item.VBoxProcessId > 0).ToDictionary(item => item.Index, VBoxBirth);
+        var names = string.Join("\n", confirmedInstances.Select(item => $"{item.Index}：{item.Name}"));
+        if (!ViewModel.Confirm("接入雷电实例", names + "\n将启动已关闭实例，并核验实际ADB连接、安卓启动和截图；通过后保存授权并加入群控。不会登录、清数据、接受协议或授权敏感权限。继续？")) return;
+        await RunLdWorkspaceOperationAsync("接入雷电设备", async ct =>
+        {
+            var started = await new LdLaunchCoordinator(service).StartAsync(indices, EnsureLaunchResourcesAsync, LaunchProgress(), ct, expectedInstances: confirmedInstances);
+            var expected = started.Select(result => result.Instance ?? throw new DeviceException("启动结果缺少实例快照。", 409, 1003)).ToArray();
+            foreach (var instance in expected)
+                if (!expectedBirths.ContainsKey(instance.Index)) expectedBirths.Add(instance.Index, VBoxBirth(instance));
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(TimeSpan.FromSeconds(90));
+            IReadOnlyList<LdConnectionProof> proofs;
+            while (true)
+            {
+                try { proofs = await LdConnectionAdmission.ResolveAsync((AdbDeviceBackend)ViewModel.Runtime.Backend, service, indices, expected, expectedBirths, deadline.Token); break; }
+                catch (DeviceException ex) when (ex.Status == 409 && ex.Code == 2002)
+                { ldFeedback.Text = "等待雷电注册ADB连接…"; await Task.Delay(1500, deadline.Token); }
+            }
+            ldFeedback.Text = "正在核验安卓启动与截图…";
+            await ViewModel.ApplyLdConnectionsAsync(proofs, deadline.Token);
+            UpdateLdPlayerRows(); UpdateUnifiedDirectory(); NavigateTo("设备墙 / 主控");
+            ldFeedback.Text = $"已接入 {proofs.Count} 台设备。";
+        });
+    }
+
+    private static long VBoxBirth(LdPlayerInstance instance)
+    {
+        using var process = System.Diagnostics.Process.GetProcessById(instance.VBoxProcessId);
+        var birth = process.StartTime.ToUniversalTime().Ticks;
+        if (process.HasExited) throw new DeviceException($"实例{instance.Index}的虚拟机进程已退出。", 409, 1003);
+        return birth;
+    }
+
+    private static Task EnsureLaunchResourcesAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var memory = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
+        if (!GlobalMemoryStatusEx(ref memory)) throw new DeviceException("无法读取系统内存，未启动新实例。", 503, 2000);
+        if (memory.AvailablePhysical < 11UL * 1024 * 1024 * 1024 || memory.MemoryLoad >= 80)
+            throw new DeviceException($"资源不足：可用内存 {memory.AvailablePhysical / 1073741824d:0.0} GiB，负载 {memory.MemoryLoad}%；至少需要11 GiB可用内存且负载低于80%。已运行实例保持不变。", 409, 1003);
+        return Task.CompletedTask;
+    }
+
+    private async Task EditLdInstanceAsync(bool create)
+    {
+        var selected = ldSelection;
+        if (!create && selected is null) throw new DeviceException("请选择已停止的实例。", 400, 1007);
+        var name = new TextBox { Text = create ? "矩阵测试-" + DateTime.Now.ToString("MMdd-HHmmss") : selected!.Name, IsReadOnly = !create };
+        var cpu = new ComboBox { ItemsSource = new[] { 1, 2, 3, 4 }, SelectedItem = create ? 2 : (object?)null };
+        var memory = new ComboBox { ItemsSource = new[] { 256, 512, 768, 1024, 1536, 2048, 4096, 8192 }, SelectedItem = create ? 2048 : (object?)null };
+        var width = new TextBox { Text = (selected?.Instance.Width ?? 1280).ToString() };
+        var height = new TextBox { Text = (selected?.Instance.Height ?? 720).ToString() };
+        var dpi = new TextBox { Text = (selected?.Instance.Dpi ?? 240).ToString() };
+        var content = new StackPanel { Margin = new Thickness(20) };
+        foreach (var field in new[] { Field("名称", name, 90), Field("新CPU核数", cpu, 90), Field("新内存 MiB", memory, 90), Field("宽度", width, 90), Field("高度", height, 90), Field("DPI", dpi, 90) }) content.Children.Add(field);
+        var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Firebrick, Margin = new Thickness(0, 0, 0, 8) }; content.Children.Add(error);
+        var dialog = new Window { Owner = this, Title = create ? "新建空白模拟器" : "冷态资源配置", Width = 420, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = content };
+        LdInstanceConfiguration? configuration = null;
+        var submit = new Button { Content = create ? "创建并配置" : "保存配置", IsDefault = true, Margin = new Thickness(0, 6, 0, 0) };
+        submit.Click += (_, _) =>
+        {
+            try
+            {
+                if (!int.TryParse(width.Text, out var w) || !int.TryParse(height.Text, out var h) || !int.TryParse(dpi.Text, out var d)) throw new DeviceException("宽度、高度和DPI必须是整数。");
+                if (cpu.SelectedItem is null || memory.SelectedItem is null) throw new DeviceException("请选择新的CPU核数和内存值。");
+                configuration = new((int)cpu.SelectedItem, (int)memory.SelectedItem, w, h, d); LdInstanceEditor.Validate(configuration);
+                dialog.DialogResult = true;
+            }
+            catch (Exception ex) { error.Text = ViewModel.PresentError(ex); }
+        };
+        content.Children.Add(submit);
+        if (dialog.ShowDialog() != true || configuration is null) return;
+        if (!ViewModel.Confirm(create ? "新建空白雷电实例" : "修改雷电实例资源", create ? $"创建空白实例“{name.Text.Trim()}”，配置 {configuration.Cpu}核 / {configuration.MemoryMb} MiB / {configuration.Width}×{configuration.Height}。\n不会复制账号或数据，不自动启动。继续？" : $"仅修改实例 {selected!.Index}：{selected.Name} 的CPU、内存和分辨率；不会修改设备身份。配置后需启动验证。继续？")) return;
+        await RunLdWorkspaceOperationAsync(create ? "新建空白实例" : "配置实例", async ct =>
+        {
+            var editor = ViewModel.Runtime.LdEditor ?? throw new DeviceException("雷电编辑能力未配置，请重启程序。", 503, 2001);
+            var target = selected?.Instance;
+            if (create)
+            {
+                var result = await editor.CreateAsync(name.Text.Trim(), ct); target = result.Instance;
+                ViewModel.Runtime.Log.Write("ld-create", result.Message);
+            }
+            LdPlayerCommandResult configured;
+            try { configured = await editor.ConfigureAsync(target!.Index, target.Generation, configuration, ct); }
+            catch (Exception ex) when (create && ex is not OperationCanceledException)
+            { throw new DeviceException($"已创建实例 {target!.Index}：{target.Name}，但配置失败：{ex.Message}。未删除或重复创建，请检查目录。", 409, 1003); }
+            ViewModel.Runtime.Log.Write("ld-configure", configured.Message);
+            ldFeedback.Text = $"实例 {target.Index} 已提交资源配置，启动后核验生效情况。";
+        });
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MemoryStatus { public uint Length, MemoryLoad; public ulong TotalPhysical, AvailablePhysical, TotalPageFile, AvailablePageFile, TotalVirtual, AvailableVirtual, AvailableExtendedVirtual; }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GlobalMemoryStatusEx(ref MemoryStatus status);
+}
+
+```
+
 ## src/MatrixDevice.Desktop/Views/WallDeviceTile.cs
 
 ```csharp
@@ -6753,6 +7415,7 @@ public partial class MainWindow
         var page = new DockPanel { LastChildFill = true, Background = Brushes.White };
         var top = new StackPanel { Margin = new Thickness(22, 18, 22, 0) };
         DockPanel.SetDock(top, Dock.Top); page.Children.Add(top);
+        top.Children.Add(BuildDeviceModes());
         var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 18) };
         var modes = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var modeFrame = new Border { Child = modes, Background = new SolidColorBrush(Color.FromRgb(245, 247, 251)), CornerRadius = new CornerRadius(6), Padding = new Thickness(3) }; DockPanel.SetDock(modeFrame, Dock.Right); heading.Children.Add(modeFrame);
@@ -6767,10 +7430,9 @@ public partial class MainWindow
         var tools = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
         var select = WallButton("\uE73A", "全选", new ActionCommand(() => ViewModel.SelectFiltered(true))); select.ToolTip = "选择当前筛选中的全部设备"; tools.Children.Add(select);
         tools.Children.Add(WallButton("\uE711", "清空", new ActionCommand(ClearWallSelection)));
-        tools.Children.Add(WallButton("\uE72C", "刷新截图", ViewModel.WallRefreshCommand, primary: true));
         var mouse = WallToggle("\uE962", "同步鼠标"); mouse.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(WorkspaceViewModel.SyncMouse))); tools.Children.Add(mouse);
         var keyboard = WallToggle("\uE765", "同步键盘"); keyboard.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(WorkspaceViewModel.SyncKeyboard))); tools.Children.Add(keyboard);
-        var automatic = WallToggle("\uE787", "自动刷新"); automatic.Checked += (_, _) => { autoCapture = true; captureTimer.Start(); }; automatic.Unchecked += (_, _) => { autoCapture = false; captureTimer.Stop(); }; tools.Children.Add(automatic);
+        var automatic = WallToggle("\uE787", "自动截图"); automatic.IsChecked = true; automatic.Checked += (_, _) => { autoCapture = true; }; automatic.Unchecked += (_, _) => { autoCapture = false; }; tools.Children.Add(automatic);
         wallMainToggle = WallToggle("\uE7F4", "主控面板"); wallMainToggle.Checked += (_, _) => UpdateWallMainPanel(); wallMainToggle.Unchecked += (_, _) => UpdateWallMainPanel(); tools.Children.Add(wallMainToggle);
         tools.Children.Add(BuildWallDensity()); top.Children.Add(tools);
         var context = new DockPanel { Margin = new Thickness(0, 0, 0, 13) };
@@ -6778,12 +7440,15 @@ public partial class MainWindow
         var targets = BoundText(nameof(WorkspaceViewModel.TargetContext)); targets.Foreground = WallMuted; targets.TextTrimming = TextTrimming.CharacterEllipsis; targets.Margin = new Thickness(0, 0, 20, 0); targets.SetBinding(ToolTipProperty, new Binding(nameof(WorkspaceViewModel.TargetContext))); context.Children.Add(targets); top.Children.Add(context);
         top.Children.Add(new Border { Height = 1, Background = WallBorder });
         wallWorkspace = new Grid { Margin = new Thickness(22, 18, 22, 18) };
+        wallWorkspace.RowDefinitions.Add(new RowDefinition()); wallWorkspace.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         wallWorkspace.ColumnDefinitions.Add(new ColumnDefinition()); wallWorkspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0) });
         var views = new Grid(); wallWorkspace.Children.Add(views);
         wallCards = BuildWallItems("cards"); views.Children.Add(wallCards);
         wallScreens = BuildWallItems("screens"); views.Children.Add(wallScreens);
         wallList = BuildWallList(); views.Children.Add(wallList);
         wallMainPanel = BuildWallMainPanel(); Grid.SetColumn(wallMainPanel, 1); wallWorkspace.Children.Add(wallMainPanel);
+        var pending = BuildPendingInstances(); Grid.SetRow(pending, 1); Grid.SetColumnSpan(pending, 2); wallWorkspace.Children.Add(pending);
+        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Search) or nameof(WorkspaceViewModel.GroupFilter)) UpdateUnifiedDirectory(); };
         page.Children.Add(wallWorkspace); SetWallViewMode("cards"); return page;
     }
 
@@ -7038,6 +7703,7 @@ public partial class MainWindow
         var links = new StackPanel { Margin = new Thickness(10, 0, 10, 8) };
         foreach (var item in WorkspacePages)
         {
+            if (item.Tag == "雷电实例") continue;
             var content = new StackPanel { Orientation = Orientation.Horizontal };
             var glyph = ShellGlyph(item.Icon); glyph.Width = 28; content.Children.Add(glyph);
             var caption = new TextBlock { Text = item.Label, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
@@ -7070,11 +7736,12 @@ public partial class MainWindow
         search.Children.Add(hint); input.TextChanged += (_, _) => hint.Visibility = input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         hint.Visibility = input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         Grid.SetColumn(search, 1); row.Children.Add(search);
-        var refresh = Button("\uE72C", "刷新设备", ViewModel.RefreshCommand); refresh.MinHeight = 38; Grid.SetColumn(refresh, 2); row.Children.Add(refresh);
-        var scan = Button("\uE721", "扫描设备", ShowScanner); scan.SetResourceReference(StyleProperty, "PrimaryButton"); scan.MinHeight = 38;
-        Grid.SetColumn(scan, 3); row.Children.Add(scan);
         var settings = new Button { Content = ShellGlyph("\uE713"), ToolTip = "环境设置", MinHeight = 38 };
         settings.SetResourceReference(StyleProperty, "IconButton"); settings.Click += (_, _) => NavigateTo("设置"); Grid.SetColumn(settings, 4); row.Children.Add(settings);
+        var advanced = new ContextMenu();
+        var network = new MenuItem { Header = "网络连接（高级）" }; network.Click += (_, _) => ShowScanner(); advanced.Items.Add(network);
+        var refresh = new MenuItem { Header = "立即更新目录" }; refresh.Click += async (_, _) => await UpdateDeviceDirectoryAsync(); advanced.Items.Add(refresh);
+        settings.ContextMenu = advanced;
         return surface;
     }
 
@@ -7120,8 +7787,10 @@ public partial class MainWindow
     private void UpdateNavigation()
     {
         var selected = (tabs.SelectedItem as TabItem)?.Tag?.ToString();
-        foreach (var item in navigation) item.Value.IsChecked = item.Key == selected;
-        if (selected is not null && navigation.TryGetValue(selected, out var active) && active.IsLoaded) active.BringIntoView();
+        var activeTag = selected == "雷电实例" ? "设备墙 / 主控" : selected;
+        foreach (var item in navigation) item.Value.IsChecked = item.Key == activeTag;
+        foreach (var mode in deviceModes) mode.Button.IsChecked = mode.Tag == selected;
+        if (activeTag is not null && navigation.TryGetValue(activeTag, out var active) && active.IsLoaded) active.BringIntoView();
         var label = WorkspacePages.FirstOrDefault(page => page.Tag == selected).Label ?? "设备管理";
         Title = "矩阵设备 · " + label + (ViewModel.Demo ? " · 演示模式" : "");
     }
@@ -7151,7 +7820,7 @@ public partial class MainWindow
         {
             var scanner = BuildScanner();
             if (scanner is Expander expander) expander.IsExpanded = true;
-            scannerWindow = new Window { Owner = this, DataContext = ViewModel, Title = "扫描设备", Width = 460, Height = 420, MinWidth = 360, MinHeight = 360, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            scannerWindow = new Window { Owner = this, DataContext = ViewModel, Title = "网络连接（高级）", Width = 460, Height = 420, MinWidth = 360, MinHeight = 360, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             scannerWindow.Content = new ScrollViewer { Content = new Border { Padding = new Thickness(20), Child = scanner }, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
             scannerWindow.Closing += (_, args) => { if (!closing) { scanCancellation?.Cancel(); args.Cancel = true; scannerWindow.Hide(); } };
         }
@@ -7180,7 +7849,7 @@ namespace MatrixDevice.Desktop;
 
 public sealed class WorkspaceViewModel : ObservableObject
 {
-    private readonly MatrixRuntime runtime;
+    private MatrixRuntime runtime;
     private readonly string dataDirectory;
     private readonly bool demo;
     private readonly List<object> commands = [];
@@ -7214,9 +7883,9 @@ public sealed class WorkspaceViewModel : ObservableObject
     private string deviceGroup = "";
     private string settingsNotice = "";
 
-    public WorkspaceViewModel(MatrixRuntime runtime, string dataDirectory, bool demo)
+    public WorkspaceViewModel(MatrixRuntime initialRuntime, string dataDirectory, bool demo)
     {
-        this.runtime = runtime;
+        runtime = initialRuntime;
         this.dataDirectory = dataDirectory;
         this.demo = demo;
         error = string.Join("\n", new[] { runtime.DiscoveryError, runtime.ApiStartupError }.Where(message => message is not null));
@@ -7388,9 +8057,16 @@ public sealed class WorkspaceViewModel : ObservableObject
         catch (Exception logError) { System.Diagnostics.Trace.WriteLine("界面诊断日志写入失败：" + logError); }
         return UiErrorPresentation.Describe(error);
     }
-    public Task RefreshDevicesAsync() => ExecuteAsync("发现设备", async () =>
+    public Task RefreshDevicesAsync() => ExecuteAsync("发现设备", () => RefreshDeviceSnapshotAsync());
+
+    internal async Task RefreshDeviceSnapshotAsync(CancellationToken ct = default)
     {
-        await runtime.RefreshAsync(CancellationToken.None);
+        await runtime.RefreshAsync(ct);
+        await ApplyCachedDeviceSnapshotAsync();
+    }
+
+    private async Task ApplyCachedDeviceSnapshotAsync()
+    {
         var rows = runtime.GetDevices();
         foreach (var info in rows)
         {
@@ -7416,7 +8092,58 @@ public sealed class WorkspaceViewModel : ObservableObject
         RefreshApiRows();
         RefreshFilter();
         if (demo && CurrentDevice is null) CurrentDevice = Devices.FirstOrDefault();
-    });
+    }
+
+    internal bool ConnectionReloadAvailable => !Transferring && !Devices.Any(row => ScriptBusy(row.Serial)) && !runtime.Api.BasicRunning && !runtime.Api.AutomatorRunning && runtime.Api.DevicePorts.Count == 0 && !runtime.Api.HasActiveRequests;
+
+    internal async Task ApplyLdConnectionsAsync(IReadOnlyList<LdConnectionProof> proofs, CancellationToken ct)
+    {
+        if (!ConnectionReloadAvailable) throw new DeviceException("请先停止接口服务、脚本和文件传输，再接入设备。", 409, 1003);
+        runtime.RequireFrozenConnectionSettings();
+        var old = runtime;
+        var source = old.Backend as AdbDeviceBackend ?? throw new DeviceException("演示模式不接入真实设备。", 409, 1003);
+        var service = old.LdPlayer ?? throw new DeviceException("雷电服务未配置。", 409, 1003);
+        var settings = LdConnectionAdmission.Apply(old.Settings, proofs);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(TimeSpan.FromSeconds(60));
+        await old.Input.HandoffAsync(null, deadline.Token);
+        await using (var probe = new AdbDeviceBackend(settings with { AdbAllowedSerials = proofs.Select(proof => proof.Serial).ToArray(), CommandTimeoutSeconds = 15 }))
+        {
+            probe.InheritServerEpoch(source);
+            foreach (var proof in proofs)
+                probe.RegisterIdentityGuard(proof.Serial, token => LdPlayerAdbBinding.VerifyAsync(proof.Serial, proof.VBoxPid, proof.VBoxBirth, token));
+            var observed = await probe.DiscoverAsync(deadline.Token);
+            foreach (var proof in proofs)
+            {
+                if (!observed.Any(device => device.Serial == proof.Serial && device.Online && device.TransportId == proof.TransportId)) throw new DeviceException("已核验实例的ADB连接已变化。", 409, 1003);
+                while ((await probe.ShellAsync(proof.Serial, "getprop sys.boot_completed", ct: deadline.Token)).Trim() != "1") await Task.Delay(500, deadline.Token);
+                PngImage.ReadDimensions(await probe.ScreenshotAsync(proof.Serial, deadline.Token));
+                var current = (await service.RefreshAsync(deadline.Token)).Single(item => item.Index == proof.Index);
+                if (current.Generation != proof.Generation) throw new DeviceException("接入过程中实例发生变化，未保存新授权。", 409, 1003);
+            }
+        }
+        MatrixRuntime? replacement = null;
+        try
+        {
+            replacement = await MatrixRuntime.CreateAsync(settings, dataDirectory, false, proofs, source, deadline.Token);
+            foreach (var proof in proofs)
+                if (!replacement.GetDevices().Any(device => device.Serial == proof.Serial && device.Online && device.TransportId == proof.TransportId)) throw new DeviceException("新连接未就绪，原工作区保持不变。", 409, 1003);
+            if (!ConnectionReloadAvailable) throw new DeviceException("工作区出现活动任务，取消接入。", 409, 1003);
+            deadline.Token.ThrowIfCancellationRequested();
+            replacement.Settings = replacement.SettingsStore.Save(settings);
+        }
+        catch { if (replacement is not null) await replacement.DisposeAsync(); throw; }
+        old.Scripts.EntryAdded -= OnScriptLog; old.Scripts.StatusChanged -= OnScriptStatus;
+        runtime = replacement;
+        runtime.Scripts.EntryAdded += OnScriptLog; runtime.Scripts.StatusChanged += OnScriptStatus;
+        SyncApiWriteGuard();
+        Settings.AdbSerialsJson = JsonSerializer.Serialize(runtime.Settings.AdbAllowedSerials, JsonDefaults.Options);
+        Settings.LdBindingsJson = JsonSerializer.Serialize(runtime.Settings.LdSerialBindings, JsonDefaults.Options);
+        Settings.Changed(nameof(SettingsEditor.AdbSerialsJson)); Settings.Changed(nameof(SettingsEditor.LdBindingsJson));
+        MainDevice = null; ClearNodes(); Apps.Clear();
+        try { await old.DisposeAsync(); } catch (Exception ex) { runtime.Log.Write("previous-runtime-cleanup-error", ex.ToString()); }
+        await ApplyCachedDeviceSnapshotAsync();
+        Changed(nameof(ApiSummary)); AddActivity($"已接入{proofs.Count}台雷电设备");
+    }
 
     public Task SaveMetadataAsync() => ExecuteAsync("保存设备信息", async () =>
     {
@@ -7460,6 +8187,21 @@ public sealed class WorkspaceViewModel : ObservableObject
         }
         WallChanged?.Invoke();
     });
+
+    internal async Task RefreshAutomaticScreensAsync(string[] serials, CancellationToken ct)
+    {
+        foreach (var serial in serials)
+        {
+            ct.ThrowIfCancellationRequested();
+            var row = Devices.FirstOrDefault(item => item.Serial == serial && item.Info.Online);
+            if (row is null) continue;
+            try { row.Screenshot = DecodeImage(await runtime.Backend.ScreenshotAsync(serial, ct)); row.CapturedAt = DateTimeOffset.UtcNow; row.ScreenState = "截图可用"; }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { row.ScreenState = "截图失败：" + PresentError(ex); runtime.Log.Write("auto-screenshot-error", ex.Message, serial); }
+        }
+        if (CurrentDevice is not null) { ClearNodes(); DebugImage = CurrentDevice.Screenshot; }
+        WallChanged?.Invoke();
+    }
 
     public async Task SetMainAsync(DeviceRow row)
     {
@@ -9447,6 +10189,14 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
     private readonly Dictionary<int, DateTimeOffset> _cooldown = [];
     private int _basicPort;
     private int _automatorPort;
+    private int activeRequests;
+    public bool HasActiveRequests => Volatile.Read(ref activeRequests) != 0;
+    private async Task TrackRequestAsync(Func<Task> action)
+    {
+        Interlocked.Increment(ref activeRequests);
+        try { await action(); }
+        finally { Interlocked.Decrement(ref activeRequests); }
+    }
     public bool BasicRunning => _basic is not null;
     public bool AutomatorRunning => _automator is not null;
     public int? RunningBasicPort => BasicRunning ? _basicPort : null;
@@ -9458,6 +10208,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
     public Func<string, bool>? ScriptWriteBusy { get; set; }
     public Func<bool>? AnyScriptWriteBusy { get; set; }
     public Func<int, string?>? LdSerialForWriteGuard { get; set; }
+    public Func<int, string, CancellationToken, Task>? LdCommandIdentityGuard { get; set; }
     private void RequireWriteAvailable(string? serial = null)
     {
         if (UiWriteBusy || (serial is null ? AnyScriptWriteBusy?.Invoke() == true : ScriptWriteBusy?.Invoke(serial) == true))
@@ -9478,7 +10229,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             ValidatePort(port);
             if (_automatorPort == port || _devices.Values.Any(x => x.Port == port)) throw new DeviceException("Port already reserved: " + port);
             var app = CreateServer(port);
-            app.Run(context => HandleBasicGatewayAsync(context, port));
+            app.Run(context => TrackRequestAsync(() => HandleBasicGatewayAsync(context, port)));
             await StartServerAsync(app, ct);
             _basic = app;
             _basicPort = port;
@@ -9498,7 +10249,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             ValidatePort(port);
             if (_basicPort == port || _devices.Values.Any(x => x.Port == port)) throw new DeviceException("Port already reserved: " + port);
             var app = CreateServer(port);
-            app.Run(HandleAutomatorAsync);
+            app.Run(context => TrackRequestAsync(() => HandleAutomatorAsync(context)));
             await StartServerAsync(app, ct);
             _automator = app;
             _automatorPort = port;
@@ -9519,7 +10270,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
                 if (port == _basicPort || port == _automatorPort || _devices.Values.Any(x => x.Port == port) || _cooldown.ContainsKey(port)) continue;
                 var app = CreateServer(port);
                 var reservedPort = port;
-                app.Run(context => HandleDeviceAsync(context, serial, reservedPort));
+                app.Run(context => TrackRequestAsync(() => HandleDeviceAsync(context, serial, reservedPort)));
                 try
                 {
                     await app.StartAsync(ct);
@@ -9621,6 +10372,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
                 var service = LdPlayer ?? throw new DeviceException("尚未配置雷电命令行程序", 503, 2001);
                 var body = await ReadBodyAsync(context);
                 RequireWriteAvailable(LdSerialForWriteGuard?.Invoke(index));
+                if (LdCommandIdentityGuard is not null) await LdCommandIdentityGuard(index, parts[3], context.RequestAborted);
                 data = await service.ExecuteAsync(index, parts[3], JsonNode.Parse(body.GetRawText())!.AsObject(), context.RequestAborted);
                 log.Write("ldplayer-command", $"index={index}, operation={parts[3]}");
             }
@@ -9878,6 +10630,87 @@ public sealed class RollingLog : IAsyncDisposable
 
 ```
 
+## src/MatrixDevice.Host/LdConnectionAdmission.cs
+
+```csharp
+using System.Diagnostics;
+using System.Net;
+using MatrixDevice.Core;
+
+namespace MatrixDevice.Host;
+
+public sealed record LdConnectionProof(int Index, string Name, long Generation, string Serial, uint TransportId, int VBoxPid, long VBoxBirth);
+
+public static class LdConnectionAdmission
+{
+    public static async Task<IReadOnlyList<LdConnectionProof>> ResolveAsync(AdbDeviceBackend backend, LdPlayerService service, int[] indices, IReadOnlyList<LdPlayerInstance> expectedInstances, IReadOnlyDictionary<int, long> expectedBirths, CancellationToken ct = default)
+    {
+        if (indices.Length == 0 || indices.Any(index => index <= 0 || index == 99999) || indices.Distinct().Count() != indices.Length)
+            throw new DeviceException("请选择不重复的独立雷电实例，受保护实例0不能自动接入。", 400, 1007);
+        var instances = await service.RefreshAsync(ct).ConfigureAwait(false);
+        RequireExpectedInstances(instances, indices, expectedInstances);
+        var registered = await backend.ListRegisteredDevicesAsync(ct).ConfigureAwait(false);
+        var proofs = new List<LdConnectionProof>();
+        foreach (var index in indices)
+        {
+            var instance = instances.SingleOrDefault(item => item.Index == index) ?? throw new DeviceException($"实例已不存在：{index}", 404, 1002);
+            if (!instance.AndroidStarted || instance.ProcessId <= 0 || instance.VBoxProcessId <= 0) throw new DeviceException($"实例{index}尚未完成启动。", 409, 1003);
+            using var process = Process.GetProcessById(instance.VBoxProcessId);
+            var birth = process.StartTime.ToUniversalTime().Ticks;
+            if (!expectedBirths.TryGetValue(index, out var expectedBirth) || birth != expectedBirth) throw new DeviceException($"实例{index}的虚拟机进程已变化，必须重新确认。", 409, 1003);
+            var matches = new List<(AdbRegisteredDevice Device, string Endpoint)>();
+            foreach (var device in registered.Where(item => item.State == "device" && item.TransportId is > 0).OrderBy(item => item.Serial.StartsWith("emulator-", StringComparison.Ordinal) ? 0 : 1))
+            {
+                var endpoint = LocalEndpoint(device.Serial);
+                if (endpoint is null) continue;
+                try { await LdPlayerAdbBinding.VerifyAsync(device.Serial, instance.VBoxProcessId, birth, ct).ConfigureAwait(false); }
+                catch (DeviceException) { continue; }
+                matches.Add((device, endpoint));
+            }
+            var endpoints = matches.GroupBy(item => item.Endpoint, StringComparer.Ordinal).ToArray();
+            if (endpoints.Length == 0) throw new DeviceException($"实例{index}尚未注册可核验的ADB连接。", 409, 2002);
+            if (endpoints.Length != 1) throw new DeviceException($"实例{index}存在多个ADB端点，不能唯一接入。", 409, 1003);
+            var chosen = endpoints[0].First().Device;
+            var current = (await service.RefreshAsync(ct).ConfigureAwait(false)).Single(item => item.Index == index);
+            if (current.Generation != instance.Generation || process.HasExited || process.StartTime.ToUniversalTime().Ticks != birth)
+                throw new DeviceException($"实例{index}在接入核验期间发生变化，请重试接入。", 409, 1003);
+            proofs.Add(new(index, instance.Name, instance.Generation, chosen.Serial, chosen.TransportId!.Value, instance.VBoxProcessId, birth));
+        }
+        if (proofs.Select(proof => proof.Serial).Distinct(StringComparer.Ordinal).Count() != proofs.Count) throw new DeviceException("多个实例不能接入同一设备连接。", 409, 1003);
+        return proofs.AsReadOnly();
+    }
+
+    public static void RequireExpectedInstances(IReadOnlyList<LdPlayerInstance> actual, int[] indices, IReadOnlyList<LdPlayerInstance> expected)
+    {
+        if (expected.Count != indices.Length || expected.Select(item => item.Index).Distinct().Count() != expected.Count || expected.Any(item => !indices.Contains(item.Index))) throw new DeviceException("接入实例快照不完整或重复。", 409, 1003);
+        foreach (var frozen in expected)
+        {
+            var current = actual.SingleOrDefault(item => item.Index == frozen.Index);
+            if (current is null || current.Generation != frozen.Generation || current.Name != frozen.Name || current.ProcessId != frozen.ProcessId || current.VBoxProcessId != frozen.VBoxProcessId)
+                throw new DeviceException($"实例 {frozen.Index} 在确认后发生变化，必须重新确认接入。", 409, 1003);
+        }
+    }
+
+    private static string? LocalEndpoint(string serial)
+    {
+        if (serial.StartsWith("emulator-", StringComparison.Ordinal) && int.TryParse(serial[9..], out var port) && port is > 0 and < 65535) return "127.0.0.1:" + (port + 1);
+        return IPEndPoint.TryParse(serial, out var endpoint) && IPAddress.IsLoopback(endpoint.Address) && endpoint.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? endpoint.ToString() : null;
+    }
+
+    public static AppSettings Apply(AppSettings settings, IReadOnlyList<LdConnectionProof> proofs)
+    {
+        if (proofs.Count == 0 || proofs.Any(proof => proof.Index <= 0 || proof.Index == 99999 || proof.Generation <= 0 || string.IsNullOrWhiteSpace(proof.Name) || LocalEndpoint(proof.Serial) is null || proof.TransportId == 0 || proof.VBoxPid <= 0 || proof.VBoxBirth <= 0)) throw new DeviceException("接入凭据无效。", 400, 1007);
+        if (proofs.Select(proof => proof.Index).Distinct().Count() != proofs.Count || proofs.Select(proof => proof.Serial).Distinct(StringComparer.Ordinal).Count() != proofs.Count) throw new DeviceException("接入凭据存在重复实例或串号。", 409, 1003);
+        var bindings = new Dictionary<int, string>(settings.LdSerialBindings);
+        var replaced = proofs.Where(proof => bindings.ContainsKey(proof.Index)).Select(proof => bindings[proof.Index]).ToHashSet(StringComparer.Ordinal);
+        foreach (var proof in proofs) bindings[proof.Index] = proof.Serial;
+        if (bindings.Values.Distinct(StringComparer.Ordinal).Count() != bindings.Count) throw new DeviceException("该连接已绑定其它实例，请先核对原绑定。", 409, 1003);
+        return settings with { LdSerialBindings = bindings, AdbAllowedSerials = settings.AdbAllowedSerials.Where(serial => !replaced.Contains(serial)).Concat(proofs.Select(proof => proof.Serial)).Distinct(StringComparer.Ordinal).ToArray(), AutoStartApi = false };
+    }
+}
+
+```
+
 ## src/MatrixDevice.Host/MatrixDevice.Host.csproj
 
 ```xml
@@ -9911,13 +10744,15 @@ public sealed class MatrixRuntime : IAsyncDisposable
     public required AutomationService Automation { get; init; }
     public required RollingLog Log { get; init; }
     public required AppSettings Settings { get; set; }
+    public required AppSettings FrozenConnectionSettings { get; init; }
     public LdPlayerService? LdPlayer { get; init; }
+    public LdInstanceEditor? LdEditor { get; init; }
     public string? LdPlayerError { get; private set; }
     public bool IsDemo { get; init; }
     public string? DiscoveryError { get; private set; }
     public string? ApiStartupError { get; private set; }
 
-    public static async Task<MatrixRuntime> CreateAsync(AppSettings settings, string dataDirectory, bool demo = false)
+    public static async Task<MatrixRuntime> CreateAsync(AppSettings settings, string dataDirectory, bool demo = false, IReadOnlyList<LdConnectionProof>? admissions = null, AdbDeviceBackend? epochSource = null, CancellationToken ct = default)
     {
         settings = settings with { Language = "zh-CN" };
         Directory.CreateDirectory(dataDirectory);
@@ -9934,12 +10769,14 @@ public sealed class MatrixRuntime : IAsyncDisposable
         InputCoordinator? input = null;
         ApiServiceManager? api = null;
         LdPlayerService? ldPlayer = null;
+        LdInstanceEditor? ldEditor = null;
         string? ldPlayerError = null;
         try
         {
         metadata = new CatalogRepository(Path.Combine(dataDirectory, "db.sqlite3"));
         log = new RollingLog(Path.Combine(dataDirectory, "logs"));
         backend = demo ? (IDeviceBackend)new DemoDeviceBackend() : new AdbDeviceBackend(settings);
+        if (backend is AdbDeviceBackend inheritedBackend && epochSource is not null) inheritedBackend.InheritServerEpoch(epochSource);
         var catalog = new DeviceCatalog(backend);
         var automation = new AutomationService(backend, catalog);
         if (backend is AdbDeviceBackend adb && !string.IsNullOrWhiteSpace(settings.AgentBaseUrl))
@@ -9949,11 +10786,13 @@ public sealed class MatrixRuntime : IAsyncDisposable
             automation.ServiceInfoProvider = async (serial, ct) =>
             {
                 if (serial != settings.AgentSerial) throw new DeviceException("No agent is bound to serial=" + serial, 501, 2001);
+                if (settings.LdSerialBindings.Values.Contains(serial, StringComparer.Ordinal)) await adb.VerifyIdentityAsync(serial, ct);
                 return await client.ServiceInfoAsync(ct);
             };
             automation.ServiceStop = async (serial, ct) =>
             {
                 if (serial != settings.AgentSerial) throw new DeviceException("No agent is bound to serial=" + serial, 501, 2001);
+                if (settings.LdSerialBindings.Values.Contains(serial, StringComparer.Ordinal)) await adb.VerifyIdentityAsync(serial, ct);
                 await client.StopServiceAsync(ct);
             };
         }
@@ -9969,10 +10808,17 @@ public sealed class MatrixRuntime : IAsyncDisposable
         if (demo) ldPlayer = new LdPlayerService(new DemoLdConsoleRunner(), true);
         else if (!string.IsNullOrWhiteSpace(settings.LdConsolePath))
         {
-            try { ldPlayer = new LdPlayerService(new LdConsoleRunner(settings.LdConsolePath, settings.CommandTimeoutSeconds)); }
+            try
+            {
+                var runner = new LdConsoleRunner(settings.LdConsolePath, settings.CommandTimeoutSeconds);
+                ldPlayer = new LdPlayerService(runner);
+                ldEditor = new LdInstanceEditor(runner, ldPlayer);
+            }
             catch (DeviceException e) { ldPlayerError = e.Message; log.Write("ldplayer-configuration-error", e.Message); }
         }
         api = new ApiServiceManager(catalog, backend, automation, log) { LdPlayer = ldPlayer };
+        if (admissions is { Count: > 0 } && (ldPlayer is null || admissions.Any(proof => !settings.LdSerialBindings.TryGetValue(proof.Index, out var serial) || serial != proof.Serial || !settings.AdbAllowedSerials.Contains(proof.Serial, StringComparer.Ordinal))))
+            throw new DeviceException("接入凭据与运行时授权不一致。", 409, 1003);
         bool ScriptBusy(string serial) => scripts.GetStatus(serial).State is ScriptRunState.Running or ScriptRunState.Cancelling;
         api.ScriptWriteBusy = ScriptBusy;
         api.AnyScriptWriteBusy = () => catalog.Snapshot.Any(device => ScriptBusy(device.Serial));
@@ -9980,26 +10826,34 @@ public sealed class MatrixRuntime : IAsyncDisposable
         {
             Backend = backend, Devices = catalog, Automation = automation, Scripts = scripts,
             Input = input, Api = api,
-            SettingsStore = store, Settings = settings, Metadata = metadata,
-            Log = log, IsDemo = demo, LdPlayer = ldPlayer, LdPlayerError = ldPlayerError
+            SettingsStore = store, Settings = settings, FrozenConnectionSettings = settings with { AdbAllowedSerials = settings.AdbAllowedSerials.ToArray(), LdSerialBindings = new(settings.LdSerialBindings) }, Metadata = metadata,
+            Log = log, IsDemo = demo, LdPlayer = ldPlayer, LdEditor = ldEditor, LdPlayerError = ldPlayerError
         };
         catalog.DeviceDisconnected += serial => { scripts.Stop(serial); log.Write("device-offline", "Device disconnected; script cancelled", serial); };
         runtime.Api.DeviceSnapshotProvider = runtime.GetDevices;
         scripts.EntryAdded += (serial, entry) => log.Write("script", entry.Message, serial);
-        if (demo || settings.AdbAllowedSerials.Length > 0)
+        if (demo)
         {
-            try { await runtime.RefreshAsync(); }
+            try { await runtime.RefreshAsync(ct); }
             catch (DeviceException e) { log.Write("discovery-error", e.Message); runtime.DiscoveryError = e.Message; }
         }
-        else runtime.DiscoveryError = "请在设置中填写授权设备串号 JSON，并由雷电启动 ADB 服务后刷新设备";
         if (ldPlayer is not null)
         {
-            try { await ldPlayer.RefreshAsync(); }
+            try { await ldPlayer.RefreshAsync(ct); }
+            catch (OperationCanceledException) { throw; }
             catch (Exception e) { runtime.LdPlayerError = e.Message; log.Write("ldplayer-discovery-error", e.Message); }
             var writeBindings = new Dictionary<int, (string Serial, long Generation)>();
             api.LdSerialForWriteGuard = index => writeBindings.TryGetValue(index, out var binding)
                 && ldPlayer.Instances.Any(instance => instance.Index == index && instance.Generation == binding.Generation)
                 ? binding.Serial : null;
+            if (!demo && backend is AdbDeviceBackend identityBackend)
+                api.LdCommandIdentityGuard = async (index, operation, token) =>
+                {
+                    if (index <= 0) throw new DeviceException("原实例0受保护，未发送雷电命令。", 403, 1003);
+                    if (operation is "launch" or "quit" or "reboot") return;
+                    var serial = api.LdSerialForWriteGuard(index) ?? throw new DeviceException("请先接入并核验该实例。", 403, 1003);
+                    await identityBackend.VerifyIdentityAsync(serial, token).ConfigureAwait(false);
+                };
             if (demo)
                 foreach (var binding in settings.LdSerialBindings.Where(pair => settings.AdbAllowedSerials.Contains(pair.Value, StringComparer.Ordinal)
                     && settings.LdSerialBindings.Count(other => other.Value == pair.Value) == 1))
@@ -10011,12 +10865,19 @@ public sealed class MatrixRuntime : IAsyncDisposable
             if (!demo && backend is AdbDeviceBackend adbBackend)
             {
                 var boundService = ldPlayer;
-                foreach (var binding in settings.LdSerialBindings.Where(pair => settings.AdbAllowedSerials.Contains(pair.Value, StringComparer.Ordinal)))
+                foreach (var binding in settings.LdSerialBindings.Where(pair => settings.AdbAllowedSerials.Contains(pair.Value, StringComparer.Ordinal)).GroupBy(pair => pair.Value, StringComparer.Ordinal).Select(group => group.First()))
                 {
                     var instance = ldPlayer.Instances.FirstOrDefault(item => item.Index == binding.Key && item.AndroidStarted);
+                    var expectedGeneration = instance?.Generation ?? 0;
+                    long expectedStarted = 0;
+                    var identityReady = false;
+                    adbBackend.RegisterIdentityGuard(binding.Value, async ct =>
+                    {
+                        if (!identityReady || instance is null || !boundService.Instances.Any(row => row.Index == binding.Key && row.Generation == expectedGeneration))
+                            throw new DeviceException("雷电连接身份已变化或尚未核验，请在设备管理中重新接入。", 409, 1003);
+                        await LdPlayerAdbBinding.VerifyAsync(binding.Value, instance.VBoxProcessId, expectedStarted, ct).ConfigureAwait(false);
+                    });
                     if (instance is null || settings.LdSerialBindings.Count(pair => pair.Value == binding.Value) != 1) continue;
-                    var expectedGeneration = instance.Generation;
-                    long expectedStarted;
                     try
                     {
                         using var process = System.Diagnostics.Process.GetProcessById(instance.VBoxProcessId);
@@ -10025,8 +10886,17 @@ public sealed class MatrixRuntime : IAsyncDisposable
                     }
                     catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
                     { log.Write("ldplayer-binding-error", "Cannot freeze the configured instance process: " + ex.Message, binding.Value); continue; }
-                    try { await LdPlayerAdbBinding.VerifyAsync(binding.Value, instance.VBoxProcessId, expectedStarted); }
+                    var proof = admissions?.SingleOrDefault(item => item.Index == binding.Key);
+                    if (epochSource is not null && proof is null)
+                    {
+                        try { await epochSource.VerifyIdentityAsync(binding.Value, ct); }
+                        catch (DeviceException ex) { log.Write("ldplayer-binding-error", "Existing authorization was not renewed: " + ex.Message, binding.Value); continue; }
+                    }
+                    try { await LdPlayerAdbBinding.VerifyAsync(binding.Value, instance.VBoxProcessId, expectedStarted, ct); }
                     catch (DeviceException ex) { log.Write("ldplayer-binding-error", ex.Message, binding.Value); continue; }
+                    if (proof is not null && (proof.Serial != binding.Value || proof.Name != instance.Name || proof.VBoxPid != instance.VBoxProcessId || proof.VBoxBirth != expectedStarted))
+                        throw new DeviceException("实例在接入期间发生变化，旧授权未替换。", 409, 1003);
+                    identityReady = true;
                     writeBindings[binding.Key] = (binding.Value, expectedGeneration);
                     adbBackend.RegisterUnicodeInput(binding.Value, async (text, ct) =>
                     {
@@ -10037,9 +10907,16 @@ public sealed class MatrixRuntime : IAsyncDisposable
                 }
             }
         }
+        if (!demo && settings.AdbAllowedSerials.Length > 0)
+        {
+            try { await runtime.RefreshAsync(ct); }
+            catch (DeviceException e) { log.Write("discovery-error", e.Message); runtime.DiscoveryError = e.Message; }
+        }
+        else if (!demo) runtime.DiscoveryError = "请选择需要接入的本机实例";
         if (settings.AutoStartApi)
         {
-            try { await runtime.StartApisAsync(); }
+            try { await runtime.StartApisAsync(ct); }
+            catch (OperationCanceledException) { throw; }
             catch (Exception e) { runtime.ApiStartupError = e.Message; log.Write("api-startup-error", e.Message); }
         }
         return runtime;
@@ -10061,6 +10938,12 @@ public sealed class MatrixRuntime : IAsyncDisposable
     {
         try { await Devices.RefreshAsync(ct); DiscoveryError = null; }
         catch (Exception e) { DiscoveryError = e.Message; throw; }
+    }
+    public void RequireFrozenConnectionSettings()
+    {
+        var frozen = FrozenConnectionSettings;
+        if (Settings.LdConsolePath != frozen.LdConsolePath || Settings.AdbPath != frozen.AdbPath || Settings.CommandTimeoutSeconds != frozen.CommandTimeoutSeconds || Settings.AgentBaseUrl != frozen.AgentBaseUrl || Settings.AgentSerial != frozen.AgentSerial || !Settings.AdbAllowedSerials.SequenceEqual(frozen.AdbAllowedSerials) || !Settings.LdSerialBindings.OrderBy(pair => pair.Key).SequenceEqual(frozen.LdSerialBindings.OrderBy(pair => pair.Key)))
+            throw new DeviceException("连接配置已保存但尚未生效，请重新启动矩阵设备后再接入或管理实例。", 409, 1003);
     }
     public async Task RefreshLdPlayerAsync(CancellationToken ct = default)
     {
@@ -10503,6 +11386,41 @@ internal static class ExistingAdbTests
     public static void Register(Action<string, Func<Task>> test)
     {
         test("existing ADB process replacement cannot reuse old transport or receive a request", ProcessReplacementAsync);
+        test("host ADB registration inventory never authorizes or queries guests", async () =>
+        {
+            await using var server = new FakeAdbServer();
+            await using var backend = new AdbDeviceBackend(new AppSettings(), server.Endpoint);
+            var registered = await backend.ListRegisteredDevicesAsync();
+            Assert(registered.Any(item => item.Serial == "allowed" && item.TransportId > 0), "Host inventory missing registration.");
+            Assert(server.Requests.All(request => request is "host:version" or "host:devices-l"), "Inventory queried guest.");
+            await Expect(403, () => backend.KeyEventAsync("allowed", 3));
+        });
+        test("frozen identity guard rejects ASCII files screenshots apps and Unicode before guest I/O", async () =>
+        {
+            await using var server = new FakeAdbServer();
+            await using var backend = new AdbDeviceBackend(new AppSettings { AdbAllowedSerials = ["allowed"] }, server.Endpoint);
+            var valid = true; var unicode = 0;
+            backend.RegisterIdentityGuard("allowed", _ => valid ? Task.CompletedTask : Task.FromException(new DeviceException("rejoin required", 409, 1003)));
+            backend.RegisterUnicodeInput("allowed", (_, _) => { unicode++; return Task.CompletedTask; });
+            await backend.DiscoverAsync();
+            valid = false;
+            var count = server.Requests.Count;
+            var local = typeof(ExistingAdbTests).Assembly.Location;
+            foreach (var operation in new Func<Task>[] { () => backend.KeyEventAsync("allowed", 3), () => backend.TextAsync("allowed", "ASCII"), () => backend.TextAsync("allowed", "中文"), () => backend.ScreenshotAsync("allowed"), () => backend.PushAsync("allowed", local, "/sdcard/test.bin"), () => backend.InstallAsync("allowed", local), () => backend.VerifyIdentityAsync("allowed") })
+                await Expect(409, operation);
+            Assert(unicode == 0 && server.Requests.Count == count, "Identity rejection reached guest/Unicode callback.");
+            var rows = await backend.DiscoverAsync();
+            Assert(rows.Single().State == "Failed", "Changed identity remained controllable.");
+        });
+        test("connection epoch inheritance requires an observed server and preserves its identity", async () =>
+        {
+            await using var server = new FakeAdbServer();
+            await using var source = new AdbDeviceBackend(new AppSettings(), server.Endpoint);
+            await using var next = new AdbDeviceBackend(new AppSettings(), server.Endpoint);
+            await Expect(409, () => { next.InheritServerEpoch(source); return Task.CompletedTask; });
+            await source.ListRegisteredDevicesAsync(); next.InheritServerEpoch(source);
+            Assert((await next.ListRegisteredDevicesAsync()).Count > 0, "Observed epoch was not reusable.");
+        });
         test("LDPlayer binding candidate must belong to the expected process and sends no ADB request", async () =>
         {
             await using var peer = new FakeAdbServer(); using var process = Process.GetCurrentProcess();
@@ -10648,6 +11566,9 @@ internal static class ExistingAdbTests
             await old.DiscoverAsync(); await Stop(first); first = null!;
             var receipt = Path.Combine(directory, "second.txt"); second = await Start(port, receipt);
             await Expect(409, () => old.KeyEventAsync("allowed", 3)); await Expect(409, () => old.DiscoverAsync());
+            await using var inherited = new AdbDeviceBackend(new AppSettings(), new(IPAddress.Loopback, port));
+            inherited.InheritServerEpoch(old);
+            await Expect(409, () => inherited.ListRegisteredDevicesAsync());
             Assert(!File.Exists(receipt) || new FileInfo(receipt).Length == 0, "Replacement server received a request from the old client.");
             await using var fresh = new AdbDeviceBackend(new AppSettings { AdbAllowedSerials = ["allowed"] }, new(IPAddress.Loopback, port));
             Assert((await fresh.DiscoverAsync()).Single().Online, "Fresh discovery could not establish a new epoch.");
@@ -10835,6 +11756,367 @@ internal sealed class FakeAdbServer : IAsyncDisposable
     {
         stop.Cancel(); listener.Stop(); await accepting;
         await Task.WhenAll(clients); stop.Dispose();
+    }
+}
+
+```
+
+## tests/MatrixDevice.Tests/LdWorkspaceTests.cs
+
+```csharp
+using System.Globalization;
+using MatrixDevice.Core;
+
+public static class LdWorkspaceTests
+{
+    public static void Register(Action<string, Func<Task>> test)
+    {
+        test("LD workspace launch validates the whole batch before touching the console", LaunchValidationAsync);
+        test("LD workspace launch validates the complete confirmation snapshot before console calls", ConfirmationValidationAsync);
+        test("LD workspace launch rejects replacement after user confirmation before launching", ConfirmationReplacementAsync);
+        test("LD workspace launch starts once per instance and waits sequentially", SequentialLaunchAsync);
+        test("LD workspace launch skips ready instances and waits for existing processes", ExistingProcessesAsync);
+        test("LD workspace launch timeout never retries or starts later instances", LaunchTimeoutAsync);
+        test("LD workspace launch cancellation leaves launched instances alone", LaunchCancellationAsync);
+        test("LD workspace launch resource rejection stops the remaining batch", ResourceRejectionAsync);
+        test("LD workspace launch rejects changed generations after the resource callback", ResourceGenerationAsync);
+        test("LD workspace launch rejects changed instance identity while waiting", LaunchIdentityAsync);
+        test("LD workspace coordinator serializes overlapping batches", OverlappingBatchesAsync);
+        test("LD workspace create validates names before console calls", CreateValidationAsync);
+        test("LD workspace create confirms one new index and never copies or deletes", CreateAsync);
+        test("LD workspace create retains a nonzero command warning after unique confirmation", CreateReportedFailureAsync);
+        test("LD workspace create rejects ambiguous changes without retrying", CreateAmbiguityAsync);
+        test("LD workspace create does not swallow cancellation or command timeouts", CreateInterruptionAsync);
+        test("LD workspace configure validates all resource values before console calls", ConfigureValidationAsync);
+        test("LD workspace configure requires fully stopped and current instances", ConfigurePreconditionsAsync);
+        test("LD workspace configure sends only whitelisted resource parameters", ConfigureAsync);
+    }
+
+    private static async Task LaunchValidationAsync()
+    {
+        var runner = new FakeConsole();
+        await using var service = new LdPlayerService(runner);
+        var coordinator = new LdLaunchCoordinator(service);
+        var resources = 0;
+        foreach (var indices in new[] { Array.Empty<int>(), new[] { 0 }, new[] { 99999 }, new[] { -1 }, new[] { 1, 1 }, new[] { 1, 0 } })
+            await Expect(400, () => coordinator.StartAsync(indices, _ => { resources++; return Task.CompletedTask; }));
+        Assert(runner.Calls.Count == 0 && resources == 0, "Invalid launch batch reached the console or resource callback.");
+    }
+
+    private static async Task SequentialLaunchAsync()
+    {
+        var runner = new FakeConsole(); runner.Instances.Add(new(2, "B"));
+        runner.OnLaunch = index =>
+        {
+            if (index == 2) Assert(runner.Instances.Single(item => item.Index == 1).Flag == 1, "Second instance started before the first was ready.");
+        };
+        await using var service = new LdPlayerService(runner);
+        var resources = 0; var progress = new RecordingProgress();
+        var result = await Coordinator(service).StartAsync([1, 2], _ => { resources++; return Task.CompletedTask; }, progress);
+        Assert(resources == 2 && runner.Count("launch") == 2, "Launch or resource checks were skipped or repeated.");
+        Assert(result.Select(item => item.Index).SequenceEqual([1, 2]) && result.All(item => item.State == "ready"), "Sequential results were incomplete.");
+        Assert(progress.Items.Any(item => item.State == "waiting") && result.All(item => item.Message.Contains("ADB", StringComparison.Ordinal)), "Progress incorrectly claimed guest readiness.");
+        Assert(!runner.Calls.Any(call => call.Contains("0") || call[0] is "adb" or "quit" or "quitall"), "Batch touched protected or global operations.");
+    }
+
+    private static async Task ConfirmationValidationAsync()
+    {
+        var runner = new FakeConsole(); runner.Instances.Add(new(2, "B"));
+        await using var service = new LdPlayerService(runner);
+        var snapshot = (await service.RefreshAsync()).ToArray();
+        var before = runner.Calls.Count;
+        var resources = 0;
+        var invalidSnapshots = new IReadOnlyList<LdPlayerInstance>[]
+        {
+            [], [snapshot[0]], [snapshot[0], snapshot[0]],
+            [snapshot[0], snapshot[1], snapshot[0] with { Index = 3 }],
+            [snapshot[0], snapshot[1] with { Index = 3 }]
+        };
+        var coordinator = Coordinator(service);
+        foreach (var invalid in invalidSnapshots)
+            await Expect(400, () => coordinator.StartAsync([1, 2], _ => { resources++; return Task.CompletedTask; }, expectedInstances: invalid));
+        Assert(runner.Calls.Count == before && resources == 0, "Invalid confirmation snapshot reached the console or resource callback.");
+        var result = await coordinator.StartAsync([1, 2], _ => { resources++; return Task.CompletedTask; }, expectedInstances: snapshot.Reverse().ToArray());
+        Assert(result.Count == 2 && result.All(item => item.State == "ready") && runner.Count("launch") == 2, "Valid unordered confirmation snapshot blocked normal launch generations.");
+    }
+
+    private static async Task ConfirmationReplacementAsync()
+    {
+        foreach (var rename in new[] { true, false })
+        {
+            var runner = new FakeConsole(); runner.Instances.Add(new(2, "B"));
+            await using var service = new LdPlayerService(runner);
+            var snapshot = (await service.RefreshAsync()).ToArray();
+            if (rename) runner.Instances[0].Name = "replacement";
+            else
+            {
+                runner.Instances[0].Width++;
+                await service.RefreshAsync();
+                runner.Instances[0].Width--;
+                await service.RefreshAsync();
+            }
+            var resources = 0;
+            await Expect(409, () => Coordinator(service).StartAsync([1, 2], _ => { resources++; return Task.CompletedTask; }, expectedInstances: snapshot));
+            Assert(resources == 0 && runner.Count("launch") == 0, "Replacement after confirmation launched a changed or later instance.");
+        }
+    }
+
+    private static async Task ExistingProcessesAsync()
+    {
+        var runner = new FakeConsole();
+        runner.Instances[0] = new(1, "A", 1, 101, 201);
+        runner.Instances.Add(new(2, "B", 2, 102, -1) { BootReads = 3 });
+        await using var service = new LdPlayerService(runner);
+        var result = await Coordinator(service).StartAsync([1, 2], _ => throw new InvalidOperationException("Existing processes must not reserve another launch."));
+        Assert(result[0].State == "skipped" && result[1].State == "ready" && runner.Count("launch") == 0, "Existing processes were relaunched or marked ready too early.");
+        var zeroPid = new FakeConsole(); zeroPid.Instances[0] = new(1, "A", 2) { BootReads = 3 };
+        await using var zeroPidService = new LdPlayerService(zeroPid);
+        var progress = new RecordingProgress();
+        var zeroPidResult = await Coordinator(zeroPidService).StartAsync([1], _ => throw new InvalidOperationException("Starting flag must not reserve another launch."), progress);
+        Assert(zeroPidResult[0].State == "ready" && zeroPid.Count("launch") == 0 && progress.Items.Any(item => item.Instance is { IsStarting: true, ProcessId: <= 0, VBoxProcessId: <= 0 }), "Zero-PID startup flag was relaunched or never observed while waiting.");
+    }
+
+    private static async Task LaunchTimeoutAsync()
+    {
+        var runner = new FakeConsole { NeverReady = true }; runner.Instances.Add(new(2, "B"));
+        await using var service = new LdPlayerService(runner);
+        await Expect(504, () => new LdLaunchCoordinator(service, TimeSpan.FromMilliseconds(40), TimeSpan.FromMilliseconds(2))
+            .StartAsync([1, 2], _ => Task.CompletedTask));
+        Assert(runner.Count("launch") == 1 && runner.Calls.Where(call => call[0] == "launch").All(call => call[2] == "1"), "Timed out launch was retried or the next instance started.");
+        Assert(runner.Count("quit") == 0, "Timed out launch closed a guest.");
+    }
+
+    private static async Task LaunchCancellationAsync()
+    {
+        var runner = new FakeConsole { NeverReady = true }; runner.Instances.Add(new(2, "B"));
+        await using var service = new LdPlayerService(runner);
+        using var cancellation = new CancellationTokenSource();
+        var progress = new RecordingProgress(item => { if (item.State == "waiting") cancellation.Cancel(); });
+        try { await Coordinator(service).StartAsync([1, 2], _ => Task.CompletedTask, progress, cancellation.Token); throw new InvalidOperationException("Cancellation was ignored."); }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        Assert(runner.Count("launch") == 1 && runner.Count("quit") == 0, "Cancellation retried, continued, or closed the owned launch.");
+    }
+
+    private static async Task ResourceRejectionAsync()
+    {
+        var runner = new FakeConsole(); runner.Instances.Add(new(2, "B"));
+        await using var service = new LdPlayerService(runner);
+        var resources = 0;
+        await Expect(503, () => Coordinator(service).StartAsync([1, 2], _ => ++resources == 1 ? Task.CompletedTask : throw new DeviceException("reserve rejected", 503, 2000)));
+        Assert(resources == 2 && runner.Count("launch") == 1 && runner.Count("quit") == 0, "Resource rejection did not stop after the first ready instance.");
+    }
+
+    private static async Task LaunchIdentityAsync()
+    {
+        var runner = new FakeConsole { RenameAfterLaunch = true }; runner.Instances.Add(new(2, "B"));
+        await using var service = new LdPlayerService(runner);
+        await Expect(409, () => Coordinator(service).StartAsync([1, 2], _ => Task.CompletedTask));
+        Assert(runner.Count("launch") == 1, "Changed target identity was retried or another target started.");
+    }
+
+    private static async Task ResourceGenerationAsync()
+    {
+        var runner = new FakeConsole(); runner.Instances.Add(new(2, "B"));
+        await using var service = new LdPlayerService(runner);
+        var resourceChecks = 0;
+        await Expect(409, () => Coordinator(service).StartAsync([1, 2], async ct =>
+        {
+            resourceChecks++;
+            var instance = runner.Instances[0];
+            var width = instance.Width;
+            instance.Width++;
+            await service.RefreshAsync(ct);
+            instance.Width = width;
+            await service.RefreshAsync(ct);
+        }));
+        Assert(resourceChecks == 1 && runner.Count("launch") == 0, "Changed original generation was silently replaced or a later target started.");
+    }
+
+    private static async Task OverlappingBatchesAsync()
+    {
+        var runner = new FakeConsole(); runner.Instances.Add(new(2, "B"));
+        await using var service = new LdPlayerService(runner);
+        var coordinator = Coordinator(service);
+        await Task.WhenAll(coordinator.StartAsync([1, 2], _ => Task.CompletedTask), coordinator.StartAsync([1, 2], _ => Task.CompletedTask));
+        Assert(runner.Count("launch") == 2, "Overlapping batches launched an instance more than once.");
+    }
+
+    private static async Task CreateValidationAsync()
+    {
+        var runner = new FakeConsole();
+        await using var service = new LdPlayerService(runner);
+        var editor = new LdInstanceEditor(runner, service);
+        foreach (var name in new[] { "", " ", "--option", "bad\nname", "bad\n", "\tbad", "bad\0name", "bad,name", new string('a', 81) })
+            await Expect(400, () => editor.CreateAsync(name));
+        Assert(runner.Calls.Count == 0, "Invalid creation name reached the CLI.");
+        await Expect(409, () => editor.CreateAsync("A"));
+        Assert(runner.Count("add") == 0, "Duplicate name created another instance.");
+    }
+
+    private static async Task CreateAsync()
+    {
+        var runner = new FakeConsole();
+        await using var service = new LdPlayerService(runner);
+        var result = await new LdInstanceEditor(runner, service).CreateAsync("测试实例 B");
+        Assert(result.Instance.Index == 2 && result.Instance.Name == "测试实例 B" && !result.CommandReportedFailure, "Creation result was not the unique new instance.");
+        Assert(runner.Count("add") == 1 && runner.Calls.All(call => call[0] is "list2" or "add"), "Creation retried or used unrelated operations.");
+    }
+
+    private static async Task CreateReportedFailureAsync()
+    {
+        var runner = new FakeConsole { AddReportsFailure = true };
+        await using var service = new LdPlayerService(runner);
+        var result = await new LdInstanceEditor(runner, service).CreateAsync("B");
+        Assert(result.CommandReportedFailure && result.Instance.Index == 2 && result.Message.Contains("退出码=1", StringComparison.Ordinal), "Creation command failure warning was lost.");
+        Assert(runner.Count("add") == 1, "Nonzero add was blindly retried.");
+    }
+
+    private static async Task CreateAmbiguityAsync()
+    {
+        var runner = new FakeConsole { AddExtraInstance = true };
+        await using var service = new LdPlayerService(runner);
+        await Expect(409, () => new LdInstanceEditor(runner, service).CreateAsync("B"));
+        Assert(runner.Count("add") == 1 && runner.Count("remove") == 0, "Ambiguous creation retried or deleted data.");
+        var wrongNameRunner = new FakeConsole { CreatedNameOverride = "external" };
+        await using var wrongNameService = new LdPlayerService(wrongNameRunner);
+        await Expect(409, () => new LdInstanceEditor(wrongNameRunner, wrongNameService).CreateAsync("B"));
+        Assert(wrongNameRunner.Count("add") == 1, "Wrong-name creation was accepted or retried.");
+    }
+
+    private static async Task CreateInterruptionAsync()
+    {
+        var timedOut = new FakeConsole { AddReportsTimeout = true };
+        await using var timeoutService = new LdPlayerService(timedOut);
+        await Expect(504, () => new LdInstanceEditor(timedOut, timeoutService).CreateAsync("B"));
+        Assert(timedOut.Count("add") == 1 && timedOut.Count("list2") == 1, "Timed out creation issued more CLI commands.");
+        using var cancellation = new CancellationTokenSource();
+        var cancelled = new FakeConsole { OnAdd = cancellation.Cancel };
+        await using var cancelledService = new LdPlayerService(cancelled);
+        try { await new LdInstanceEditor(cancelled, cancelledService).CreateAsync("B", cancellation.Token); throw new InvalidOperationException("Create cancellation was ignored."); }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        Assert(cancelled.Count("add") == 1 && cancelled.Count("list2") == 1 && cancelled.Count("remove") == 0, "Cancelled creation retried, queried again, or deleted an instance.");
+    }
+
+    private static async Task ConfigureValidationAsync()
+    {
+        var runner = new FakeConsole();
+        await using var service = new LdPlayerService(runner);
+        var editor = new LdInstanceEditor(runner, service);
+        var valid = new LdInstanceConfiguration(2, 2048, 720, 1280, 240);
+        foreach (var configuration in new[] { valid with { Cpu = 0 }, valid with { Cpu = 6 }, valid with { MemoryMb = 0 }, valid with { MemoryMb = 3072 }, valid with { Width = 0 }, valid with { Height = 100_000 }, valid with { Dpi = 0 } })
+            await Expect(400, () => editor.ConfigureAsync(1, 1, configuration));
+        foreach (var index in new[] { 0, -1, 99999 }) await Expect(400, () => editor.ConfigureAsync(index, 1, valid));
+        await Expect(400, () => editor.ConfigureAsync(1, 0, valid));
+        Assert(runner.Calls.Count == 0, "Invalid configuration reached the console.");
+    }
+
+    private static async Task ConfigurePreconditionsAsync()
+    {
+        var runner = new FakeConsole();
+        await using var service = new LdPlayerService(runner);
+        var editor = new LdInstanceEditor(runner, service);
+        var configuration = new LdInstanceConfiguration(2, 2048, 720, 1280, 240);
+        foreach (var instance in new[] { new FakeInstance(1, "A", 1, 101, 201), new FakeInstance(1, "A", 2, 101, -1), new FakeInstance(1, "A", 2), new FakeInstance(1, "A", 0, -1, 201), new FakeInstance(1, "A") { TopWindow = 1 } })
+        {
+            runner.Instances[0] = instance;
+            var current = (await service.RefreshAsync()).Single();
+            await Expect(409, () => editor.ConfigureAsync(1, current.Generation, configuration));
+        }
+        runner.Instances[0] = new(1, "A");
+        var stopped = (await service.RefreshAsync()).Single(); runner.Instances[0].Width++;
+        await Expect(409, () => editor.ConfigureAsync(1, stopped.Generation, configuration));
+        Assert(runner.Count("modify") == 0, "Running, starting, or stale instance was configured.");
+    }
+
+    private static async Task ConfigureAsync()
+    {
+        var runner = new FakeConsole();
+        await using var service = new LdPlayerService(runner);
+        var current = (await service.RefreshAsync()).Single();
+        var result = await new LdInstanceEditor(runner, service).ConfigureAsync(1, current.Generation, new(4, 4096, 1080, 1920, 480));
+        Assert(result.Accepted && !result.Verified && result.Instance?.Width == 1080 && result.Instance.Height == 1920, "Resource command result overclaimed verification or lost the observation.");
+        var call = runner.Calls.Single(args => args[0] == "modify");
+        Assert(call.SequenceEqual(["modify", "--index", "1", "--cpu", "4", "--memory", "4096", "--resolution", "1080,1920,480"]), "Unapproved configuration arguments were sent.");
+    }
+
+    private static LdLaunchCoordinator Coordinator(LdPlayerService service) => new(service, TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(1));
+    private static void Assert(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
+    private static async Task Expect(int status, Func<Task> action)
+    {
+        try { await action(); }
+        catch (DeviceException error) when (error.Status == status) { return; }
+        throw new InvalidOperationException($"Expected DeviceException status={status}.");
+    }
+
+    private sealed class RecordingProgress(Action<LdLaunchProgress>? observer = null) : IProgress<LdLaunchProgress>
+    {
+        public List<LdLaunchProgress> Items { get; } = [];
+        public void Report(LdLaunchProgress value) { Items.Add(value); observer?.Invoke(value); }
+    }
+
+    private sealed class FakeInstance(int index, string name, int flag = 0, int processId = -1, int vboxPid = -1)
+    {
+        public int Index { get; } = index;
+        public string Name { get; set; } = name;
+        public int Flag { get; set; } = flag;
+        public int ProcessId { get; set; } = processId;
+        public int VBoxPid { get; set; } = vboxPid;
+        public long TopWindow { get; set; }
+        public int Width { get; set; } = 720;
+        public int Height { get; set; } = 1280;
+        public int Dpi { get; set; } = 240;
+        public int BootReads { get; set; }
+        public string List2() => string.Join(',', Index, Name, TopWindow, 0, Flag, ProcessId, VBoxPid, Width, Height, Dpi);
+    }
+
+    private sealed class FakeConsole : ILdConsoleRunner
+    {
+        public List<FakeInstance> Instances { get; } = [new(1, "A")];
+        public List<string[]> Calls { get; } = [];
+        public bool NeverReady { get; init; }
+        public bool RenameAfterLaunch { get; init; }
+        public bool AddReportsFailure { get; init; }
+        public bool AddReportsTimeout { get; init; }
+        public bool AddExtraInstance { get; init; }
+        public string? CreatedNameOverride { get; init; }
+        public Action<int>? OnLaunch { get; set; }
+        public Action? OnAdd { get; init; }
+        public int Count(string command) => Calls.Count(call => call[0] == command);
+        public Task<string> RunAsync(IReadOnlyList<string> arguments, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var args = arguments.ToArray(); Calls.Add(args);
+            if (args[0] == "list2")
+            {
+                foreach (var instance in Instances.Where(item => item.Flag == 2 && item.BootReads > 0))
+                    if (--instance.BootReads == 0) { instance.Flag = 1; instance.ProcessId = 100 + instance.Index; instance.VBoxPid = 200 + instance.Index; }
+                return Task.FromResult(string.Join('\n', Instances.Select(item => item.List2())));
+            }
+            if (args[0] == "launch")
+            {
+                var index = int.Parse(args[2], CultureInfo.InvariantCulture); OnLaunch?.Invoke(index);
+                var instance = Instances.Single(item => item.Index == index);
+                instance.Flag = 2; instance.ProcessId = 100 + index; instance.VBoxPid = 200 + index;
+                instance.BootReads = NeverReady ? 0 : 3;
+                if (RenameAfterLaunch) instance.Name = "changed";
+            }
+            else if (args[0] == "add")
+            {
+                Instances.Add(new(Instances.Max(item => item.Index) + 1, CreatedNameOverride ?? args[2]));
+                if (AddExtraInstance) Instances.Add(new(Instances.Max(item => item.Index) + 1, "external"));
+                OnAdd?.Invoke();
+                if (AddReportsTimeout) throw new DeviceException("雷电 CLI 超时：命令=add，结果未知", 504, 2000);
+                if (AddReportsFailure) throw new DeviceException("雷电 CLI 执行失败：命令=add，退出码=1", 503, 2000);
+            }
+            else if (args[0] == "modify")
+            {
+                var instance = Instances.Single(item => item.Index == int.Parse(args[2], CultureInfo.InvariantCulture));
+                var size = args[8].Split(',').Select(value => int.Parse(value, CultureInfo.InvariantCulture)).ToArray();
+                instance.Width = size[0]; instance.Height = size[1]; instance.Dpi = size[2];
+            }
+            else throw new InvalidOperationException("Unexpected fake console command: " + args[0]);
+            return Task.FromResult("");
+        }
     }
 }
 
@@ -11818,6 +13100,51 @@ if (args.Length > 0 && args[0] == "--ldconsole-test-child")
 var tests = new List<(string Name, Func<Task> Run)>();
 void Test(string name, Func<Task> run) => tests.Add((name, run));
 ExistingAdbTests.Register(Test);
+LdWorkspaceTests.Register(Test);
+Test("LD admission applies only unique explicit local proofs and never mutates old authorization", async () =>
+{
+    var original = new AppSettings { AdbAllowedSerials = ["emulator-5556"], LdSerialBindings = new() { [1] = "emulator-5556" } };
+    var proof = new LdConnectionProof(2, "test", 1, "emulator-5558", 2, 123, 456);
+    var applied = LdConnectionAdmission.Apply(original, [proof]);
+    Check(applied.AdbAllowedSerials.Length == 2 && applied.LdSerialBindings[2] == proof.Serial && !applied.AutoStartApi, "New authorization missing.");
+    Check(original.AdbAllowedSerials.Length == 1 && !original.LdSerialBindings.ContainsKey(2), "Original settings mutated.");
+    foreach (var invalid in new[] { proof with { Index = 0 }, proof with { Serial = "" }, proof with { Serial = "10.0.0.1:5555" }, proof with { Generation = 0 }, proof with { TransportId = 0 } })
+        await Throws<DeviceException>(() => { LdConnectionAdmission.Apply(original, [invalid]); return Task.CompletedTask; });
+    await Throws<DeviceException>(() => { LdConnectionAdmission.Apply(original, [proof, proof]); return Task.CompletedTask; });
+    await Throws<DeviceException>(() => { LdConnectionAdmission.Apply(original, [proof with { Serial = "emulator-5556" }]); return Task.CompletedTask; });
+});
+Test("saved connection path changes require restart before LD workspace edits", async () =>
+{
+    await using var runtime = await MatrixRuntime.CreateAsync(new(), Temp(), true);
+    runtime.RequireFrozenConnectionSettings();
+    runtime.Settings = runtime.Settings with { LdConsolePath = "other-installation.exe" };
+    await Throws<DeviceException>(() => { runtime.RequireFrozenConnectionSettings(); return Task.CompletedTask; });
+});
+Test("LD admission cannot replace the confirmed subject while waiting for ADB", async () =>
+{
+    var frozen = LdPlayerService.ParseList2("1,Original,1,2,1,123,456,1280,720,240").Single();
+    LdConnectionAdmission.RequireExpectedInstances([frozen], [1], [frozen]);
+    foreach (var changed in new[] { frozen with { Name = "Replacement" }, frozen with { Generation = frozen.Generation + 1 }, frozen with { VBoxProcessId = 999 } })
+        await Throws<DeviceException>(() => { LdConnectionAdmission.RequireExpectedInstances([changed], [1], [frozen]); return Task.CompletedTask; });
+    await Throws<DeviceException>(() => { LdConnectionAdmission.RequireExpectedInstances([frozen], [1], []); return Task.CompletedTask; });
+});
+Test("HTTP admission drain counter includes in-flight SDK identity checks", async () =>
+{
+    var port = Port(); await using var runtime = await MatrixRuntime.CreateAsync(new() { BasicApiPort = port }, Temp(), true);
+    await runtime.Api.StartBasicAsync(port);
+    var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    runtime.Api.LdCommandIdentityGuard = async (_, _, _) => { entered.TrySetResult(); await release.Task; };
+    using var http = new HttpClient();
+    var generation = runtime.LdPlayer!.Instances.Single(item => item.Index == 0).Generation;
+    var request = http.PostAsJsonAsync($"http://localhost:{port}/ldplayer/instances/0/keyevent", new { expectedGeneration = generation, key = "home" });
+    try { await entered.Task.WaitAsync(TimeSpan.FromSeconds(3)); Check(runtime.Api.HasActiveRequests, "In-flight request was not counted."); }
+    finally { release.TrySetResult(); }
+    using var response = await request; Check(response.IsSuccessStatusCode, "Released request did not complete.");
+    var deadline = DateTime.UtcNow.AddSeconds(3);
+    while (runtime.Api.HasActiveRequests && DateTime.UtcNow < deadline) await Task.Delay(10);
+    Check(!runtime.Api.HasActiveRequests, "Completed request did not drain.");
+});
 Test("both differentiated workload script roles follow the existing swipe format", () =>
 {
     var first = MultiInstanceAcceptance.SettingsScript(1, 0, 150, 50, 360, 640);

@@ -238,7 +238,7 @@ public sealed class LdPlayerService : IAsyncDisposable
                 var knownStartupTransition = suffix == 8 && numbers[2] == 2;
                 if (numbers[0] < 0 || numbers[1] < 0 || numbers[2] is not (0 or 1) && !knownStartupTransition || numbers[3] is < -1 or > int.MaxValue || numbers[4] is < -1 or > int.MaxValue) return false;
                 if (suffix == 8 && numbers.Skip(5).Any(value => value is <= 0 or > int.MaxValue)) return false;
-                instance = new(index, name, numbers[0], numbers[1], numbers[2] == 1, (int)numbers[3], (int)numbers[4], suffix == 8 ? (int)numbers[5] : null, suffix == 8 ? (int)numbers[6] : null, suffix == 8 ? (int)numbers[7] : null);
+                instance = new(index, name, numbers[0], numbers[1], numbers[2] == 1, (int)numbers[3], (int)numbers[4], suffix == 8 ? (int)numbers[5] : null, suffix == 8 ? (int)numbers[6] : null, suffix == 8 ? (int)numbers[7] : null, IsStarting: knownStartupTransition);
                 return true;
             }
             var oldValid = Candidate(5, out var old);

@@ -92,6 +92,7 @@ public partial class MainWindow
         var links = new StackPanel { Margin = new Thickness(10, 0, 10, 8) };
         foreach (var item in WorkspacePages)
         {
+            if (item.Tag == "雷电实例") continue;
             var content = new StackPanel { Orientation = Orientation.Horizontal };
             var glyph = ShellGlyph(item.Icon); glyph.Width = 28; content.Children.Add(glyph);
             var caption = new TextBlock { Text = item.Label, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
@@ -124,11 +125,12 @@ public partial class MainWindow
         search.Children.Add(hint); input.TextChanged += (_, _) => hint.Visibility = input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         hint.Visibility = input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         Grid.SetColumn(search, 1); row.Children.Add(search);
-        var refresh = Button("\uE72C", "刷新设备", ViewModel.RefreshCommand); refresh.MinHeight = 38; Grid.SetColumn(refresh, 2); row.Children.Add(refresh);
-        var scan = Button("\uE721", "扫描设备", ShowScanner); scan.SetResourceReference(StyleProperty, "PrimaryButton"); scan.MinHeight = 38;
-        Grid.SetColumn(scan, 3); row.Children.Add(scan);
         var settings = new Button { Content = ShellGlyph("\uE713"), ToolTip = "环境设置", MinHeight = 38 };
         settings.SetResourceReference(StyleProperty, "IconButton"); settings.Click += (_, _) => NavigateTo("设置"); Grid.SetColumn(settings, 4); row.Children.Add(settings);
+        var advanced = new ContextMenu();
+        var network = new MenuItem { Header = "网络连接（高级）" }; network.Click += (_, _) => ShowScanner(); advanced.Items.Add(network);
+        var refresh = new MenuItem { Header = "立即更新目录" }; refresh.Click += async (_, _) => await UpdateDeviceDirectoryAsync(); advanced.Items.Add(refresh);
+        settings.ContextMenu = advanced;
         return surface;
     }
 
@@ -174,8 +176,10 @@ public partial class MainWindow
     private void UpdateNavigation()
     {
         var selected = (tabs.SelectedItem as TabItem)?.Tag?.ToString();
-        foreach (var item in navigation) item.Value.IsChecked = item.Key == selected;
-        if (selected is not null && navigation.TryGetValue(selected, out var active) && active.IsLoaded) active.BringIntoView();
+        var activeTag = selected == "雷电实例" ? "设备墙 / 主控" : selected;
+        foreach (var item in navigation) item.Value.IsChecked = item.Key == activeTag;
+        foreach (var mode in deviceModes) mode.Button.IsChecked = mode.Tag == selected;
+        if (activeTag is not null && navigation.TryGetValue(activeTag, out var active) && active.IsLoaded) active.BringIntoView();
         var label = WorkspacePages.FirstOrDefault(page => page.Tag == selected).Label ?? "设备管理";
         Title = "矩阵设备 · " + label + (ViewModel.Demo ? " · 演示模式" : "");
     }
@@ -205,7 +209,7 @@ public partial class MainWindow
         {
             var scanner = BuildScanner();
             if (scanner is Expander expander) expander.IsExpanded = true;
-            scannerWindow = new Window { Owner = this, DataContext = ViewModel, Title = "扫描设备", Width = 460, Height = 420, MinWidth = 360, MinHeight = 360, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            scannerWindow = new Window { Owner = this, DataContext = ViewModel, Title = "网络连接（高级）", Width = 460, Height = 420, MinWidth = 360, MinHeight = 360, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             scannerWindow.Content = new ScrollViewer { Content = new Border { Padding = new Thickness(20), Child = scanner }, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
             scannerWindow.Closing += (_, args) => { if (!closing) { scanCancellation?.Cancel(); args.Cancel = true; scannerWindow.Hide(); } };
         }

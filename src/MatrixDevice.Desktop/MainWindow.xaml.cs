@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<NodeRow, TreeViewItem> nodeTreeItems = [];
     private readonly Dictionary<NodeRow, Rectangle> nodeRectangles = [];
     private readonly DispatcherTimerAdapter captureTimer;
+    private readonly DispatcherTimerAdapter directoryTimer;
     private TabControl tabs = null!;
     private TreeView nodeTree = null!;
     private Canvas nodeCanvas = null!;
@@ -45,7 +46,9 @@ public partial class MainWindow : Window
     private bool closing;
     private bool closeApproved;
     private bool captureInProgress;
-    private bool autoCapture;
+    private Task? captureOperation;
+    private int captureCursor;
+    private bool autoCapture = true;
     public WorkspaceViewModel ViewModel { get; }
 
     public MainWindow(WorkspaceViewModel viewModel)
@@ -65,7 +68,9 @@ public partial class MainWindow : Window
         viewModel.WallChanged = RefreshWall;
         BuildShell();
         LocalizationService.Current.LanguageChanged += OnLanguageChanged;
-        captureTimer = new DispatcherTimerAdapter(TimeSpan.FromSeconds(2), CaptureTickAsync);
+        captureTimer = new DispatcherTimerAdapter(TimeSpan.FromSeconds(5), CaptureTickAsync);
+        directoryTimer = new DispatcherTimerAdapter(TimeSpan.FromSeconds(5), UpdateDeviceDirectoryAsync);
+        if (!viewModel.Demo) { directoryTimer.Start(); captureTimer.Start(); }
         Closing += WindowClosing;
         Deactivated += async (_, _) =>
         {
@@ -194,8 +199,16 @@ public partial class MainWindow : Window
 
     private async Task CaptureTickAsync()
     {
-        if (!autoCapture || captureInProgress || ViewModel.Busy || tabs.SelectedIndex != 0) return;
-        captureInProgress = true; try { await ViewModel.RefreshWallAsync(); } finally { captureInProgress = false; }
+        if (!autoCapture || captureInProgress || closing || ldBusy || ViewModel.HasActiveOperations || directoryOperation is { IsCompleted: false } || tabs.SelectedIndex != 0 || !IsActive) return;
+        var rows = ViewModel.DeviceView.Cast<DeviceRow>().Where(row => row.Info.Online).ToArray();
+        if (rows.Length == 0) return;
+        var targets = rows.Skip(captureCursor % rows.Length).Concat(rows.Take(captureCursor % rows.Length)).Take(4).Select(row => row.Serial).ToArray();
+        captureCursor += targets.Length;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(directoryCancellation.Token); deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        captureInProgress = true;
+        try { captureOperation = ViewModel.RefreshAutomaticScreensAsync(targets, deadline.Token); await captureOperation; }
+        catch (OperationCanceledException) { }
+        finally { captureInProgress = false; }
     }
 
     private async void WindowClosing(object? sender, CancelEventArgs e)
@@ -205,7 +218,11 @@ public partial class MainWindow : Window
         if (closing) return;
         if (ldBusy || ViewModel.Busy) { MessageBox.Show(this, "当前操作尚未结束，请等待操作完成后退出。", "操作进行中", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         if (ViewModel.HasActiveOperations && !ViewModel.Confirm("退出矩阵设备", "仍有脚本或文件传输正在运行。停止这些任务并退出？\n设备与模拟器将保持运行。")) return;
-        closing = true; captureTimer.Stop();
+        closing = true;
+        directoryCancellation.Cancel();
+        directoryTimer.Stop(); captureTimer.Stop();
+        if (directoryOperation is not null) { try { await directoryOperation; } catch (OperationCanceledException) { } }
+        if (captureOperation is not null) { try { await captureOperation; } catch (OperationCanceledException) { } }
         try
         {
             scanCancellation?.Cancel();
@@ -225,6 +242,7 @@ public partial class MainWindow : Window
     {
         closing = closeApproved = true;
         captureTimer?.Stop();
+        directoryTimer?.Stop(); directoryCancellation.Cancel();
         scanCancellation?.Cancel();
         Close();
     }
@@ -303,12 +321,16 @@ public partial class MainWindow : Window
         await RefreshLdPlayerUiAsync();
         if (ldRows.Count != 2) throw new InvalidOperationException("演示雷电实例目录不完整");
         if (tabs.Items.Count != 12) throw new InvalidOperationException("桌面页面数量不完整");
+        if (navigation.Count != 11 || navigation.ContainsKey("雷电实例") || deviceModes.Count != 4) throw new InvalidOperationException("设备管理统一入口不完整");
+        NavigateTo("设备墙 / 主控");
+        var removedLabels = new[] { "刷新设备", "扫描设备", "刷新截图" };
+        if (VisualDescendants<TextBlock>(Shell).Any(text => removedLabels.Contains(text.Text))) throw new InvalidOperationException("旧重复刷新入口仍可见");
         ldPackage.Text = "com.example.demo"; ldText.Text = "中文演示";
         ldGrid.SelectedItem = ldRows.Single(row => !row.Instance.AndroidStarted);
         var runningOnly = new[] { "启动应用", "停止应用", "安装应用", "发送文字", "主页", "返回", "增大音量", "减小音量" };
-        if (!ldCommandsByLabel["启动实例"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的操作状态不正确");
+        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的操作状态不正确");
         ldGrid.SelectedItem = ldRows.Single(row => row.Instance.AndroidStarted);
-        if (ldCommandsByLabel["启动实例"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的操作状态不正确");
+        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的连接入口或操作状态不正确");
         ldBusy = true; ldFeedback.Text = "正在执行所选实例命令…"; RefreshLdButtons();
         if (ldCommands.Any(command => command.CanExecute(null)) || !ldFeedback.Text.Contains("正在执行", StringComparison.Ordinal)) throw new InvalidOperationException("雷电忙状态未锁定操作");
         ldBusy = false; RefreshLdButtons();
@@ -332,8 +354,10 @@ public partial class MainWindow : Window
         cropRectangle.Width = cropRectangle.Height = 40; Canvas.SetLeft(cropRectangle, 10); Canvas.SetTop(cropRectangle, 10);
         foreach (var route in WorkspacePages)
         {
-            navigation[route.Tag].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-            if (!Equals((tabs.SelectedItem as TabItem)?.Tag, route.Tag) || navigation.Count(item => item.Value.IsChecked == true) != 1 || navigation[route.Tag].IsChecked != true)
+            if (route.Tag == "雷电实例") deviceModes.First(mode => mode.Tag == route.Tag).Button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            else navigation[route.Tag].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            var sidebarTag = route.Tag == "雷电实例" ? "设备墙 / 主控" : route.Tag;
+            if (!Equals((tabs.SelectedItem as TabItem)?.Tag, route.Tag) || navigation.Count(item => item.Value.IsChecked == true) != 1 || navigation[sidebarTag].IsChecked != true)
                 throw new InvalidOperationException("侧栏导航或选中态失效：" + route.Label);
         }
         if (!ReferenceEquals(currentBeforeNavigation, ViewModel.CurrentDevice) || !ReferenceEquals(mainBeforeNavigation, ViewModel.MainDevice) ||
@@ -415,7 +439,7 @@ public partial class MainWindow : Window
         var controlStates = new List<object>();
         foreach (TabItem tab in tabs.Items)
         {
-            navigation[tab.Tag.ToString()!].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            NavigateTo(tab.Tag.ToString()!);
             await Dispatcher.InvokeAsync(() => { UpdateLayout(); }, System.Windows.Threading.DispatcherPriority.Render);
             var pageName = tab.Tag.ToString()!;
             controlStates.AddRange(CaptureControlStates(pageName, "idle", Shell));

@@ -4,6 +4,8 @@
 
 新版桌面采用侧栏导航、统一搜索和蓝白主题，设备支持卡片/屏幕/列表视图，全部12页保留。布局与验收记录见 `docs/UI_REDESIGN.md`。构建后可运行 `./tools/Start-Desktop.ps1 -Demo` 查看演示界面；真实模式不加Demo，雷电路径仍需显式配置。
 
+设备管理现在使用一个侧栏入口，内部切换“设备群控”和“本机模拟器”。本机目录包含关闭、启动中、待接入和已连接实例，不再把模拟器数量等同于可控设备数量。官方能力、限制和删除建议见[统一管理调研](docs/testing/unified-devices/OFFICIAL-RESEARCH.md)，本轮验证见[优化报告](docs/testing/unified-devices/REPORT.md)。
+
 完整文件清单见 `PROJECT_TREE.md`；全部源码文本见 `SOURCE_BUNDLE.md`；对应文件摘要见 `SOURCE_MANIFEST.json`。这三个文件由 `tools/New-SourcePackage.ps1` 生成，源码 ZIP 位于 `artifacts/`。
 
 ## 构建与运行
@@ -17,7 +19,13 @@
 ../.tools/dotnet/dotnet.exe ./src/MatrixDevice.Desktop/bin/Release/net10.0-windows/MatrixDevice.Desktop.dll --demo
 ```
 
-在其他电脑上可把第二行的 SDK 路径换成 `dotnet`。真实模式去掉 `--demo`，先正常启动雷电，再在设置中填写授权设备串号 JSON（例如 `["emulator-5556"]`）及明确的雷电索引绑定，保存并重启。本程序直接连接现有5037服务，不执行adb.exe、不创建/kill服务；服务进程变化或协议不兼容会拒绝继续。无需原产品DLL、账号或数据库，未授权时不查询guest、不显示假设备。
+在其他电脑上可把第二行的 SDK 路径换成 `dotnet`。真实模式去掉 `--demo`，配置雷电命令行路径并重启，在“设备管理 → 本机模拟器”选择独立实例，点“启动并连接”。确认后会启动关闭的实例、核验实际ADB连接与安卓启动/截图，成功才保存授权加入群控。“接入已运行实例”可批量核验运行中的独立实例。原实例0受保护，不参加自动接入、批量启动或资源修改；本轮不替用户操作原0。
+
+连接变更前需停止本程序的API、脚本、文件传输及网络扫描，等待请求排空；雷电/ADB路径等手工配置保存后仍需重启，不能混用新路径与旧运行时。高级串号JSON和索引绑定保留给明确知道真实串号的用户，不按端口公式授信。本程序直接连接现有5037服务，不执行adb.exe、不创建/kill服务；服务进程变化或协议不兼容会拒绝继续。无需原产品DLL、账号或数据库，未授权时不查询guest、不伪造在线设备。
+
+实例目录每5秒自动更新，已授权设备状态最多每15秒查询一次；自动截图默认开启，仅前台设备群控页每5秒轮转最多4台，单轮有20秒预算。旧刷新/扫描按钮已移除，网络连接与应急目录更新收在设置齿轮的右键菜单。“一键启动全部”逐台等待、跳过运行项，冷启动前保守要求11 GiB可用内存且系统内存负载低于80%；不足、超时或取消即停止后续，不关闭已启动实例、不自动授权新设备。
+
+“新建空白实例”和“资源配置”使用官方`add/modify`，只开放CPU、内存、分辨率和DPI；配置要求实例所有进程/窗口完全退出，命令返回不代表实际资源已核验。复制涉及账号/应用数据，本轮仅调研；删除不可逆，不开放一键删除。Android版本、小磁盘、节能等高级GUI选项没有稳定公开CLI保证，不伪造支持。
 
 ```powershell
 dotnet ./src/MatrixDevice.Cli/bin/Release/net10.0/MatrixDevice.Cli.dll --demo --serve --basic-port 18080 --automator-port 17172
@@ -62,7 +70,7 @@ Automator 默认 `http://127.0.0.1:17171/`，路径允许 `/api/` 前缀。所�
 
 手机 agent 可通过 `AgentSerial` + `AgentBaseUrl` 显式绑定一台设备，用于已定义节点文本/服务请求。不配置时不会部署未知 JAR，也不会把一个 URL 用于所有 serial。私有 ROM SIM、代理部署规则和剪贴板协议会明确返回不支持。
 
-中文全局输入：仅对同时列入授权串号及唯一`LdSerialBindings`的运行实例使用雷电call.input，并先验证现有ADB代次。普通ASCII走ADB。节点指定set-text仍需兼容agent，不冒充节点输入已实现；实例重启/绑定变化后须重启本程序重新核对。动态视频页uiautomator可能不生成快照，界面明确报错并清空旧节点。
+中文全局输入：仅对同时列入授权串号及唯一`LdSerialBindings`的运行实例使用雷电call.input，并先验证现有ADB代次。普通ASCII走ADB。LD绑定的所有ADB操作及SDK应用/输入入口都核验冻结的实例身份，变化后需在设备管理重新接入；ADB服务进程变化必须重启本程序，不自动接受新服务。节点指定set-text仍需兼容agent，不冒充节点输入已实现。动态视频页uiautomator可能不生成快照，界面明确报错并清空旧节点。
 
 ## 验证与交付
 
