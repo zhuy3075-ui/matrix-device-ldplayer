@@ -136,20 +136,29 @@ public sealed class ResourceSampler
     {
         RequireWindows();
         // Keep one handle so PID reuse cannot switch the process between identity and counters.
-        using var handle = OpenProcess(0x1000 | 0x0010, false, pid);
+        using var handle = OpenProcess(0x1000 | 0x0010 | 0x100000, false, pid);
         if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot open process {pid} for resource sampling.");
-        if (!GetProcessTimes(handle, out var created, out var exited, out _, out _))
+        RequireRunning(handle, pid);
+        if (!GetProcessTimes(handle, out var created, out _, out _, out _))
             throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot read process {pid} identity.");
         var birth = DateTime.FromFileTimeUtc(created).Ticks;
         if (birth != expectedBirth) throw new InvalidOperationException($"Process {pid} birth mismatch: expected {expectedBirth}, actual {birth}.");
-        if (exited != 0) throw new InvalidOperationException($"Process {pid} has exited.");
         var memory = new ProcessMemory { Size = (uint)Marshal.SizeOf<ProcessMemory>() };
         if (!K32GetProcessMemoryInfo(handle, ref memory, memory.Size))
             throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot read process {pid} working set.");
-        if (!GetProcessTimes(handle, out _, out exited, out var kernel, out var user))
+        if (!GetProcessTimes(handle, out _, out _, out var kernel, out var user))
             throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot read process {pid} CPU times.");
-        if (exited != 0) throw new InvalidOperationException($"Process {pid} exited during resource sampling.");
+        RequireRunning(handle, pid);
         return new(birth, checked(kernel + user), checked((long)memory.WorkingSet));
+    }
+
+    private static void RequireRunning(SafeProcessHandle handle, int pid)
+    {
+        var state = WaitForSingleObject(handle, 0);
+        if (state == 258) return;
+        if (state == uint.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot check process {pid} liveness.");
+        if (state == 0) throw new InvalidOperationException($"Process {pid} has exited.");
+        throw new InvalidOperationException($"Unexpected wait state {state} for process {pid}.");
     }
 
     private static void RequireWindows()
@@ -180,6 +189,7 @@ public sealed class ResourceSampler
     [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetSystemTimes(out ulong idle, out ulong kernel, out ulong user);
     [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GlobalMemoryStatusEx(ref MemoryStatus memory);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, int pid);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
     [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetProcessTimes(SafeProcessHandle process, out long created, out long exited, out long kernel, out long user);
     [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool K32GetProcessMemoryInfo(SafeProcessHandle process, ref ProcessMemory memory, uint size);
 }

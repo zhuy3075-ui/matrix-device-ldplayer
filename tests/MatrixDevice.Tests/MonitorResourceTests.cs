@@ -14,6 +14,7 @@ public static class MonitorResourceTests
         test("monitor sampling failures are unknown instead of zero and recover cold", FailuresAsync);
         test("monitor concurrent calls serialize sampling and baseline updates", ConcurrentAsync);
         test("monitor native sampling reads only the owned current process", OwnedProcessAsync);
+        test("monitor native sampling rejects an exited owned process by its retained handle", ExitedOwnedProcessAsync);
     }
 
     private static Task HostCpuAsync()
@@ -155,6 +156,33 @@ public static class MonitorResourceTests
         Assert(wrong.Error?.Contains("birth mismatch", StringComparison.Ordinal) == true && wrong.CpuPercent is null && wrong.WorkingSetBytes is null, "Native reader accepted the wrong process birth.");
         Assert(sampler.SampleInstance(target).CpuPercent is null, "Native birth failure retained the old baseline.");
         return Task.CompletedTask;
+    }
+
+    private static async Task ExitedOwnedProcessAsync()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var executable = Environment.ProcessPath ?? throw new InvalidOperationException("Test process executable is unavailable.");
+        var start = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
+        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            start.ArgumentList.Add(typeof(MonitorResourceTests).Assembly.Location);
+        start.ArgumentList.Add("--ldconsole-test-child"); start.ArgumentList.Add("sleep");
+        using var child = Process.Start(start) ?? throw new InvalidOperationException("Cannot start the owned test child.");
+        try
+        {
+            var birth = child.StartTime.ToUniversalTime().Ticks;
+            _ = child.Handle;
+            child.Kill();
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert(child.WaitForExit(5000) && child.Id != Environment.ProcessId, "Owned child termination did not complete.");
+            var target = new MonitorProcessTarget(1, 1, child.Id, birth, child.Id, birth);
+            var sample = new ResourceSampler().SampleInstance(target);
+            Assert(sample.Error?.Contains("has exited", StringComparison.Ordinal) == true && sample.CpuPercent is null && sample.WorkingSetBytes is null,
+                $"Exited owned process was not rejected by handle liveness: child {child.Id}, exited {child.HasExited}, code {child.ExitCode}, sample {sample}.");
+        }
+        finally
+        {
+            if (!child.HasExited) { child.Kill(); await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
+        }
     }
 
     private static MonitorProcessTarget Target => new(1, 1, 11, 111, 22, 222);
