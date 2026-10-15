@@ -9031,7 +9031,8 @@ public partial class MainWindow
         }, () => !ldBusy && !ViewModel.Busy && unifiedDevices.Any(row => row.IsSelected && row.Index is { } index && ldWindowVisibility?.IsHidden(index) == true));
         launchCommands.Add(show);
         menu.Items.Add(new MenuItem { Header = "恢复旧版隐藏窗口", Icon = WallGlyph("\uE8A7"), Command = show });
-        var more = WallButton("\uE712", "更多操作", new ActionCommand(() => { }));
+        var more = WallButton("\uE712", "实例操作", new ActionCommand(() => { }));
+        more.Name = "InstanceActions";
         more.ContextMenu = menu; menu.PlacementTarget = more; menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
         more.Click += (_, _) => menu.IsOpen = true;
         toolbar.Children.Add(more);
@@ -12694,6 +12695,30 @@ public partial class MainWindow
         foreach (var label in expectedActions)
             if (!VisualDescendants<Button>(Shell).Any(button => button.ToolTip is string tip && tip.StartsWith(label, StringComparison.Ordinal)))
                 throw new InvalidOperationException("统一设备页遗漏有效操作：" + label);
+        var clarityFailures = new List<string>();
+        var instanceActions = VisualDescendants<Button>(Shell).Single(button => button.ContextMenu is { } menu
+            && new[] { "资源配置", "关闭实例", "重启实例" }.All(label => menu.Items.OfType<MenuItem>().Any(item => item.Header as string == label)));
+        var instanceCaption = string.Join("", VisualDescendants<TextBlock>(instanceActions).Where(text => text.FontFamily.Source != "Segoe MDL2 Assets").Select(text => text.Text));
+        if (instanceActions.Name != "InstanceActions" || instanceCaption != "实例操作" || instanceActions.ToolTip as string != "实例操作"
+            || System.Windows.Automation.AutomationProperties.GetName(instanceActions) != "实例操作")
+            clarityFailures.Add($"实例菜单应使用稳定Name InstanceActions及可见/无障碍名称实例操作；actual name={instanceActions.Name}, caption={instanceCaption}, automation={System.Windows.Automation.AutomationProperties.GetName(instanceActions)}, tooltip={instanceActions.ToolTip}");
+        var workspaceMore = VisualDescendants<Button>(Shell).Single(button => button.Name == "WorkspaceMore");
+        if (ReferenceEquals(instanceActions, workspaceMore) || ReferenceEquals(instanceActions.ContextMenu, workspaceMore.ContextMenu))
+            clarityFailures.Add("实例操作与工作区更多入口必须保持独立菜单和目标范围");
+        var launchToolTips = new Dictionary<string, string>
+        {
+            ["启动所选"] = "启动所选：操作列表中已勾选且尚未连接的可接入实例，包括被当前筛选隐藏的已勾选实例；已运行的实例仅连接，不重复启动；不包含受保护实例。完成核验后自动连接并加入群控。",
+            ["一键启动全部"] = "一键启动全部：操作全部尚未连接的可接入实例，包括被当前筛选隐藏的实例；已运行的实例仅连接，不重复启动；不包含受保护实例。完成核验后自动连接并加入群控。"
+        };
+        foreach (var (label, expectedTip) in launchToolTips)
+        {
+            var launch = VisualDescendants<Button>(Shell).Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == label);
+            if (launch.ToolTip as string != expectedTip)
+                clarityFailures.Add($"{label}提示必须说明所选/全部、筛选隐藏、运行态仅连接和保护范围；actual={launch.ToolTip}");
+            if (launch.IsEnabled || !ToolTipService.GetShowOnDisabled(launch) || !ToolTipService.GetIsEnabled(launch))
+                clarityFailures.Add($"{label}在真实Demo禁用状态仍须配置可读提示；enabled={launch.IsEnabled}, showOnDisabled={ToolTipService.GetShowOnDisabled(launch)}, tooltipEnabled={ToolTipService.GetIsEnabled(launch)}");
+        }
+        if (clarityFailures.Count > 0) throw new InvalidOperationException("设备操作清晰度验收失败：" + string.Join("；", clarityFailures));
         foreach (var label in new[] { "资源配置", "关闭实例", "重启实例" })
             if (!ldCommandsByLabel.ContainsKey(label)) throw new InvalidOperationException("更多菜单遗漏生命周期命令：" + label);
         var cancel = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == "取消启动");
@@ -12971,7 +12996,7 @@ public partial class MainWindow
         var cold = unifiedDevices.Single(row => row.Instance is { Index: > 0, AndroidStarted: false });
         var other = unifiedDevices.First(row => row.Instance is null && row.Device is not null);
         var otherInfo = other.Device!.Info;
-        var more = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == "更多操作");
+        var more = VisualDescendants<Button>(Shell).Single(button => button.Name == "InstanceActions");
         var menu = more.ContextMenu ?? throw new InvalidOperationException("更多操作按钮没有实际菜单。");
         var menuActions = new[] { "资源配置", "关闭实例", "重启实例" }.ToDictionary(label => label,
             label => menu.Items.OfType<MenuItem>().Single(item => item.Header as string == label));
@@ -13355,7 +13380,13 @@ public partial class MainWindow
     {
         var command = new AsyncCommand(async () => { try { await operation(); } catch (Exception ex) { SetLaunchFeedback(label + "失败：" + ViewModel.PresentError(ex)); } }, enabled);
         launchCommands.Add(command); var button = WallButton(glyph, label, command, primary);
-        button.ToolTip = label.StartsWith("启动", StringComparison.Ordinal) || label == "一键启动全部" ? label + "，完成核验后自动连接并加入群控" : label;
+        button.ToolTip = label switch
+        {
+            "启动所选" => "启动所选：操作列表中已勾选且尚未连接的可接入实例，包括被当前筛选隐藏的已勾选实例；已运行的实例仅连接，不重复启动；不包含受保护实例。完成核验后自动连接并加入群控。",
+            "一键启动全部" => "一键启动全部：操作全部尚未连接的可接入实例，包括被当前筛选隐藏的实例；已运行的实例仅连接，不重复启动；不包含受保护实例。完成核验后自动连接并加入群控。",
+            _ => label
+        };
+        ToolTipService.SetShowOnDisabled(button, true);
         return button;
     }
 

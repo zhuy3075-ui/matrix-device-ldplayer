@@ -101,8 +101,8 @@
   },
   {
     "Path": "docs/codex/list-console/REPORT.md",
-    "Bytes": 9299,
-    "Sha256": "f9a7cf34392908bfae49166af403f018e61b71ebc79b681ba8c0b38599fb3e6a"
+    "Bytes": 15307,
+    "Sha256": "c74018dcc58ef5b8ad54928b820b326680a990f3cb4de980b28ad47089eb8859"
   },
   {
     "Path": "docs/codex/realtime-monitoring/goal-prompt.md",
@@ -791,8 +791,8 @@
   },
   {
     "Path": "README.md",
-    "Bytes": 23647,
-    "Sha256": "b36f4f1ef787201e10f29eb092aeee77b00daf16dc37567958bd09fa5906616b"
+    "Bytes": 24009,
+    "Sha256": "b2ce75fc26497c41fe5a4427349ea6d6852eee1ea58b51150a55cf6a41ceef3e"
   },
   {
     "Path": "src/MatrixDevice.Cli/MatrixDevice.Cli.csproj",
@@ -1071,8 +1071,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/LdPlayerView.cs",
-    "Bytes": 9354,
-    "Sha256": "0c9f95ae7e8e81051ebc73651ffcbc3745f1649b20e5b0bdef0fb3f433ee70ef"
+    "Bytes": 9536,
+    "Sha256": "f878f6ae385b99957ea46113242755ad4c84b484394f555482d62581899f85b3"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/LdWindowVisibilitySmoke.cs",
@@ -1171,13 +1171,13 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UiControlAudit.cs",
-    "Bytes": 30164,
-    "Sha256": "55fef98d9e02e9bb7ddb4ae82e2d8a4cdc1190c99d2ce5be856bc4a46ca65052"
+    "Bytes": 33191,
+    "Sha256": "8d3eee1da73c0b508a302747a801fe79a8a54026791e4f62860b26b86d56a788"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UnifiedDeviceActionsSmoke.cs",
-    "Bytes": 10630,
-    "Sha256": "2d8ae28d2e6638c207e8f60b217b9d9c9491113f5904c464fcd1c637952a3799"
+    "Bytes": 10620,
+    "Sha256": "8c3bafe676de0be35812f72f18f4547b504dfa253d695ebb4b864c4c0bbee93a"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UnifiedDevicesAcceptance.cs",
@@ -1186,8 +1186,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UnifiedDevicesView.cs",
-    "Bytes": 32037,
-    "Sha256": "ca7df5499ddf08280962791154b5372c85b84f1c93eaf24fcb2e4e82c61c9da5"
+    "Bytes": 32545,
+    "Sha256": "fdb8d2d9efde58ab283f7963459290869a3776426e08b5ddb215d8e98771ce03"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UnifiedDeviceTile.cs",

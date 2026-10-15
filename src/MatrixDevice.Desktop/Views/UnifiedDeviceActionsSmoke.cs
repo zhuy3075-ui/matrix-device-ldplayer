@@ -19,7 +19,7 @@ public partial class MainWindow
         var cold = unifiedDevices.Single(row => row.Instance is { Index: > 0, AndroidStarted: false });
         var other = unifiedDevices.First(row => row.Instance is null && row.Device is not null);
         var otherInfo = other.Device!.Info;
-        var more = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == "更多操作");
+        var more = VisualDescendants<Button>(Shell).Single(button => button.Name == "InstanceActions");
         var menu = more.ContextMenu ?? throw new InvalidOperationException("更多操作按钮没有实际菜单。");
         var menuActions = new[] { "资源配置", "关闭实例", "重启实例" }.ToDictionary(label => label,
             label => menu.Items.OfType<MenuItem>().Single(item => item.Header as string == label));

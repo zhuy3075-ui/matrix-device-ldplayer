@@ -157,7 +157,13 @@ public partial class MainWindow
     {
         var command = new AsyncCommand(async () => { try { await operation(); } catch (Exception ex) { SetLaunchFeedback(label + "失败：" + ViewModel.PresentError(ex)); } }, enabled);
         launchCommands.Add(command); var button = WallButton(glyph, label, command, primary);
-        button.ToolTip = label.StartsWith("启动", StringComparison.Ordinal) || label == "一键启动全部" ? label + "，完成核验后自动连接并加入群控" : label;
+        button.ToolTip = label switch
+        {
+            "启动所选" => "启动所选：操作列表中已勾选且尚未连接的可接入实例，包括被当前筛选隐藏的已勾选实例；已运行的实例仅连接，不重复启动；不包含受保护实例。完成核验后自动连接并加入群控。",
+            "一键启动全部" => "一键启动全部：操作全部尚未连接的可接入实例，包括被当前筛选隐藏的实例；已运行的实例仅连接，不重复启动；不包含受保护实例。完成核验后自动连接并加入群控。",
+            _ => label
+        };
+        ToolTipService.SetShowOnDisabled(button, true);
         return button;
     }
 

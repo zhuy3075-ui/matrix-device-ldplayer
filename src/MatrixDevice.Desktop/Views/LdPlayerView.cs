@@ -30,7 +30,8 @@ public partial class MainWindow
         }, () => !ldBusy && !ViewModel.Busy && unifiedDevices.Any(row => row.IsSelected && row.Index is { } index && ldWindowVisibility?.IsHidden(index) == true));
         launchCommands.Add(show);
         menu.Items.Add(new MenuItem { Header = "恢复旧版隐藏窗口", Icon = WallGlyph("\uE8A7"), Command = show });
-        var more = WallButton("\uE712", "更多操作", new ActionCommand(() => { }));
+        var more = WallButton("\uE712", "实例操作", new ActionCommand(() => { }));
+        more.Name = "InstanceActions";
         more.ContextMenu = menu; menu.PlacementTarget = more; menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
         more.Click += (_, _) => menu.IsOpen = true;
         toolbar.Children.Add(more);
