@@ -43,7 +43,7 @@
 | AP-032 | P1/已独立离线修复，主仓完整GUI仍有限制 | 应用页把显示名称纳入连接身份；metadata仅改名后旧应用名称不更新、启停/确认/在途List误拒绝 | [A07a](A07_APPLICATION_IDENTITY.md)原10例3红保留；r1两生产文件后独立新10/114检查及完整旧套/12页通过，四源raw同主仓、127源逻辑同，主仓150通过。root-r02在新hook前旧截屏前置失败，新10当轮NOT-RUN；限域交付已获独审，AP-033不冒称已修。在线、Runtime、明确选择和活动门禁未放宽 |
 | AP-033 | P2/输入源缺失已取证，间歇成因仍未知 | 旧coordinate-route在RaiseEvent前失败；[诊断p01](AP033_INPUT_DIAGNOSTICS.md)三快照均ActiveSource/Captured/DirectlyOver=null、目标源有效；after-set OS和直接映射命中Image，之后OS移动、WPF仍屏幕零点 | p01独立150过、GUI FAIL，旧19/18过、截屏9PASS1FAIL/10清理，其后NOT-RUN；该轮root未重跑。49+仅日志不变断言。后续A07b1独立及主仓完整smoke实际通过，仍不证明输入源成因已修。不归因操作者、不做坐标生产修复、不并同AP-028，不把一次绿当关闭依据 |
 | AP-034 | P1/脚本与传输恢复已独立离线修复，API释放仍开放 | pending在CanManage之前清除；原12例7真红证明脚本/稳定Push跨原Tick后真实释放和VM通知仍无List，API计数无结束通知另项 | [A07b1](A07_APPLICATION_PENDING.md)单页7+/3-；独立及主仓各新12/310/12清理、150项/0警告错误、旧七套/原应用/12页完整过。保持350ms和全部身份/活动门禁，不循环重试。空选/离页/Close及最终目标通过；不冒称API释放、正文响应式、Android或所有自动刷新均完成 |
-| AP-035 | P1/数据库长路径边界已离线复现，未修复 | 深路径Demo第46个发布用例BeginTransaction遇SQLite14，db252/journal260，之前45例过；随后当前CLI无设备授权/API的四例初始化中，db240/251成功，252/253同SQLite14非零 | [实机与回归复核](../list-console/LIVE_RECHECK_2026-10-16.md)保留原FAIL；最小证据artifacts/p35a含四例原始字节/退出码，支持260字符journal边界，尚未验证修复。短路径完整GUI又遇AP-033，不能判任一已修；下一步独立验证Windows路径修复方案，不盲重跑完整套 |
+| AP-035 | P1/已独立及主仓离线修复 | 原db252/journal260初始化SQLite14已复现；新正式原代码152/158有6真红。原生路径未扩展；首修复验证还遭旧产物，PDB核原源后保留该失败 | [A13报告](A13_SQLITE_PATH.md)：唯一产品主库/备份Windows扩展路径，原位置/事务不变。有效独立158/51.43秒、主仓158/51.76秒且PDB三源一致，主仓四普通长路径CLI通过；迁移/拒绝/文件释放覆盖。完整GUI/AP-033、UNC、非Windows及真实双实例不由本项关闭 |
 
 ## 修复记录规则
 

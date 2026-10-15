@@ -750,6 +750,8 @@ Test("concurrent serial binding edits merge by instance index", () =>
     return Task.CompletedTask;
 });
 
+CatalogPathTests.Register(Test);
+
 var liveIndex = Array.IndexOf(args, "--ldplayer-live-query");
 if (liveIndex >= 0)
 {

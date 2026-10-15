@@ -2,11 +2,17 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 最新执行：用户扩展目标与真实测试追踪
+## 最新执行：AP-035已限域离线修复
+
+本段优先于下方历史阶段。基于1b5bac0，唯一产品CatalogRepository修正Windows原生主库/备份路径，不搬移数据、不改事务/schema。新CatalogPathTests的8项追加在原150之后；原代码实际152/158、6条SQLite14。首修复f01运行旧DLL（PDB仍原源checksum），失败保留；只touch该自有源mtime后独立f02有效158/51.43秒，主仓一次158/51.76秒，0警告错误。两边PDB均核三冻结源码，145输入/配置前后保持、进程和自有临时目录清理。主仓四普通路径251/252/253/300的真实CLI也全exit0并独占再开；详见[A13报告](A13_SQLITE_PATH.md)，包/推送以实际交付记录为准。
+
+未运行完整GUI或真实设备，不关闭AP-033或用户强调的双实例同步、当前ApplicationsView安装卸载、最终双实例30分钟。下一步先以原断言恢复可靠输入前置；lc16a三采样OS稳定而WPF ActiveSource仍null，不可继续归因指针漂移。AP-008四候选JAR重新核同SHA，常见JDK/JBR目录及PATH仍无可核工具；需可信便携JDK与自有唯一测试包，不拿用户抖音卸载凑验收。原实例0、共享ADB和原配置不改，不清理worktree。后续A07余项/A08-A16仍全部有效。
+
+## 上一阶段：用户扩展目标与真实测试追踪
 
 本段优先于下方旧阶段安排。用户新增四项已追加到PRD R11-R14、SPEC和TASKS A13-A16：P0全测、P1终控台/RPA闭环、P2群控MCP设计/最小接入、P3抓包调研/POC，四项均必交付。A13a基线先给新任务提供安全契约，A13b继续当前完整测试，A14/A15/A16受控链路再经A13c汇A11/A12，不形成循环；不新增第二个终控台导航。
 
-当前业务代码仍21e3ac17；本阶段只更新文档和源码清单，不把计划标为实现。脚本为受限ZIP/动作，已有多目标逐台调度/参数保存，缺步骤参数替换及runId/taskId聚合作业；MCP需补实现。ProxyService Start/Stop为501，外部HTTP Toolkit MCP辅助客户端不是产品server/抓包。官方调研见`docs/codex/automation-expansion/CAPTURE_RESEARCH.md`，显式应用代理只是初选，POC未运行，不启用可能操作共享ADB/CA的外部自动接入。
+四任务文档阶段的业务基线为21e3ac17，该历史阶段只更新文档和源码清单，不把计划标为实现。脚本为受限ZIP/动作，已有多目标逐台调度/参数保存，缺步骤参数替换及runId/taskId聚合作业；MCP需补实现。ProxyService Start/Stop为501，外部HTTP Toolkit MCP辅助客户端不是产品server/抓包。官方调研见`docs/codex/automation-expansion/CAPTURE_RESEARCH.md`，显式应用代理只是初选，POC未运行，不启用可能操作共享ADB/CA的外部自动接入。
 
 最近实际运行见`docs/codex/list-console/LIVE_RECHECK_2026-10-16.md`：Build150/51.43秒/0警告错误；实例1真实冷启动82872 exit0/16.393秒，8项Live50432 exit0/13.630秒，中文精确回读、文件SHA一致、12页截图齐。实际ADB62248/birth/协议0029保持，原配置E4E33不变；实例1留运行，其他22仅业务字段一致，跨独立service generation不同，不称JSON逐字相同。
 

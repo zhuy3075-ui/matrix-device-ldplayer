@@ -20,6 +20,8 @@
 
 2026-10-16新增任务R11-R14/A13-A16已纳入上述文档：继续全功能/双实例/安装卸载/最终30分钟验收，并规划终控台RPA闭环、群控MCP接入及指定模拟器抓包。最近[真实实例复核](docs/codex/list-console/LIVE_RECHECK_2026-10-16.md)为实例1冷启动及8项限域Live通过，不是全控件通过。现有脚本为受限ZIP格式，产品尚无群控MCP server或完整抓包会话；[抓包初步调研](docs/codex/automation-expansion/CAPTURE_RESEARCH.md)已比较方案，POC未运行，不把规划当实现。
 
+Windows数据库长路径初始化已按原位置修复，不搬移数据或关闭事务。独立及主仓正式回归均158/158，实际CLI的251/252/253/300字符普通路径均通过；迁移备份、未来版本拒绝与文件释放也有回归，见[长路径报告](docs/codex/apple-experience/A13_SQLITE_PATH.md)。完整GUI的输入源问题、真实双实例同步、新版应用页安装卸载和最终双实例30分钟仍待，不由本项离线结果替代。
+
 ## 构建与运行
 
 需要 Windows 10/11、[.NET SDK 10.0.402](https://dotnet.microsoft.com/en-us/download/dotnet/10.0)。依赖固定于项目文件与 `packages.lock.json`，NuGet 源位于 `NuGet.Config`。本工作区已有通过官方 SHA-512 校验的便携 SDK，路径为上级 `.tools/dotnet/dotnet.exe`。

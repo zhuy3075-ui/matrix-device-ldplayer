@@ -16,7 +16,10 @@ public sealed class CatalogRepository : IDisposable
     {
         path = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        _connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+        var sqlitePath = path;
+        if (OperatingSystem.IsWindows() && !path.StartsWith(@"\\?\", StringComparison.Ordinal) && !path.StartsWith(@"\\.\", StringComparison.Ordinal))
+            sqlitePath = path.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + path[2..] : @"\\?\" + path;
+        _connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = sqlitePath, Pooling = false }.ToString());
         try
         {
         _connection.Open();
@@ -32,7 +35,7 @@ public sealed class CatalogRepository : IDisposable
         {
             if (new FileInfo(path).Length > 0)
             {
-                using var backup = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path + ".pre-migration.bak", Pooling = false }.ToString());
+                using var backup = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = sqlitePath + ".pre-migration.bak", Pooling = false }.ToString());
                 backup.Open();
                 _connection.BackupDatabase(backup);
             }

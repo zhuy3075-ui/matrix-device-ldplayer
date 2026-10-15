@@ -24,6 +24,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- A06_SCREENSHOT_RESPONSIVE.md
 |   |   |   |-- A07_APPLICATION_IDENTITY.md
 |   |   |   |-- A07_APPLICATION_PENDING.md
+|   |   |   |-- A13_SQLITE_PATH.md
 |   |   |   |-- AP008_DEPENDENCIES.md
 |   |   |   |-- AP033_INPUT_DIAGNOSTICS.md
 |   |   |   |-- CONTROL_CATALOG.md
@@ -338,6 +339,7 @@ MatrixDevice.Reconstructed/
 |-- tests/
 |   +-- MatrixDevice.Tests/
 |       |-- ApplicationBatchTests.cs
+|       |-- CatalogPathTests.cs
 |       |-- ExistingAdbTests.cs
 |       |-- LdLaunchMemoryTests.cs
 |       |-- LdRunningWindowTests.cs
