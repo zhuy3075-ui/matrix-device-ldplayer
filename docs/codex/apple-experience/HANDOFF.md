@@ -20,6 +20,16 @@ A02主仓149/149（51.17秒）和最终1000×700界面通过；独立verifier149
 
 ## 当前状态与下一步
 
+### 最新执行：完整目标恢复，继续A07b1原始待办路径
+
+上一轮为progress：针对用户再次提出的列表精简请求，确认当前源码已经实现四项，未重复改产品；主仓原样Build/150离线（51.49秒，0警告错误）及既有公共壳135实际成功，独立源码复核通过。证据在`artifacts/lr16/summary.json`与device.png；139份src/tools/tests检查未变、实际配置E4E33未变，所有自有runner/GUI已终结，锁root空闲。该轮不是全GUI或实机通过，也没有新功能commit/push。
+
+完整目标仍active。[A07_APPLICATION_PENDING](A07_APPLICATION_PENDING.md)实际baseline29660已终结：150/8警告0错误、12例5PASS7真产品红12清理，报告9F9A，五次144输入/原8/config同，无timeout/kill/残留；其他旧套NOT-RUN。生产r1仅ApplicationsView7+/3-（4260），测试r1a仅四处编译警告修整（DBDB），Main33C首接线、旧8不动。独立final45047已终结：150/51.27秒/0警告错误、新12/310/12清理和旧19/18/10/11/16/49/A07身份10/原应用/12页全部实际通过，Smoke0/126.368秒；112原任务全终结、144输入/配置同，owned0，独审限域批准并归锁。旧AP033本轮绿不解释间歇成因，nodes/colors0和stderr已捕获诊断如实保留。
+
+root三源已机械导入4260/DBDB/33C；预导入143基线FD3C，144全文/canonical同独立版，其余141原raw/旧8未改。代表runner C832只修三处报告StrictMode解释，F213未执行。root38202已真正终结：Build44584 exit0/63.432秒，150/51.05秒/0警告错误；Smoke16536 exit0/118.134秒，同新12/310/12清理、旧19/18/10/11/16/49/身份10/原应用/12页全过。113任务记录终态（独立112之差为合法条件观察Task），原流及144前后不变，配置E4E33、自有0，无timeout/kill/清理错；root已目视报告并获独立限域交付批准。摘要94F972...ED6AE/DLL4BC9...32A62，所有session终结，Build/GUI锁root空闲。
+
+当前是交付门禁：冻结三源与7文档→已审helper9CA按tracked快照加仅两显式新源核包/回写3清单→独审13暂存路径→单独commit/push原私有feature。实际Git/远端及`artifacts/app-pending-root/push-complete-r1.json`为准；若已含本功能且远端一致，不重复交付。两用户PNG/配置/依赖/current raw不stage，旧AP021材料保留；不合并发布或清worktree。下一项API释放通知真实复现，其后应用正文响应式、A08-A12、原生保存、真实1/2及30分钟必验，完整goal active；不要重跑45047/29660/38202或下方旧session。
+
 ### 最新执行：AP-033诊断采证完成，成因仍开放
 
 上一轮已实际commit/push `ab11ec94fe6b7ab139a922ac346850ed7c292501`，feature远端相同、test仍49e4710；`artifacts/app-identity-root/push-complete-r1.json`记录16文件限域交付、304源/307ZIP/156Bundle、配置E4E33与owned0。主仓tracked/index干净，两用户PNG保留；上一目标轮为progress，不重做已完成交付。

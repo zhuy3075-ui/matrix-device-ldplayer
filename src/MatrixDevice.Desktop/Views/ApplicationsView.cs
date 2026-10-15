@@ -147,17 +147,21 @@ public partial class MainWindow
     {
         if (applicationSyncing) return;
         foreach (var row in applicationRows.Where(row => !applicationTargets.Any(target => target.IsSelected && target.Serial == row.Serial)).ToArray()) applicationRows.Remove(row);
-        applicationReadPending = true; ScheduleApplicationRead(); RefreshApplicationControls();
+        applicationReadPending = applicationTargets.Any(row => row.IsSelected);
+        if (applicationReadPending) ScheduleApplicationRead();
+        else applicationReadTimer?.Stop();
+        RefreshApplicationControls();
     }
     private void ScheduleApplicationRead()
     {
+        if (closing || closeApproved || !applicationReadPending) { applicationReadTimer?.Stop(); return; }
         applicationReadTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(350), DispatcherPriority.Background, async (_, _) =>
         {
             applicationReadTimer!.Stop();
-            if (!applicationPage.IsVisible || applicationRunning || ViewModel.Busy) return;
-            applicationReadPending = false;
+            if (closing || closeApproved || !applicationReadPending || !applicationPage.IsVisible || applicationRunning || ViewModel.Busy) return;
             if (CanManageApplicationTargets())
             {
+                applicationReadPending = false;
                 try { await ReadApplicationListsAsync(); }
                 catch (Exception error) { applicationResult.Text = ViewModel.PresentError(error); }
             }

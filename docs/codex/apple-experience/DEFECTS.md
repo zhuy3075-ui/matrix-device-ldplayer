@@ -41,8 +41,8 @@
 | AP-030 | P1/原生保存源码候选，尚未复现 | SaveImageAsync在原生框返回后才取crop/图；合法新帧会清crop，存在裁剪退化新全图候选，但首次实际输入未到 | [A06d](A06_NATIVE_IMAGE_SAVE.md)保留r0；不能把工具捕获超时当产品红。恢复实际交互后取证原图/裁剪保存意图，再实施，不默认取消合法保存 |
 | AP-031 | P1/测试工具前置故障，非产品缺陷 | sky两次自有WPF窗口capture timeout，已按一次恢复规则停止；真实crop/保存Click0，fixture90秒前置超时后正常清理 | 原FAIL/清理/127源与配置证据见同报告。单独helper只读诊断不能代替原生验收；不改生产渲染、共享服务或权限来凑通过。其他页面安全工作继续 |
 | AP-032 | P1/已独立离线修复，主仓完整GUI仍有限制 | 应用页把显示名称纳入连接身份；metadata仅改名后旧应用名称不更新、启停/确认/在途List误拒绝 | [A07a](A07_APPLICATION_IDENTITY.md)原10例3红保留；r1两生产文件后独立新10/114检查及完整旧套/12页通过，四源raw同主仓、127源逻辑同，主仓150通过。root-r02在新hook前旧截屏前置失败，新10当轮NOT-RUN；限域交付已获独审，AP-033不冒称已修。在线、Runtime、明确选择和活动门禁未放宽 |
-| AP-033 | P2/本轮输入源缺失已取证，成因仍未知 | 旧coordinate-route在RaiseEvent前失败；[诊断p01](AP033_INPUT_DIAGNOSTICS.md)三快照均ActiveSource/Captured/DirectlyOver=null、目标源有效；after-set OS和直接映射命中Image，之后OS移动、WPF仍屏幕零点 | 独立150通过，完整GUI仍FAIL，旧19/18过、截屏9PASS1FAIL/10清理，其后含A07和12页NOT-RUN。49+仅日志不变旧断言；143编译输入已核，root不再运行。不归因操作者、不做坐标生产修复、不并同AP-028，不把诊断采证当根因已解 |
-| AP-034 | P1/应用自动读取源码候选，未运行 | pending在CanManage之前清除，脚本/稳定传输跨真实timer后可能丢读取意图；API计数又无结束通知 | 下一A07b用实际应用勾选/350ms tick、真实ScriptScheduler与Push TCS先取证；API通知生命周期和小屏正文另验。自身running暂无普通UI反例，不修改禁用控件伪造产品红；保留身份/活动门禁，不轮询取绿 |
+| AP-033 | P2/输入源缺失已取证，间歇成因仍未知 | 旧coordinate-route在RaiseEvent前失败；[诊断p01](AP033_INPUT_DIAGNOSTICS.md)三快照均ActiveSource/Captured/DirectlyOver=null、目标源有效；after-set OS和直接映射命中Image，之后OS移动、WPF仍屏幕零点 | p01独立150过、GUI FAIL，旧19/18过、截屏9PASS1FAIL/10清理，其后NOT-RUN；该轮root未重跑。49+仅日志不变断言。后续A07b1独立及主仓完整smoke实际通过，仍不证明输入源成因已修。不归因操作者、不做坐标生产修复、不并同AP-028，不把一次绿当关闭依据 |
+| AP-034 | P1/脚本与传输恢复已独立离线修复，API释放仍开放 | pending在CanManage之前清除；原12例7真红证明脚本/稳定Push跨原Tick后真实释放和VM通知仍无List，API计数无结束通知另项 | [A07b1](A07_APPLICATION_PENDING.md)单页7+/3-；独立及主仓各新12/310/12清理、150项/0警告错误、旧七套/原应用/12页完整过。保持350ms和全部身份/活动门禁，不循环重试。空选/离页/Close及最终目标通过；不冒称API释放、正文响应式、Android或所有自动刷新均完成 |
 
 ## 修复记录规则
 
