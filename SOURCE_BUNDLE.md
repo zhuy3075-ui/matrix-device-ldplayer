@@ -4997,6 +4997,7 @@ public partial class MainWindow : Window
         await ViewModel.RefreshWallAsync();
         await VerifyNativeMainTargetAsync();
         if (ViewModel.CurrentDevice is { } row) await ViewModel.SetMainAsync(row);
+        await VerifyDeviceFilterIsolationAsync();
         await VerifyShellSimplificationAsync();
         await ViewModel.LoadNodesAsync();
         ViewModel.SelectedNode = ViewModel.FlattenNodes().FirstOrDefault(node => node.Source.Clickable);
@@ -5118,35 +5119,35 @@ public partial class MainWindow : Window
         ViewModel.UpdateSelection();
         var filteredDevice = ViewModel.Devices[1];
         var originalDeviceInfos = ViewModel.Devices.ToDictionary(device => device, device => device.Info);
-        var previousStatus = ViewModel.StatusFilter;
+        var previousStatus = deviceStatusFilter;
         try
         {
             filteredDevice.Info = filteredDevice.Info with { State = "Offline" };
-            foreach (var status in new[] { "Ready", "Offline", "全部状态" })
+            foreach (var status in new[] { "已连接", "离线", "全部状态" })
             {
-                ViewModel.StatusFilter = status;
+                deviceStatusChoice.SelectedItem = status;
                 await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
                 if (!ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation) || ViewModel.Devices.Count(device => device.IsSelected) != 2)
                     throw new InvalidOperationException($"状态筛选改变了上下文：状态={status}，勾选={ViewModel.Devices.Count(device => device.IsSelected)}");
             }
-            ViewModel.StatusFilter = "Offline";
+            deviceStatusChoice.SelectedItem = "离线";
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-            if (ViewModel.DeviceView.Cast<DeviceRow>().Count() != 1 || ViewModel.Devices.Count(device => device.IsSelected) != 2)
+            if (unifiedDeviceView.Cast<UnifiedDeviceRow>().Count() != 1 || ViewModel.DeviceView.Cast<DeviceRow>().Count() != ViewModel.Devices.Count || ViewModel.Devices.Count(device => device.IsSelected) != 2)
                 throw new InvalidOperationException("状态筛选没有形成唯一可见设备或改变了群控勾选。");
             var selectAll = VisualDescendants<CheckBox>(Shell).Single(input => input.Name == "SelectAllDevices");
             selectAll.IsChecked = false; selectAll.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             if (ViewModel.Devices.Any(device => device.IsSelected) || unifiedDevices.Any(device => device.IsSelected))
                 throw new InvalidOperationException("取消表头全选没有清除隐藏设备的选择。");
             foreach (var device in ViewModel.Devices) device.Info = device.Info with { State = "Ready" };
-            ViewModel.StatusFilter = "Offline";
+            deviceStatusChoice.SelectedItem = "离线";
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-            if (ViewModel.DeviceView.Cast<DeviceRow>().Any() || !unifiedDeviceView.IsEmpty) throw new InvalidOperationException("空目录状态筛选失效。");
+            if (ViewModel.DeviceView.Cast<DeviceRow>().Count() != ViewModel.Devices.Count || !unifiedDeviceView.IsEmpty) throw new InvalidOperationException("空列表状态筛选失效或污染其他目录。");
             if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-empty.png"));
         }
         finally
         {
             foreach (var pair in originalDeviceInfos) pair.Key.Info = pair.Value;
-            ViewModel.StatusFilter = previousStatus;
+            deviceStatusChoice.SelectedItem = previousStatus;
         }
         if (ViewModel.DebugImage is not { PixelWidth: > 0 }) throw new InvalidOperationException("状态筛选丢失了当前截图。");
         SetWallViewMode("list");
@@ -5165,12 +5166,14 @@ public partial class MainWindow : Window
         expandedControls.IsExpanded = false;
         CloseMainControl();
         ShowDeviceDirectory();
-        var statusChoice = VisualDescendants<ComboBox>(directoryWindow!).Single(input => BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == nameof(WorkspaceViewModel.StatusFilter));
+        if (VisualDescendants<ComboBox>(directoryWindow!).Any() || VisualDescendants<CheckBox>(directoryWindow!).Any()) throw new InvalidOperationException("设备详情仍含全局筛选或群控勾选。");
+        directoryWindow!.Hide();
+        var statusChoice = deviceStatusChoice;
         statusChoice.IsDropDownOpen = true;
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (statusChoice.Template.FindName("PART_Popup", statusChoice) is not Popup { IsOpen: true }) throw new InvalidOperationException("状态筛选下拉模板未打开。");
-        statusChoice.SelectedItem = "Offline";
-        if (ViewModel.StatusFilter != "Offline") throw new InvalidOperationException("状态筛选下拉绑定失效。");
+        statusChoice.SelectedItem = "离线";
+        if (deviceStatusFilter != "离线") throw new InvalidOperationException("列表状态筛选下拉绑定失效。");
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (!ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation)) throw new InvalidOperationException("设备目录筛选改变了当前设备或主控");
         statusChoice.IsDropDownOpen = false; statusChoice.SelectedItem = previousStatus; directoryWindow!.Hide();
@@ -5188,7 +5191,7 @@ public partial class MainWindow : Window
         var controlStates = new List<object>();
         var pageCaptures = new List<object>();
         var restoredDevices = ViewModel.Devices.ToDictionary(device => device, device => device.Info);
-        var restoredFilter = ViewModel.StatusFilter;
+        var restoredFilter = deviceStatusFilter;
         foreach (TabItem tab in tabs.Items)
         {
             NavigateTo(tab.Tag.ToString()!);
@@ -6655,7 +6658,31 @@ public sealed class UnifiedDeviceRow : ObservableObject
     public int? Index => Instance?.Index;
     public string Number => Index?.ToString() ?? "-";
     public string Name => Device?.Name ?? Instance?.Name ?? "";
-    public string State => Connected ? "已连接" : phase is not ("" or "已连接") ? phase : Instance?.Index == 0 ? "受保护" : Instance?.IsStarting == true ? "启动中" : Instance?.AndroidStarted == true ? "待连接" : Instance is not null ? "已关闭" : Device?.State ?? "离线";
+    public string State => FilterState;
+    public string StateDetails => $"运行状态：{FilterState}\n设备原始状态：{Device?.Info.State ?? "无设备连接"}\n操作阶段：{(string.IsNullOrWhiteSpace(phase) ? "无" : phase)}";
+    public string FilterState
+    {
+        get
+        {
+            if (Index is 0 or 99999) return "受保护";
+            if (Instance is { } instance)
+            {
+                if (instance.IsStarting) return "启动中";
+                var stopped = !instance.AndroidStarted && instance.ProcessId <= 0 && instance.VBoxProcessId <= 0 && instance.TopWindow == 0 && instance.BindWindow == 0;
+                if (stopped) return !Connected && (Device is null || Device.Info.State == "Offline") ? "已关闭" : "未知";
+                if (!instance.AndroidStarted || instance.ProcessId <= 0 || instance.VBoxProcessId <= 0) return "未知";
+            }
+            if (Connected && Device?.Info.Online != true) return "未知";
+            return Device?.Info.State switch
+            {
+                "Ready" when Connected => "已连接",
+                "Ready" when Instance is not null => "待连接",
+                "Offline" => "离线", "Unauthorized" => "未授权", "Discovered" => "已发现", "Error" => "异常",
+                null when Instance?.AndroidStarted == true => "待连接",
+                _ => "未知"
+            };
+        }
+    }
     public string Model => Device?.Info.Model ?? "-";
     public string Brand => Device?.Info.Brand ?? "-";
     public string Android => Device?.Info.AndroidVersion ?? "-";
@@ -7540,6 +7567,140 @@ public partial class MainWindow
 
 ```
 
+## src/MatrixDevice.Desktop/Views/DeviceFilterSmoke.cs
+
+```csharp
+using System.IO;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
+using System.Windows.Threading;
+using MatrixDevice.Core;
+using MatrixDevice.Host;
+
+namespace MatrixDevice.Desktop;
+
+public partial class MainWindow
+{
+    private async Task VerifyDeviceFilterIsolationAsync()
+    {
+        if (!ViewModel.Demo) throw new InvalidOperationException("设备筛选隔离验收仅限演示模式。");
+        var checks = new List<string>(); var observations = new List<object>(); var matrixCount = 0;
+        void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); checks.Add(message); }
+        async Task Settle() { await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.ContextIdle); await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render); await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.ApplicationIdle); }
+        var status = deviceStatusFilter; var scope = monitorScopeChoice.SelectedIndex;
+        var current = ViewModel.CurrentDevice; var main = ViewModel.MainDevice;
+        var selection = unifiedDevices.ToDictionary(row => row.Key, row => row.IsSelected);
+        var appSelection = applicationTargets.Select(row => (row.Serial, row.IsSelected)).ToArray();
+        var infos = ViewModel.Devices.ToDictionary(row => row, row => row.Info);
+        var a = ViewModel.Devices[0]; var b = ViewModel.Devices[1];
+        var metadata = ViewModel.Runtime.Metadata.GetMetadata(b.Serial);
+        try
+        {
+            NavigateTo("设备墙 / 主控"); deviceStatusChoice.SelectedItem = "全部状态"; await Settle();
+            Check(deviceStatusChoice.IsVisible && deviceStatusChoice.Items.Cast<string>().SequenceEqual(new[] { "全部状态", "已连接", "已关闭", "启动中", "待连接", "离线", "未授权", "已发现", "异常", "未知", "受保护" }), "列表唯一固定状态下拉可见");
+            var grid = VisualDescendants<DataGrid>(wallList).Single();
+            var rowA = unifiedDevices.Single(row => row.Device == a); var rowB = unifiedDevices.Single(row => row.Device == b);
+            grid.SelectedItem = rowA; await Settle(); Check(ViewModel.CurrentDevice == a && grid.SelectedItem == rowA, "先建立真实列表高亮A");
+            b.Info = b.Info with { State = "Offline" }; deviceStatusChoice.SelectedItem = "离线"; await Settle();
+            Check(unifiedDeviceView.Cast<UnifiedDeviceRow>().SequenceEqual([rowB]) && ViewModel.CurrentDevice == a && ViewModel.MainDevice == main, "筛选只显示B时不把高亮A的操作目标自动换成B");
+            grid.SelectedItem = rowB; await Settle(); Check(ViewModel.CurrentDevice == b && ViewModel.MainDevice == main, "显式选择可见B仍更新单设备目标，不改主控");
+            Check(selection.All(pair => unifiedDevices.Single(row => row.Key == pair.Key).IsSelected == pair.Value) && appSelection.SequenceEqual(applicationTargets.Select(row => (row.Serial, row.IsSelected))), "筛选和高亮不改变群控/应用独立选择");
+
+            ShowDeviceDirectory(); await Settle();
+            var details = directoryWindow!; var list = VisualDescendants<ListBox>(details).Single(input => input.Name == "DetailsDeviceChoice");
+            Check(list.Items.Cast<DeviceRow>().SequenceEqual(ViewModel.Devices) && !ReferenceEquals(list.ItemsSource, ViewModel.DeviceView), "详情独立未过滤目录仍完整");
+            Check(!VisualDescendants<ComboBox>(details).Any() && !VisualDescendants<CheckBox>(details).Any() && !VisualDescendants<Button>(details).Any(button => button.ToolTip as string is "全选筛选" or "清空"), "详情无全局筛选/全选清空/群控勾选");
+            foreach (var caption in new[] { "画面", "节点", "脚本", "接口" }) Check(VisualDescendants<TextBlock>(details).Any(text => text.Text.StartsWith(caption, StringComparison.Ordinal)), "详情保留子系统状态：" + caption);
+            list.SetCurrentValue(Selector.SelectedItemProperty, a); await Settle(); Check(ViewModel.CurrentDevice == a && ViewModel.MainDevice == main, "详情显式单设备选择A生效");
+            list.SetCurrentValue(Selector.SelectedItemProperty, b); await Settle();
+            const string retainedGroup = "  A05原分组  "; const string renamed = "A05详情实际保存";
+            b.Info = b.Info with { GroupId = retainedGroup };
+            var name = VisualDescendants<TextBox>(details).Single(input => BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path == nameof(WorkspaceViewModel.DeviceName)); name.SetCurrentValue(TextBox.TextProperty, renamed); name.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+            var save = VisualDescendants<Button>(details).Single(button => ReferenceEquals(button.Command, ViewModel.SaveMetadataCommand));
+            Check(save.IsEnabled, "详情实际保存命令可用");
+            ((IInvokeProvider)new ButtonAutomationPeer(save).GetPattern(PatternInterface.Invoke)).Invoke();
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (ViewModel.Busy || ViewModel.Runtime.Metadata.GetMetadata(b.Serial).Name != renamed)
+            {
+                if (deadline.Elapsed >= TimeSpan.FromSeconds(3)) throw new InvalidOperationException("详情实际保存未在3秒内完成：" + ViewModel.Error);
+                await Settle(); await Task.Delay(20);
+            }
+            using (var fresh = new CatalogRepository(Path.Combine(ViewModel.DataDirectory, "db.sqlite3")))
+            {
+                var stored = fresh.GetMetadata(b.Serial); Check(stored.Name == renamed && stored.GroupId == retainedGroup && b.Info.GroupId == retainedGroup, "新数据库连接证明改名持久化且GroupId原样保留");
+            }
+            details.Hide(); b.Info = infos[b]; ViewModel.CurrentDevice = current; deviceStatusChoice.SelectedItem = "已关闭"; await Settle();
+            Check(unifiedDeviceView.Cast<UnifiedDeviceRow>().Any(row => row.Instance is { Index: > 0 } && row.Device is null), "已关闭筛选覆盖没有Device的全停实例");
+
+            NavigateTo("实时监控"); monitorScopeChoice.SelectedIndex = 1; await Settle(); await monitorReconcile; await ReconcileMonitorAsync(); monitorTimer.Stop();
+            Check(monitorTiles.Keys.ToHashSet().SetEquals(unifiedDevices.Select(row => row.Key)), "详情隐藏和列表已关闭筛选不使监控全部目录丢项");
+            SelectMonitor(monitorTiles.Keys.First()); await monitorReconcile; monitorTimer.Stop(); await Settle();
+            foreach (var connectedOnly in new[] { false, true })
+            {
+                monitorScopeChoice.SelectedIndex = connectedOnly ? 0 : 1; await monitorReconcile; await ReconcileMonitorAsync(); await Settle(); monitorTimer.Stop();
+                var expected = unifiedDevices.Where(row => !connectedOnly || row.Connected).Select(row => row.Key).ToHashSet();
+                Check(monitorTiles.Keys.ToHashSet().SetEquals(expected), "监控自身范围生效：" + connectedOnly);
+                var epoch = monitorEpoch; var selectedMonitor = monitorSelected;
+                var tiles = monitorTiles.ToDictionary(pair => pair.Key, pair => (Tile: pair.Value, pair.Value.Signature, pair.Value.Eligible));
+                foreach (var category in DeviceStatusOptions)
+                {
+                    deviceStatusChoice.SelectedItem = category; await Settle(); await ReconcileMonitorAsync();
+                    Check(monitorEpoch == epoch && monitorSelected == selectedMonitor && monitorTiles.Count == tiles.Count && tiles.All(pair => monitorTiles.TryGetValue(pair.Key, out var tile) && ReferenceEquals(tile, pair.Value.Tile) && tile.Signature == pair.Value.Signature && tile.Eligible == pair.Value.Eligible), "列表筛选不改监控epoch/卡片/签名/资格/选择：" + connectedOnly + "/" + category);
+                    observations.Add(new { connectedOnly, category, epoch, monitorEpoch, selectedMonitor, monitorSelected, monitorKeys = monitorTiles.Keys.ToArray(), listKeys = unifiedDeviceView.Cast<UnifiedDeviceRow>().Select(row => row.Key).ToArray() });
+                }
+            }
+
+            var stopped = new LdPlayerInstance(8, "状态矩阵", 0, 0, false, -1, -1);
+            var running = stopped with { AndroidStarted = true, ProcessId = 81, VBoxProcessId = 82, TopWindow = 83, BindWindow = 84 };
+            var matrix = new (string Case, LdPlayerInstance? Instance, string? Raw, bool Connected, string Phase, string Expected)[]
+            {
+                ("全停无Device", stopped, null, false, "", "已关闭"), ("全停+旧Ready", stopped, "Ready", false, "已取消", "未知"),
+                ("transition2", stopped with { IsStarting = true }, null, false, "已连接", "启动中"),
+                ("单播放器PID", stopped with { ProcessId = 1 }, null, false, "", "未知"), ("单虚拟机PID", stopped with { VBoxProcessId = 1 }, null, false, "", "未知"),
+                ("单顶层HWND", stopped with { TopWindow = 1 }, null, false, "", "未知"), ("单绑定HWND", stopped with { BindWindow = 1 }, null, false, "", "未知"),
+                ("负顶层HWND", stopped with { TopWindow = -1 }, null, false, "", "未知"), ("负绑定HWND", stopped with { BindWindow = -1 }, null, false, "", "未知"),
+                ("安卓true无PID", stopped with { AndroidStarted = true }, "Ready", false, "", "未知"),
+                ("0保护优先", running with { Index = 0 }, "Ready", true, "已连接", "受保护"), ("99999保护优先", running with { Index = 99999 }, "Ready", true, "", "受保护"),
+                ("已核验连接", running, "Ready", true, "启动失败", "已连接"), ("rawReady未核验", running, "Ready", false, "已连接", "待连接"),
+                ("运行未发现Device", running, null, false, "", "待连接"), ("未知raw", running, "FutureState", false, "已连接", "未知"),
+                ("无实例rawReady未核验", null, "Ready", false, "", "未知"), ("无实例已核验", null, "Ready", true, "已取消", "已连接"),
+                ("离线", null, "Offline", false, "已连接", "离线"), ("未授权", running, "Unauthorized", false, "", "未授权"),
+                ("已发现", null, "Discovered", false, "", "已发现"), ("异常", null, "Error", false, "", "异常"),
+                ("phase伪连接全停", stopped, null, false, "已连接", "已关闭"), ("phase取消运行", running, "Ready", true, "已取消", "已连接"),
+                ("全停明确Offline", stopped, "Offline", false, "", "已关闭"), ("全停Offline但Connected", stopped, "Offline", true, "", "未知"),
+                ("全停无Device但Connected", stopped, null, true, "", "未知"), ("全停未知raw", stopped, "FutureState", false, "", "未知"),
+                ("全停授权状态矛盾", stopped, "Unauthorized", false, "", "未知"), ("运行Offline但Connected", running, "Offline", true, "", "未知"),
+                ("运行无Device但Connected", running, null, true, "", "未知"), ("无设备无实例但Connected", null, null, true, "", "未知")
+            };
+            matrixCount = matrix.Length;
+            foreach (var item in matrix)
+            {
+                var projected = new UnifiedDeviceRow("matrix", _ => Task.CompletedTask, _ => false, _ => Task.CompletedTask, _ => false, _ => Task.CompletedTask);
+                var device = item.Raw is null ? null : new DeviceRow(new DeviceInfo { Serial = "matrix-device", State = item.Raw });
+                projected.Update(item.Instance, device, item.Connected, item.Phase);
+                Check(projected.FilterState == item.Expected && projected.State == item.Expected && projected.StateDetails.Contains(item.Raw ?? "无设备连接", StringComparison.Ordinal) && projected.StateDetails.Contains(string.IsNullOrWhiteSpace(item.Phase) ? "无" : item.Phase, StringComparison.Ordinal), "真实字段分类且不读phase：" + item.Case);
+            }
+        }
+        finally
+        {
+            ViewModel.Runtime.Metadata.UpsertMetadata(b.Serial, metadata.Name, metadata.GroupId);
+            foreach (var pair in infos) pair.Key.Info = pair.Value;
+            ViewModel.CurrentDevice = current; deviceStatusChoice.SelectedItem = status; monitorScopeChoice.SelectedIndex = scope;
+            foreach (var row in unifiedDevices) row.IsSelected = selection.GetValueOrDefault(row.Key);
+            directoryWindow?.Hide(); NavigateTo("设备墙 / 主控"); await StopMonitorAsync();
+        }
+        Check(ViewModel.MainDevice == main && ViewModel.CurrentDevice == current && selection.All(pair => unifiedDevices.Single(row => row.Key == pair.Key).IsSelected == pair.Value) && appSelection.SequenceEqual(applicationTargets.Select(row => (row.Serial, row.IsSelected))), "隔离验收恢复原目标/主控/选择");
+        File.WriteAllText(Path.Combine(ViewModel.DataDirectory, "device-filter-isolation.json"), JsonSerializer.Serialize(new { status = "PASS-OFFLINE", scope = "actual demo directory/list filter and Monitor reconciliation; no real streams or emulators", assertions = checks.Count, checks, observations, matrixCases = matrixCount }, JsonDefaults.Options));
+    }
+}
+
+```
+
 ## src/MatrixDevice.Desktop/Views/DirectoryView.cs
 
 ```csharp
@@ -7569,8 +7730,6 @@ public partial class MainWindow
         var panel = new DockPanel { Margin = new Thickness(12, 0, 8, 0) };
         var filters = new StackPanel(); DockPanel.SetDock(filters, Dock.Top);
         filters.Children.Add(Label("设备目录"));
-        var state = new ComboBox { ItemsSource = new[] { "全部状态", "Ready", "Offline", "Unauthorized", "Discovered", "Error" }, ItemTemplate = CaptionChoices() }; state.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.StatusFilter))); state.Margin = new Thickness(0, 0, 0, 7); filters.Children.Add(state);
-        var selection = Toolbar(); selection.Children.Add(Button("\uE73A", "全选筛选", () => ViewModel.SelectFiltered(true))); selection.Children.Add(Button("\uE711", "清空", ClearWallSelection)); filters.Children.Add(selection);
         panel.Children.Add(filters);
 
         var edit = new StackPanel { Margin = new Thickness(0, 10, 0, 8) }; DockPanel.SetDock(edit, Dock.Bottom);
@@ -7586,7 +7745,8 @@ public partial class MainWindow
         edit.Children.Add(Button("\uE74E", "保存信息", ViewModel.SaveMetadataCommand));
         panel.Children.Add(edit);
 
-        var list = new ListBox { ItemsSource = ViewModel.DeviceView, IsSynchronizedWithCurrentItem = false, Background = Brushes.Transparent, BorderThickness = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Stretch, ItemTemplate = DeviceTemplate() };
+        var list = new ListBox { Name = "DetailsDeviceChoice", ItemsSource = new ListCollectionView(ViewModel.Devices), IsSynchronizedWithCurrentItem = false, Background = Brushes.Transparent, BorderThickness = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Stretch, ItemTemplate = DeviceTemplate() };
+        System.Windows.Automation.AutomationProperties.SetName(list, "详情设备");
         list.SetBinding(Selector.SelectedItemProperty, new Binding(nameof(WorkspaceViewModel.CurrentDevice)) { Mode = BindingMode.OneWay });
         list.SelectionChanged += (_, _) => { if (list.SelectedItem is DeviceRow selected) ViewModel.CurrentDevice = selected; };
         panel.Children.Add(list);
@@ -7597,11 +7757,10 @@ public partial class MainWindow
     {
         var root = new FrameworkElementFactory(typeof(StackPanel)); root.SetValue(MarginProperty, new Thickness(0, 5, 0, 6));
         var row = new FrameworkElementFactory(typeof(DockPanel));
-        var checkbox = new FrameworkElementFactory(typeof(CheckBox)); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(DeviceRow.IsSelected))); checkbox.SetValue(CheckBox.MarginProperty, new Thickness(0, 0, 7, 0)); row.AppendChild(checkbox);
         var name = new FrameworkElementFactory(typeof(TextBlock)); name.SetBinding(TextBlock.TextProperty, new Binding(nameof(DeviceRow.Name))); name.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold); name.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis); row.AppendChild(name); root.AppendChild(row);
         foreach (var property in new[] { nameof(DeviceRow.Serial), nameof(DeviceRow.Resolution), nameof(DeviceRow.State) })
         {
-            var text = new FrameworkElementFactory(typeof(TextBlock)); text.SetBinding(TextBlock.TextProperty, new Binding(property)); text.SetValue(TextBlock.FontSizeProperty, 11d); text.SetValue(TextBlock.ForegroundProperty, Brushes.DimGray); text.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis); text.SetValue(MarginProperty, new Thickness(22, 2, 0, 0)); root.AppendChild(text);
+            var text = new FrameworkElementFactory(typeof(TextBlock)); text.SetBinding(TextBlock.TextProperty, new Binding(property)); text.SetValue(TextBlock.FontSizeProperty, 11d); text.SetValue(TextBlock.ForegroundProperty, Brushes.DimGray); text.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis); text.SetValue(MarginProperty, new Thickness(0, 2, 0, 0)); root.AppendChild(text);
         }
         return new DataTemplate { VisualTree = root };
     }
@@ -8676,7 +8835,7 @@ public partial class MainWindow
         monitorTimer.Tick += (_, _) => MonitorTick();
         ViewModel.PropertyChanged += (_, args) =>
         {
-            if (args.PropertyName is nameof(WorkspaceViewModel.StatusFilter) or nameof(WorkspaceViewModel.Counts)) { monitorEpoch++; monitorLastReconcile = default; }
+            if (args.PropertyName is nameof(WorkspaceViewModel.Counts)) { monitorEpoch++; monitorLastReconcile = default; }
         };
         return page;
     }
@@ -8735,7 +8894,7 @@ public partial class MainWindow
                 return;
             }
             var expected = new HashSet<string>();
-            foreach (var row in unifiedDeviceView.Cast<UnifiedDeviceRow>().Where(row => !monitorConnectedOnly || row.Connected).ToArray())
+            foreach (var row in unifiedDevices.Where(row => !monitorConnectedOnly || row.Connected).ToArray())
             {
                 if (!Current()) return;
                 expected.Add(row.Key);
@@ -8771,7 +8930,7 @@ public partial class MainWindow
                 if (tile.Session is not null || tile.Failed || ViewModel.Demo) continue;
                 await tile.StopCompletion;
                 if (!Current() || tile.Session is not null || tile.Failed) return;
-                if (!tile.VisibleIn(monitorScroll) || !unifiedDeviceView.Cast<UnifiedDeviceRow>().Contains(row) || !LdInstanceConnected(instance!.Index)) continue;
+                if (!tile.VisibleIn(monitorScroll) || !unifiedDevices.Contains(row) || !LdInstanceConnected(instance!.Index)) continue;
                 if (runtime.Backend is not AdbDeviceBackend backend) { tile.Fail("当前后端不支持实时视频"); continue; }
                 var ffmpeg = ResolveMonitorFfmpeg(runtime.Settings.MonitorFfmpegPath);
                 if (ffmpeg is null) { tile.Fail("未配置 FFmpeg，前往环境设置"); continue; }
@@ -10035,6 +10194,8 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Threading;
+using System.IO;
+using MatrixDevice.Host;
 
 namespace MatrixDevice.Desktop;
 
@@ -10090,7 +10251,7 @@ public partial class MainWindow
             if (previousDevice is not null && ViewModel.Devices.FirstOrDefault(row => !ReferenceEquals(row, previousDevice)) is { } filteredDevice)
             {
                 var previousInfo = filteredDevice.Info;
-                var previousStatus = ViewModel.StatusFilter;
+                var previousStatus = deviceStatusFilter;
                 var main = ViewModel.MainDevice;
                 var selected = ViewModel.Devices.Select(row => row.IsSelected).ToArray();
                 try
@@ -10100,9 +10261,9 @@ public partial class MainWindow
                     var image = ViewModel.DebugImage;
                     var parameters = ViewModel.Parameters.ToArray();
                     filteredDevice.Info = previousInfo with { State = "Offline" };
-                    ViewModel.StatusFilter = "Offline";
+                    deviceStatusChoice.SelectedItem = "离线";
                     await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
-                    if (ViewModel.DeviceView.Cast<DeviceRow>().Contains(previousDevice) || !ViewModel.DeviceView.Cast<DeviceRow>().Contains(filteredDevice))
+                    if (unifiedDeviceView.Cast<UnifiedDeviceRow>().Any(row => row.Device == previousDevice) || !unifiedDeviceView.Cast<UnifiedDeviceRow>().Any(row => row.Device == filteredDevice))
                         throw new InvalidOperationException("单设备目标隐藏反例没有形成。");
                     foreach (var tag in new[] { "应用", "节点" })
                     {
@@ -10118,7 +10279,7 @@ public partial class MainWindow
                 finally
                 {
                     filteredDevice.Info = previousInfo;
-                    ViewModel.StatusFilter = previousStatus;
+                    deviceStatusChoice.SelectedItem = previousStatus;
                 }
             }
             if (!VisualDescendants<Button>(Shell).Any(button => button.Name == "WorkspaceSettings") || !VisualDescendants<Button>(Shell).Any(button => button.Name == "DeviceDetails"))
@@ -10128,14 +10289,14 @@ public partial class MainWindow
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             directoryWindow!.UpdateLayout();
             VerifyNoRemovedShellControls(directoryWindow, "设备详情");
-            var directoryList = VisualDescendants<ListBox>(directoryWindow).Single(list => ReferenceEquals(list.ItemsSource, ViewModel.DeviceView));
+            var directoryList = VisualDescendants<ListBox>(directoryWindow).Single(list => list.Name == "DetailsDeviceChoice");
             if (BindingOperations.GetBinding(directoryList, Selector.SelectedItemProperty)?.Path.Path != nameof(WorkspaceViewModel.CurrentDevice))
                 throw new InvalidOperationException("设备目录已丢失明确选择功能。");
             var inputs = VisualDescendants<TextBox>(directoryWindow).Select(input => BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path).ToHashSet();
             if (!inputs.Contains(nameof(WorkspaceViewModel.DeviceName)) || inputs.Contains("DeviceGroup"))
                 throw new InvalidOperationException("设备名称编辑缺失或仍保留分组输入。");
-            var status = VisualDescendants<ComboBox>(directoryWindow).Single(input => BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == nameof(WorkspaceViewModel.StatusFilter));
-            if (!status.IsVisible) throw new InvalidOperationException("设备详情缺少有效状态筛选。");
+            if (VisualDescendants<ComboBox>(directoryWindow).Any() || VisualDescendants<CheckBox>(directoryWindow).Any() || directoryList.Items.Count != ViewModel.Devices.Count)
+                throw new InvalidOperationException("设备详情仍有全局筛选/群控控件或单设备目录被过滤。");
             var captions = VisualDescendants<TextBlock>(directoryWindow).Select(text => text.Text).ToArray();
             if (!captions.Any(caption => caption.StartsWith("画面", StringComparison.Ordinal)) || !captions.Any(caption => caption.StartsWith("节点", StringComparison.Ordinal)))
                 throw new InvalidOperationException("设备子系统状态缺失。");
@@ -10150,7 +10311,8 @@ public partial class MainWindow
                     metadataTarget.Info = info with { GroupId = retainedGroup };
                     ViewModel.DeviceName = "名称保存验收";
                     await ViewModel.SaveMetadataAsync();
-                    var saved = ViewModel.Runtime.Metadata.GetMetadata(metadataTarget.Serial);
+                    using var freshCatalog = new CatalogRepository(Path.Combine(ViewModel.DataDirectory, "db.sqlite3"));
+                    var saved = freshCatalog.GetMetadata(metadataTarget.Serial);
                     if (metadataTarget.Info.GroupId != retainedGroup || saved.GroupId != retainedGroup || saved.Name != "名称保存验收")
                         throw new InvalidOperationException("仅保存名称时修改或裁剪了既有分组数据。");
                 }
@@ -10295,7 +10457,7 @@ public partial class MainWindow
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
-            if (ViewModel.Busy || ViewModel.Transferring || ViewModel.StatusFilter != restoredFilter || restoredDevices.Any(pair => !ViewModel.Devices.Contains(pair.Key) || pair.Key.Info != pair.Value))
+            if (ViewModel.Busy || ViewModel.Transferring || deviceStatusFilter != restoredFilter || restoredDevices.Any(pair => !ViewModel.Devices.Contains(pair.Key) || pair.Key.Info != pair.Value))
                 throw new InvalidOperationException("分页截图不是已恢复的idle状态：" + page);
             try
             {
@@ -10304,7 +10466,7 @@ public partial class MainWindow
                 if (!workspaceCounts.Text.Contains($"已连接 {connected}", StringComparison.Ordinal)) throw new InvalidOperationException("页脚连接数未恢复。");
                 return new
                 {
-                    page, captureState = "idle", statusFilter = ViewModel.StatusFilter, busy = ViewModel.Busy, transferring = ViewModel.Transferring,
+                    page, captureState = "idle", statusFilter = deviceStatusFilter, busy = ViewModel.Busy, transferring = ViewModel.Transferring,
                     restoredDevices = ViewModel.Devices.Select(row => new { row.Serial, row.Info.State, row.Info.Generation, row.Info.TransportId }).ToArray(),
                     expectedRestoredDevices = restoredDevices.Select(pair => new { pair.Value.Serial, pair.Value.State, pair.Value.Generation, pair.Value.TransportId }).ToArray(),
                     directoryCount = unifiedDevices.Count, filteredCount = unifiedDeviceView.Cast<UnifiedDeviceRow>().Count(), connectedCount = connected,
@@ -10639,7 +10801,7 @@ public partial class MainWindow
         if (!ViewModel.Demo) throw new InvalidOperationException("统一实例操作验收仅限演示模式。");
         NavigateTo("设备墙 / 主控"); SetWallViewMode("list"); UpdateUnifiedDirectory();
         await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
-        var previousStatus = ViewModel.StatusFilter;
+        var previousStatus = deviceStatusFilter;
         var previousCurrent = ViewModel.CurrentDevice;
         var previousMain = ViewModel.MainDevice;
         var selection = unifiedDevices.ToDictionary(row => row.Key, row => row.IsSelected);
@@ -10691,7 +10853,7 @@ public partial class MainWindow
             if (ldSelection is not null || ldCommandsByLabel["资源配置"].CanExecute(null))
                 throw new InvalidOperationException("多选目录仍保留单实例命令目标。");
             other.Device.Info = otherInfo with { State = "Ready" };
-            ViewModel.StatusFilter = "Ready";
+            deviceStatusChoice.SelectedItem = "已连接";
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
             if (unifiedDeviceView.Cast<UnifiedDeviceRow>().Contains(cold)) throw new InvalidOperationException("隐藏目标反例没有形成。");
             other.IsSelected = false;
@@ -10703,12 +10865,12 @@ public partial class MainWindow
                 throw new InvalidOperationException("表头取消选择没有清除隐藏目标或实例命令快照。");
 
             var beforeEmptyInfos = ViewModel.Devices.ToDictionary(row => row, row => row.Info);
-            var beforeEmptyStatus = ViewModel.StatusFilter;
+            var beforeEmptyStatus = deviceStatusFilter;
             try
             {
                 ClearWallSelection(); cold.IsSelected = true;
                 foreach (var row in ViewModel.Devices) row.Info = row.Info with { State = "Ready" };
-                ViewModel.StatusFilter = "Offline";
+                deviceStatusChoice.SelectedItem = "离线";
                 await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
                 if (!unifiedDeviceView.IsEmpty || !cold.IsSelected || selectAll.IsChecked is not null || !selectAll.IsEnabled)
                     throw new InvalidOperationException("空可见列表的隐藏勾选未显示为可取消的表头中间态。");
@@ -10719,10 +10881,10 @@ public partial class MainWindow
             finally
             {
                 foreach (var pair in beforeEmptyInfos) pair.Key.Info = pair.Value;
-                ViewModel.StatusFilter = beforeEmptyStatus;
+                deviceStatusChoice.SelectedItem = beforeEmptyStatus;
             }
 
-            ViewModel.StatusFilter = previousStatus;
+            deviceStatusChoice.SelectedItem = previousStatus;
             other.Device.Info = otherInfo;
             var confirm = ViewModel.Confirm;
             ViewModel.Confirm = (_, _) => true;
@@ -10765,7 +10927,7 @@ public partial class MainWindow
             menu.IsOpen = false;
             wallActionsViewport.ScrollToTop();
             other.Device.Info = otherInfo;
-            ViewModel.StatusFilter = previousStatus;
+            deviceStatusChoice.SelectedItem = previousStatus;
             foreach (var row in unifiedDevices.ToArray()) row.IsSelected = selection.GetValueOrDefault(row.Key);
         }
     }
@@ -10892,6 +11054,10 @@ public partial class MainWindow
     private readonly List<TextBlock> deviceSummaries = [];
     private readonly ObservableCollection<UnifiedDeviceRow> unifiedDevices = [];
     private ICollectionView unifiedDeviceView = null!;
+    private static readonly string[] DeviceStatusOptions = ["全部状态", "已连接", "已关闭", "启动中", "待连接", "离线", "未授权", "已发现", "异常", "未知", "受保护"];
+    private string deviceStatusFilter = "全部状态";
+    private ComboBox deviceStatusChoice = null!;
+    private bool refreshingUnifiedFilter;
     private readonly Dictionary<int, string> launchPhases = [];
     private readonly List<TextBlock> launchFeedback = [];
     private readonly List<AsyncCommand> launchCommands = [];
@@ -10911,10 +11077,27 @@ public partial class MainWindow
 
     private void InitializeUnifiedDevices()
     {
-        unifiedDeviceView = CollectionViewSource.GetDefaultView(unifiedDevices);
+        unifiedDeviceView = new ListCollectionView(unifiedDevices);
         unifiedDeviceView.Filter = item => item is UnifiedDeviceRow row
-            && (ViewModel.StatusFilter == "全部状态" || row.Device?.Info.State == ViewModel.StatusFilter);
-        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts) or nameof(WorkspaceViewModel.StatusFilter)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
+            && (deviceStatusFilter == "全部状态" || row.FilterState == deviceStatusFilter);
+        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
+    }
+
+    private ComboBox BuildDeviceStatusFilter()
+    {
+        var choice = new ComboBox { Name = "DeviceStatusFilter", ItemsSource = DeviceStatusOptions, SelectedItem = deviceStatusFilter, Width = 145, MinHeight = 34, Margin = new Thickness(12, 0, 0, 10) };
+        System.Windows.Automation.AutomationProperties.SetName(choice, "设备状态筛选"); System.Windows.Automation.AutomationProperties.SetAutomationId(choice, choice.Name);
+        deviceStatusChoice = choice;
+        choice.SelectionChanged += (_, _) => { deviceStatusFilter = (string)choice.SelectedItem; RefreshUnifiedFilter(); };
+        return choice;
+    }
+
+    private void RefreshUnifiedFilter()
+    {
+        refreshingUnifiedFilter = true;
+        try { unifiedDeviceView.Refresh(); }
+        finally { refreshingUnifiedFilter = false; }
+        SynchronizeUnifiedSelection();
     }
 
     internal void UpdateUnifiedDirectory()
@@ -10937,7 +11120,7 @@ public partial class MainWindow
         foreach (var device in ViewModel.Devices.Where(row => !boundSerials.Contains(row.Serial))) Upsert("device:" + device.Serial, null, device, device.Info.Online);
         foreach (var stale in unifiedDevices.Where(row => !expected.Contains(row.Key)).ToArray()) unifiedDevices.Remove(stale);
         foreach (var summary in deviceSummaries) summary.Text = $"本机 {instances.Count} 台 · 已接入 {admitted} 台 · 已连接 {unifiedDevices.Count(row => row.Connected)} 台";
-        unifiedDeviceView.Refresh(); SynchronizeUnifiedSelection();
+        RefreshUnifiedFilter();
         void Upsert(string key, LdPlayerInstance? instance, DeviceRow? device, bool connected)
         {
             expected.Add(key);
@@ -11390,7 +11573,8 @@ public partial class MainWindow
         page.SizeChanged += (_, _) => wallActionsViewport.MaxHeight = Math.Max(120, page.ActualHeight - 176);
         DockPanel.SetDock(wallActionsViewport, Dock.Top); page.Children.Add(wallActionsViewport);
         top.Children.Add(BuildDeviceSummary());
-        top.Children.Add(new TextBlock { Name = "PageHeading", Text = LocalizationService.PageDisplayName("设备墙 / 主控"), FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, Margin = new Thickness(0, 0, 0, 14) });
+        var heading = new DockPanel(); var status = BuildDeviceStatusFilter(); DockPanel.SetDock(status, Dock.Right); heading.Children.Add(status);
+        heading.Children.Add(new TextBlock { Name = "PageHeading", Text = LocalizationService.PageDisplayName("设备墙 / 主控"), FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, Margin = new Thickness(0, 0, 0, 14) }); top.Children.Add(heading);
         top.Children.Add(BuildOneClickLaunchTools());
         top.Children.Add(new Border { Height = 1, Background = WallBorder });
         wallWorkspace = new Grid { Margin = new Thickness(22, 18, 22, 18) };
@@ -11403,8 +11587,8 @@ public partial class MainWindow
 
     private FrameworkElement BuildWallList()
     {
-        var grid = new DataGrid { ItemsSource = unifiedDeviceView, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Single, HeadersVisibility = DataGridHeadersVisibility.Column, RowHeight = 48, ColumnHeaderHeight = 40, Background = Brushes.White, BorderThickness = new Thickness(0), GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, HorizontalGridLinesBrush = WallBorder, IsReadOnly = true };
-        grid.SelectionChanged += (_, _) => { if (wallViewMode == "list" && grid.SelectedItem is UnifiedDeviceRow { Device: { } device }) ViewModel.CurrentDevice = device; };
+        var grid = new DataGrid { ItemsSource = unifiedDeviceView, IsSynchronizedWithCurrentItem = false, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Single, HeadersVisibility = DataGridHeadersVisibility.Column, RowHeight = 48, ColumnHeaderHeight = 40, Background = Brushes.White, BorderThickness = new Thickness(0), GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, HorizontalGridLinesBrush = WallBorder, IsReadOnly = true };
+        grid.SelectionChanged += (_, _) => { if (!updatingUnifiedDirectory && !refreshingUnifiedFilter && wallViewMode == "list" && grid.SelectedItem is UnifiedDeviceRow { Device: { } device }) ViewModel.CurrentDevice = device; };
         var checkbox = new FrameworkElementFactory(typeof(CheckBox)); checkbox.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center); checkbox.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(UnifiedDeviceRow.IsSelected))); checkbox.SetBinding(IsEnabledProperty, new Binding(nameof(UnifiedDeviceRow.CanSelect)));
         wallSelectAll = new CheckBox { Name = "SelectAllDevices", IsThreeState = true, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, ToolTip = "勾选全部可操作设备；取消勾选清除所有选择，不删除设备或数据" };
         System.Windows.Automation.AutomationProperties.SetName(wallSelectAll, "选择全部设备");
@@ -11417,7 +11601,9 @@ public partial class MainWindow
         };
         grid.Columns.Add(new DataGridTemplateColumn { Header = wallSelectAll, Width = 54, CellTemplate = new DataTemplate { VisualTree = checkbox } });
         TextColumn(grid, "编号", nameof(UnifiedDeviceRow.Number), 58);
-        TextColumn(grid, "设备名称", nameof(UnifiedDeviceRow.Name), 175); TextColumn(grid, "状态", nameof(UnifiedDeviceRow.State), 110);
+        TextColumn(grid, "设备名称", nameof(UnifiedDeviceRow.Name), 175);
+        var stateStyle = new Style(typeof(TextBlock)); stateStyle.Setters.Add(new Setter(ToolTipProperty, new Binding(nameof(UnifiedDeviceRow.StateDetails))));
+        grid.Columns.Add(new DataGridTextColumn { Header = "状态", Binding = new Binding(nameof(UnifiedDeviceRow.State)), Width = 110, ElementStyle = stateStyle });
         var actions = new FrameworkElementFactory(typeof(UnifiedDeviceTile)); actions.SetBinding(UnifiedDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) });
         grid.Columns.Add(new DataGridTemplateColumn { Header = "操作", Width = 214, CellTemplate = new DataTemplate { VisualTree = actions } });
         TextColumn(grid, "型号", nameof(UnifiedDeviceRow.Model), 145); TextColumn(grid, "品牌", nameof(UnifiedDeviceRow.Brand), 110); TextColumn(grid, "安卓", nameof(UnifiedDeviceRow.Android), 80);
@@ -11881,7 +12067,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     private CancellationTokenSource? transferCancellation;
     private DeviceRow? currentDevice;
     private DeviceRow? mainDevice;
-    private string statusFilter = "全部状态";
     private bool busy;
     private bool externalBusy;
     private int pendingLaunchSelection;
@@ -11914,8 +12099,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         syncKeyboard = runtime.Settings.SyncKeyboard;
         wallColumns = runtime.Settings.WallColumns;
         Settings = new SettingsEditor(runtime.Settings);
-        DeviceView = CollectionViewSource.GetDefaultView(Devices);
-        DeviceView.Filter = item => item is DeviceRow row && Matches(row);
+        DeviceView = new ListCollectionView(Devices);
         AppsView = CollectionViewSource.GetDefaultView(Apps);
         RefreshCommand = Async(RefreshDevicesAsync, () => !Busy);
         ScreenshotCommand = Async(() => CaptureAsync(), CanUseDevice);
@@ -12006,7 +12190,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     public DeviceRow? MainDevice { get => mainDevice; private set { Set(ref mainDevice, value); Changed(nameof(MainContext)); WallChanged?.Invoke(); } }
     public string DeviceContext => CurrentDevice is { } row ? $"{row.Name} · {row.Serial} · {LocalizationService.Current.Get(row.State)}" : LocalizationService.Current.Get("未选择设备");
     public string MainContext => MainDevice is { } row ? $"{LocalizationService.Current.Get("主控")}: {row.Name} · {row.Serial}" : $"{LocalizationService.Current.Get("主控")}: {LocalizationService.Current.Get("未指定")}";
-    public string StatusFilter { get => statusFilter; set { Set(ref statusFilter, value); RefreshFilter(); } }
     public bool Busy { get => busy || externalBusy; private set { Set(ref busy, value); SyncApiWriteGuard(); RefreshCommands(); } }
     internal void SetExternalBusy(bool value) { externalBusy = value; Changed(nameof(Busy)); SyncApiWriteGuard(); RefreshCommands(); }
     private void SyncApiWriteGuard() => runtime.Api.UiWriteBusy = externalBusy || (busy && blockApiWhileBusy) || Transferring;
@@ -12052,9 +12235,7 @@ public sealed class WorkspaceViewModel : ObservableObject
     private ActionCommand Action(Action action, Func<bool> canExecute) { var command = new ActionCommand(action, canExecute); commands.Add(command); return command; }
     private void RefreshCommands() { foreach (var command in commands) { if (command is AsyncCommand asyncCommand) asyncCommand.Refresh(); else if (command is ActionCommand actionCommand) actionCommand.Refresh(); } Changed(nameof(TargetContext)); }
     private bool ScriptBusy(string serial) => runtime.Scripts.GetStatus(serial).State.ToString() is "Running" or "Cancelling";
-    private bool Matches(DeviceRow row) => StatusFilter == "全部状态" || row.Info.State == StatusFilter;
-    private void RefreshFilter() { DeviceView.Refresh(); Changed(nameof(Counts)); WallChanged?.Invoke(); }
-    public void SelectFiltered(bool selected) { foreach (var row in DeviceView.Cast<DeviceRow>()) row.IsSelected = selected; UpdateSelection(); }
+    private void RefreshDeviceView() { DeviceView.Refresh(); Changed(nameof(Counts)); WallChanged?.Invoke(); }
     public void UpdateSelection() { Changed(nameof(Counts)); RefreshCommands(); }
 
     public async Task ExecuteAsync(string label, Func<Task> action, bool blocksApiWrites = true)
@@ -12106,7 +12287,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         if (CurrentDevice is not null && !Devices.Contains(CurrentDevice)) CurrentDevice = null;
         if (MainDevice is not null && !Devices.Contains(MainDevice)) { await runtime.Input.HandoffAsync(null); MainDevice = null; }
         RefreshApiRows();
-        RefreshFilter();
+        RefreshDeviceView();
         if (demo && CurrentDevice is null) CurrentDevice = Devices.FirstOrDefault();
     }
 
@@ -12166,7 +12347,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         var row = CurrentDevice ?? throw new InvalidOperationException("未选择设备");
         runtime.Metadata.UpsertMetadata(row.Serial, DeviceName.Trim(), row.Info.GroupId);
         row.Info = row.Info with { Name = DeviceName.Trim() };
-        RefreshFilter();
+        RefreshDeviceView();
         Changed(nameof(DeviceContext));
         await Task.CompletedTask;
     });

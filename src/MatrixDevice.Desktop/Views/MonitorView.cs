@@ -82,7 +82,7 @@ public partial class MainWindow
         monitorTimer.Tick += (_, _) => MonitorTick();
         ViewModel.PropertyChanged += (_, args) =>
         {
-            if (args.PropertyName is nameof(WorkspaceViewModel.StatusFilter) or nameof(WorkspaceViewModel.Counts)) { monitorEpoch++; monitorLastReconcile = default; }
+            if (args.PropertyName is nameof(WorkspaceViewModel.Counts)) { monitorEpoch++; monitorLastReconcile = default; }
         };
         return page;
     }
@@ -141,7 +141,7 @@ public partial class MainWindow
                 return;
             }
             var expected = new HashSet<string>();
-            foreach (var row in unifiedDeviceView.Cast<UnifiedDeviceRow>().Where(row => !monitorConnectedOnly || row.Connected).ToArray())
+            foreach (var row in unifiedDevices.Where(row => !monitorConnectedOnly || row.Connected).ToArray())
             {
                 if (!Current()) return;
                 expected.Add(row.Key);
@@ -177,7 +177,7 @@ public partial class MainWindow
                 if (tile.Session is not null || tile.Failed || ViewModel.Demo) continue;
                 await tile.StopCompletion;
                 if (!Current() || tile.Session is not null || tile.Failed) return;
-                if (!tile.VisibleIn(monitorScroll) || !unifiedDeviceView.Cast<UnifiedDeviceRow>().Contains(row) || !LdInstanceConnected(instance!.Index)) continue;
+                if (!tile.VisibleIn(monitorScroll) || !unifiedDevices.Contains(row) || !LdInstanceConnected(instance!.Index)) continue;
                 if (runtime.Backend is not AdbDeviceBackend backend) { tile.Fail("当前后端不支持实时视频"); continue; }
                 var ffmpeg = ResolveMonitorFfmpeg(runtime.Settings.MonitorFfmpegPath);
                 if (ffmpeg is null) { tile.Fail("未配置 FFmpeg，前往环境设置"); continue; }

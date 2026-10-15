@@ -20,7 +20,7 @@ public partial class MainWindow
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
-            if (ViewModel.Busy || ViewModel.Transferring || ViewModel.StatusFilter != restoredFilter || restoredDevices.Any(pair => !ViewModel.Devices.Contains(pair.Key) || pair.Key.Info != pair.Value))
+            if (ViewModel.Busy || ViewModel.Transferring || deviceStatusFilter != restoredFilter || restoredDevices.Any(pair => !ViewModel.Devices.Contains(pair.Key) || pair.Key.Info != pair.Value))
                 throw new InvalidOperationException("分页截图不是已恢复的idle状态：" + page);
             try
             {
@@ -29,7 +29,7 @@ public partial class MainWindow
                 if (!workspaceCounts.Text.Contains($"已连接 {connected}", StringComparison.Ordinal)) throw new InvalidOperationException("页脚连接数未恢复。");
                 return new
                 {
-                    page, captureState = "idle", statusFilter = ViewModel.StatusFilter, busy = ViewModel.Busy, transferring = ViewModel.Transferring,
+                    page, captureState = "idle", statusFilter = deviceStatusFilter, busy = ViewModel.Busy, transferring = ViewModel.Transferring,
                     restoredDevices = ViewModel.Devices.Select(row => new { row.Serial, row.Info.State, row.Info.Generation, row.Info.TransportId }).ToArray(),
                     expectedRestoredDevices = restoredDevices.Select(pair => new { pair.Value.Serial, pair.Value.State, pair.Value.Generation, pair.Value.TransportId }).ToArray(),
                     directoryCount = unifiedDevices.Count, filteredCount = unifiedDeviceView.Cast<UnifiedDeviceRow>().Count(), connectedCount = connected,

@@ -14,7 +14,31 @@ public sealed class UnifiedDeviceRow : ObservableObject
     public int? Index => Instance?.Index;
     public string Number => Index?.ToString() ?? "-";
     public string Name => Device?.Name ?? Instance?.Name ?? "";
-    public string State => Connected ? "已连接" : phase is not ("" or "已连接") ? phase : Instance?.Index == 0 ? "受保护" : Instance?.IsStarting == true ? "启动中" : Instance?.AndroidStarted == true ? "待连接" : Instance is not null ? "已关闭" : Device?.State ?? "离线";
+    public string State => FilterState;
+    public string StateDetails => $"运行状态：{FilterState}\n设备原始状态：{Device?.Info.State ?? "无设备连接"}\n操作阶段：{(string.IsNullOrWhiteSpace(phase) ? "无" : phase)}";
+    public string FilterState
+    {
+        get
+        {
+            if (Index is 0 or 99999) return "受保护";
+            if (Instance is { } instance)
+            {
+                if (instance.IsStarting) return "启动中";
+                var stopped = !instance.AndroidStarted && instance.ProcessId <= 0 && instance.VBoxProcessId <= 0 && instance.TopWindow == 0 && instance.BindWindow == 0;
+                if (stopped) return !Connected && (Device is null || Device.Info.State == "Offline") ? "已关闭" : "未知";
+                if (!instance.AndroidStarted || instance.ProcessId <= 0 || instance.VBoxProcessId <= 0) return "未知";
+            }
+            if (Connected && Device?.Info.Online != true) return "未知";
+            return Device?.Info.State switch
+            {
+                "Ready" when Connected => "已连接",
+                "Ready" when Instance is not null => "待连接",
+                "Offline" => "离线", "Unauthorized" => "未授权", "Discovered" => "已发现", "Error" => "异常",
+                null when Instance?.AndroidStarted == true => "待连接",
+                _ => "未知"
+            };
+        }
+    }
     public string Model => Device?.Info.Model ?? "-";
     public string Brand => Device?.Info.Brand ?? "-";
     public string Android => Device?.Info.AndroidVersion ?? "-";

@@ -301,6 +301,7 @@ public partial class MainWindow : Window
         await ViewModel.RefreshWallAsync();
         await VerifyNativeMainTargetAsync();
         if (ViewModel.CurrentDevice is { } row) await ViewModel.SetMainAsync(row);
+        await VerifyDeviceFilterIsolationAsync();
         await VerifyShellSimplificationAsync();
         await ViewModel.LoadNodesAsync();
         ViewModel.SelectedNode = ViewModel.FlattenNodes().FirstOrDefault(node => node.Source.Clickable);
@@ -422,35 +423,35 @@ public partial class MainWindow : Window
         ViewModel.UpdateSelection();
         var filteredDevice = ViewModel.Devices[1];
         var originalDeviceInfos = ViewModel.Devices.ToDictionary(device => device, device => device.Info);
-        var previousStatus = ViewModel.StatusFilter;
+        var previousStatus = deviceStatusFilter;
         try
         {
             filteredDevice.Info = filteredDevice.Info with { State = "Offline" };
-            foreach (var status in new[] { "Ready", "Offline", "全部状态" })
+            foreach (var status in new[] { "已连接", "离线", "全部状态" })
             {
-                ViewModel.StatusFilter = status;
+                deviceStatusChoice.SelectedItem = status;
                 await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
                 if (!ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation) || ViewModel.Devices.Count(device => device.IsSelected) != 2)
                     throw new InvalidOperationException($"状态筛选改变了上下文：状态={status}，勾选={ViewModel.Devices.Count(device => device.IsSelected)}");
             }
-            ViewModel.StatusFilter = "Offline";
+            deviceStatusChoice.SelectedItem = "离线";
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-            if (ViewModel.DeviceView.Cast<DeviceRow>().Count() != 1 || ViewModel.Devices.Count(device => device.IsSelected) != 2)
+            if (unifiedDeviceView.Cast<UnifiedDeviceRow>().Count() != 1 || ViewModel.DeviceView.Cast<DeviceRow>().Count() != ViewModel.Devices.Count || ViewModel.Devices.Count(device => device.IsSelected) != 2)
                 throw new InvalidOperationException("状态筛选没有形成唯一可见设备或改变了群控勾选。");
             var selectAll = VisualDescendants<CheckBox>(Shell).Single(input => input.Name == "SelectAllDevices");
             selectAll.IsChecked = false; selectAll.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             if (ViewModel.Devices.Any(device => device.IsSelected) || unifiedDevices.Any(device => device.IsSelected))
                 throw new InvalidOperationException("取消表头全选没有清除隐藏设备的选择。");
             foreach (var device in ViewModel.Devices) device.Info = device.Info with { State = "Ready" };
-            ViewModel.StatusFilter = "Offline";
+            deviceStatusChoice.SelectedItem = "离线";
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-            if (ViewModel.DeviceView.Cast<DeviceRow>().Any() || !unifiedDeviceView.IsEmpty) throw new InvalidOperationException("空目录状态筛选失效。");
+            if (ViewModel.DeviceView.Cast<DeviceRow>().Count() != ViewModel.Devices.Count || !unifiedDeviceView.IsEmpty) throw new InvalidOperationException("空列表状态筛选失效或污染其他目录。");
             if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-empty.png"));
         }
         finally
         {
             foreach (var pair in originalDeviceInfos) pair.Key.Info = pair.Value;
-            ViewModel.StatusFilter = previousStatus;
+            deviceStatusChoice.SelectedItem = previousStatus;
         }
         if (ViewModel.DebugImage is not { PixelWidth: > 0 }) throw new InvalidOperationException("状态筛选丢失了当前截图。");
         SetWallViewMode("list");
@@ -469,12 +470,14 @@ public partial class MainWindow : Window
         expandedControls.IsExpanded = false;
         CloseMainControl();
         ShowDeviceDirectory();
-        var statusChoice = VisualDescendants<ComboBox>(directoryWindow!).Single(input => BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == nameof(WorkspaceViewModel.StatusFilter));
+        if (VisualDescendants<ComboBox>(directoryWindow!).Any() || VisualDescendants<CheckBox>(directoryWindow!).Any()) throw new InvalidOperationException("设备详情仍含全局筛选或群控勾选。");
+        directoryWindow!.Hide();
+        var statusChoice = deviceStatusChoice;
         statusChoice.IsDropDownOpen = true;
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (statusChoice.Template.FindName("PART_Popup", statusChoice) is not Popup { IsOpen: true }) throw new InvalidOperationException("状态筛选下拉模板未打开。");
-        statusChoice.SelectedItem = "Offline";
-        if (ViewModel.StatusFilter != "Offline") throw new InvalidOperationException("状态筛选下拉绑定失效。");
+        statusChoice.SelectedItem = "离线";
+        if (deviceStatusFilter != "离线") throw new InvalidOperationException("列表状态筛选下拉绑定失效。");
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (!ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation)) throw new InvalidOperationException("设备目录筛选改变了当前设备或主控");
         statusChoice.IsDropDownOpen = false; statusChoice.SelectedItem = previousStatus; directoryWindow!.Hide();
@@ -492,7 +495,7 @@ public partial class MainWindow : Window
         var controlStates = new List<object>();
         var pageCaptures = new List<object>();
         var restoredDevices = ViewModel.Devices.ToDictionary(device => device, device => device.Info);
-        var restoredFilter = ViewModel.StatusFilter;
+        var restoredFilter = deviceStatusFilter;
         foreach (TabItem tab in tabs.Items)
         {
             NavigateTo(tab.Tag.ToString()!);

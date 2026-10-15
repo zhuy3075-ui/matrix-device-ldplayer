@@ -30,7 +30,8 @@ public partial class MainWindow
         page.SizeChanged += (_, _) => wallActionsViewport.MaxHeight = Math.Max(120, page.ActualHeight - 176);
         DockPanel.SetDock(wallActionsViewport, Dock.Top); page.Children.Add(wallActionsViewport);
         top.Children.Add(BuildDeviceSummary());
-        top.Children.Add(new TextBlock { Name = "PageHeading", Text = LocalizationService.PageDisplayName("设备墙 / 主控"), FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, Margin = new Thickness(0, 0, 0, 14) });
+        var heading = new DockPanel(); var status = BuildDeviceStatusFilter(); DockPanel.SetDock(status, Dock.Right); heading.Children.Add(status);
+        heading.Children.Add(new TextBlock { Name = "PageHeading", Text = LocalizationService.PageDisplayName("设备墙 / 主控"), FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, Margin = new Thickness(0, 0, 0, 14) }); top.Children.Add(heading);
         top.Children.Add(BuildOneClickLaunchTools());
         top.Children.Add(new Border { Height = 1, Background = WallBorder });
         wallWorkspace = new Grid { Margin = new Thickness(22, 18, 22, 18) };
@@ -43,8 +44,8 @@ public partial class MainWindow
 
     private FrameworkElement BuildWallList()
     {
-        var grid = new DataGrid { ItemsSource = unifiedDeviceView, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Single, HeadersVisibility = DataGridHeadersVisibility.Column, RowHeight = 48, ColumnHeaderHeight = 40, Background = Brushes.White, BorderThickness = new Thickness(0), GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, HorizontalGridLinesBrush = WallBorder, IsReadOnly = true };
-        grid.SelectionChanged += (_, _) => { if (wallViewMode == "list" && grid.SelectedItem is UnifiedDeviceRow { Device: { } device }) ViewModel.CurrentDevice = device; };
+        var grid = new DataGrid { ItemsSource = unifiedDeviceView, IsSynchronizedWithCurrentItem = false, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Single, HeadersVisibility = DataGridHeadersVisibility.Column, RowHeight = 48, ColumnHeaderHeight = 40, Background = Brushes.White, BorderThickness = new Thickness(0), GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, HorizontalGridLinesBrush = WallBorder, IsReadOnly = true };
+        grid.SelectionChanged += (_, _) => { if (!updatingUnifiedDirectory && !refreshingUnifiedFilter && wallViewMode == "list" && grid.SelectedItem is UnifiedDeviceRow { Device: { } device }) ViewModel.CurrentDevice = device; };
         var checkbox = new FrameworkElementFactory(typeof(CheckBox)); checkbox.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center); checkbox.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(UnifiedDeviceRow.IsSelected))); checkbox.SetBinding(IsEnabledProperty, new Binding(nameof(UnifiedDeviceRow.CanSelect)));
         wallSelectAll = new CheckBox { Name = "SelectAllDevices", IsThreeState = true, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, ToolTip = "勾选全部可操作设备；取消勾选清除所有选择，不删除设备或数据" };
         System.Windows.Automation.AutomationProperties.SetName(wallSelectAll, "选择全部设备");
@@ -57,7 +58,9 @@ public partial class MainWindow
         };
         grid.Columns.Add(new DataGridTemplateColumn { Header = wallSelectAll, Width = 54, CellTemplate = new DataTemplate { VisualTree = checkbox } });
         TextColumn(grid, "编号", nameof(UnifiedDeviceRow.Number), 58);
-        TextColumn(grid, "设备名称", nameof(UnifiedDeviceRow.Name), 175); TextColumn(grid, "状态", nameof(UnifiedDeviceRow.State), 110);
+        TextColumn(grid, "设备名称", nameof(UnifiedDeviceRow.Name), 175);
+        var stateStyle = new Style(typeof(TextBlock)); stateStyle.Setters.Add(new Setter(ToolTipProperty, new Binding(nameof(UnifiedDeviceRow.StateDetails))));
+        grid.Columns.Add(new DataGridTextColumn { Header = "状态", Binding = new Binding(nameof(UnifiedDeviceRow.State)), Width = 110, ElementStyle = stateStyle });
         var actions = new FrameworkElementFactory(typeof(UnifiedDeviceTile)); actions.SetBinding(UnifiedDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) });
         grid.Columns.Add(new DataGridTemplateColumn { Header = "操作", Width = 214, CellTemplate = new DataTemplate { VisualTree = actions } });
         TextColumn(grid, "型号", nameof(UnifiedDeviceRow.Model), 145); TextColumn(grid, "品牌", nameof(UnifiedDeviceRow.Brand), 110); TextColumn(grid, "安卓", nameof(UnifiedDeviceRow.Android), 80);

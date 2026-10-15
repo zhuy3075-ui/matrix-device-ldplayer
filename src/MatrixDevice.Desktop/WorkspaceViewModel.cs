@@ -21,7 +21,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     private CancellationTokenSource? transferCancellation;
     private DeviceRow? currentDevice;
     private DeviceRow? mainDevice;
-    private string statusFilter = "全部状态";
     private bool busy;
     private bool externalBusy;
     private int pendingLaunchSelection;
@@ -54,8 +53,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         syncKeyboard = runtime.Settings.SyncKeyboard;
         wallColumns = runtime.Settings.WallColumns;
         Settings = new SettingsEditor(runtime.Settings);
-        DeviceView = CollectionViewSource.GetDefaultView(Devices);
-        DeviceView.Filter = item => item is DeviceRow row && Matches(row);
+        DeviceView = new ListCollectionView(Devices);
         AppsView = CollectionViewSource.GetDefaultView(Apps);
         RefreshCommand = Async(RefreshDevicesAsync, () => !Busy);
         ScreenshotCommand = Async(() => CaptureAsync(), CanUseDevice);
@@ -146,7 +144,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     public DeviceRow? MainDevice { get => mainDevice; private set { Set(ref mainDevice, value); Changed(nameof(MainContext)); WallChanged?.Invoke(); } }
     public string DeviceContext => CurrentDevice is { } row ? $"{row.Name} · {row.Serial} · {LocalizationService.Current.Get(row.State)}" : LocalizationService.Current.Get("未选择设备");
     public string MainContext => MainDevice is { } row ? $"{LocalizationService.Current.Get("主控")}: {row.Name} · {row.Serial}" : $"{LocalizationService.Current.Get("主控")}: {LocalizationService.Current.Get("未指定")}";
-    public string StatusFilter { get => statusFilter; set { Set(ref statusFilter, value); RefreshFilter(); } }
     public bool Busy { get => busy || externalBusy; private set { Set(ref busy, value); SyncApiWriteGuard(); RefreshCommands(); } }
     internal void SetExternalBusy(bool value) { externalBusy = value; Changed(nameof(Busy)); SyncApiWriteGuard(); RefreshCommands(); }
     private void SyncApiWriteGuard() => runtime.Api.UiWriteBusy = externalBusy || (busy && blockApiWhileBusy) || Transferring;
@@ -192,9 +189,7 @@ public sealed class WorkspaceViewModel : ObservableObject
     private ActionCommand Action(Action action, Func<bool> canExecute) { var command = new ActionCommand(action, canExecute); commands.Add(command); return command; }
     private void RefreshCommands() { foreach (var command in commands) { if (command is AsyncCommand asyncCommand) asyncCommand.Refresh(); else if (command is ActionCommand actionCommand) actionCommand.Refresh(); } Changed(nameof(TargetContext)); }
     private bool ScriptBusy(string serial) => runtime.Scripts.GetStatus(serial).State.ToString() is "Running" or "Cancelling";
-    private bool Matches(DeviceRow row) => StatusFilter == "全部状态" || row.Info.State == StatusFilter;
-    private void RefreshFilter() { DeviceView.Refresh(); Changed(nameof(Counts)); WallChanged?.Invoke(); }
-    public void SelectFiltered(bool selected) { foreach (var row in DeviceView.Cast<DeviceRow>()) row.IsSelected = selected; UpdateSelection(); }
+    private void RefreshDeviceView() { DeviceView.Refresh(); Changed(nameof(Counts)); WallChanged?.Invoke(); }
     public void UpdateSelection() { Changed(nameof(Counts)); RefreshCommands(); }
 
     public async Task ExecuteAsync(string label, Func<Task> action, bool blocksApiWrites = true)
@@ -246,7 +241,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         if (CurrentDevice is not null && !Devices.Contains(CurrentDevice)) CurrentDevice = null;
         if (MainDevice is not null && !Devices.Contains(MainDevice)) { await runtime.Input.HandoffAsync(null); MainDevice = null; }
         RefreshApiRows();
-        RefreshFilter();
+        RefreshDeviceView();
         if (demo && CurrentDevice is null) CurrentDevice = Devices.FirstOrDefault();
     }
 
@@ -306,7 +301,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         var row = CurrentDevice ?? throw new InvalidOperationException("未选择设备");
         runtime.Metadata.UpsertMetadata(row.Serial, DeviceName.Trim(), row.Info.GroupId);
         row.Info = row.Info with { Name = DeviceName.Trim() };
-        RefreshFilter();
+        RefreshDeviceView();
         Changed(nameof(DeviceContext));
         await Task.CompletedTask;
     });

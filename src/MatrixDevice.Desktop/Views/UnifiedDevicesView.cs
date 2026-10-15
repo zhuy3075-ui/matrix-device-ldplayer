@@ -19,6 +19,10 @@ public partial class MainWindow
     private readonly List<TextBlock> deviceSummaries = [];
     private readonly ObservableCollection<UnifiedDeviceRow> unifiedDevices = [];
     private ICollectionView unifiedDeviceView = null!;
+    private static readonly string[] DeviceStatusOptions = ["全部状态", "已连接", "已关闭", "启动中", "待连接", "离线", "未授权", "已发现", "异常", "未知", "受保护"];
+    private string deviceStatusFilter = "全部状态";
+    private ComboBox deviceStatusChoice = null!;
+    private bool refreshingUnifiedFilter;
     private readonly Dictionary<int, string> launchPhases = [];
     private readonly List<TextBlock> launchFeedback = [];
     private readonly List<AsyncCommand> launchCommands = [];
@@ -38,10 +42,27 @@ public partial class MainWindow
 
     private void InitializeUnifiedDevices()
     {
-        unifiedDeviceView = CollectionViewSource.GetDefaultView(unifiedDevices);
+        unifiedDeviceView = new ListCollectionView(unifiedDevices);
         unifiedDeviceView.Filter = item => item is UnifiedDeviceRow row
-            && (ViewModel.StatusFilter == "全部状态" || row.Device?.Info.State == ViewModel.StatusFilter);
-        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts) or nameof(WorkspaceViewModel.StatusFilter)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
+            && (deviceStatusFilter == "全部状态" || row.FilterState == deviceStatusFilter);
+        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
+    }
+
+    private ComboBox BuildDeviceStatusFilter()
+    {
+        var choice = new ComboBox { Name = "DeviceStatusFilter", ItemsSource = DeviceStatusOptions, SelectedItem = deviceStatusFilter, Width = 145, MinHeight = 34, Margin = new Thickness(12, 0, 0, 10) };
+        System.Windows.Automation.AutomationProperties.SetName(choice, "设备状态筛选"); System.Windows.Automation.AutomationProperties.SetAutomationId(choice, choice.Name);
+        deviceStatusChoice = choice;
+        choice.SelectionChanged += (_, _) => { deviceStatusFilter = (string)choice.SelectedItem; RefreshUnifiedFilter(); };
+        return choice;
+    }
+
+    private void RefreshUnifiedFilter()
+    {
+        refreshingUnifiedFilter = true;
+        try { unifiedDeviceView.Refresh(); }
+        finally { refreshingUnifiedFilter = false; }
+        SynchronizeUnifiedSelection();
     }
 
     internal void UpdateUnifiedDirectory()
@@ -64,7 +85,7 @@ public partial class MainWindow
         foreach (var device in ViewModel.Devices.Where(row => !boundSerials.Contains(row.Serial))) Upsert("device:" + device.Serial, null, device, device.Info.Online);
         foreach (var stale in unifiedDevices.Where(row => !expected.Contains(row.Key)).ToArray()) unifiedDevices.Remove(stale);
         foreach (var summary in deviceSummaries) summary.Text = $"本机 {instances.Count} 台 · 已接入 {admitted} 台 · 已连接 {unifiedDevices.Count(row => row.Connected)} 台";
-        unifiedDeviceView.Refresh(); SynchronizeUnifiedSelection();
+        RefreshUnifiedFilter();
         void Upsert(string key, LdPlayerInstance? instance, DeviceRow? device, bool connected)
         {
             expected.Add(key);

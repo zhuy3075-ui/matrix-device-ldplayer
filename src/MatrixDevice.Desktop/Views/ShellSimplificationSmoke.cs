@@ -3,6 +3,8 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Threading;
+using System.IO;
+using MatrixDevice.Host;
 
 namespace MatrixDevice.Desktop;
 
@@ -58,7 +60,7 @@ public partial class MainWindow
             if (previousDevice is not null && ViewModel.Devices.FirstOrDefault(row => !ReferenceEquals(row, previousDevice)) is { } filteredDevice)
             {
                 var previousInfo = filteredDevice.Info;
-                var previousStatus = ViewModel.StatusFilter;
+                var previousStatus = deviceStatusFilter;
                 var main = ViewModel.MainDevice;
                 var selected = ViewModel.Devices.Select(row => row.IsSelected).ToArray();
                 try
@@ -68,9 +70,9 @@ public partial class MainWindow
                     var image = ViewModel.DebugImage;
                     var parameters = ViewModel.Parameters.ToArray();
                     filteredDevice.Info = previousInfo with { State = "Offline" };
-                    ViewModel.StatusFilter = "Offline";
+                    deviceStatusChoice.SelectedItem = "离线";
                     await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
-                    if (ViewModel.DeviceView.Cast<DeviceRow>().Contains(previousDevice) || !ViewModel.DeviceView.Cast<DeviceRow>().Contains(filteredDevice))
+                    if (unifiedDeviceView.Cast<UnifiedDeviceRow>().Any(row => row.Device == previousDevice) || !unifiedDeviceView.Cast<UnifiedDeviceRow>().Any(row => row.Device == filteredDevice))
                         throw new InvalidOperationException("单设备目标隐藏反例没有形成。");
                     foreach (var tag in new[] { "应用", "节点" })
                     {
@@ -86,7 +88,7 @@ public partial class MainWindow
                 finally
                 {
                     filteredDevice.Info = previousInfo;
-                    ViewModel.StatusFilter = previousStatus;
+                    deviceStatusChoice.SelectedItem = previousStatus;
                 }
             }
             if (!VisualDescendants<Button>(Shell).Any(button => button.Name == "WorkspaceSettings") || !VisualDescendants<Button>(Shell).Any(button => button.Name == "DeviceDetails"))
@@ -96,14 +98,14 @@ public partial class MainWindow
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             directoryWindow!.UpdateLayout();
             VerifyNoRemovedShellControls(directoryWindow, "设备详情");
-            var directoryList = VisualDescendants<ListBox>(directoryWindow).Single(list => ReferenceEquals(list.ItemsSource, ViewModel.DeviceView));
+            var directoryList = VisualDescendants<ListBox>(directoryWindow).Single(list => list.Name == "DetailsDeviceChoice");
             if (BindingOperations.GetBinding(directoryList, Selector.SelectedItemProperty)?.Path.Path != nameof(WorkspaceViewModel.CurrentDevice))
                 throw new InvalidOperationException("设备目录已丢失明确选择功能。");
             var inputs = VisualDescendants<TextBox>(directoryWindow).Select(input => BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path).ToHashSet();
             if (!inputs.Contains(nameof(WorkspaceViewModel.DeviceName)) || inputs.Contains("DeviceGroup"))
                 throw new InvalidOperationException("设备名称编辑缺失或仍保留分组输入。");
-            var status = VisualDescendants<ComboBox>(directoryWindow).Single(input => BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == nameof(WorkspaceViewModel.StatusFilter));
-            if (!status.IsVisible) throw new InvalidOperationException("设备详情缺少有效状态筛选。");
+            if (VisualDescendants<ComboBox>(directoryWindow).Any() || VisualDescendants<CheckBox>(directoryWindow).Any() || directoryList.Items.Count != ViewModel.Devices.Count)
+                throw new InvalidOperationException("设备详情仍有全局筛选/群控控件或单设备目录被过滤。");
             var captions = VisualDescendants<TextBlock>(directoryWindow).Select(text => text.Text).ToArray();
             if (!captions.Any(caption => caption.StartsWith("画面", StringComparison.Ordinal)) || !captions.Any(caption => caption.StartsWith("节点", StringComparison.Ordinal)))
                 throw new InvalidOperationException("设备子系统状态缺失。");
@@ -118,7 +120,8 @@ public partial class MainWindow
                     metadataTarget.Info = info with { GroupId = retainedGroup };
                     ViewModel.DeviceName = "名称保存验收";
                     await ViewModel.SaveMetadataAsync();
-                    var saved = ViewModel.Runtime.Metadata.GetMetadata(metadataTarget.Serial);
+                    using var freshCatalog = new CatalogRepository(Path.Combine(ViewModel.DataDirectory, "db.sqlite3"));
+                    var saved = freshCatalog.GetMetadata(metadataTarget.Serial);
                     if (metadataTarget.Info.GroupId != retainedGroup || saved.GroupId != retainedGroup || saved.Name != "名称保存验收")
                         throw new InvalidOperationException("仅保存名称时修改或裁剪了既有分组数据。");
                 }

@@ -12,7 +12,7 @@ public partial class MainWindow
         if (!ViewModel.Demo) throw new InvalidOperationException("统一实例操作验收仅限演示模式。");
         NavigateTo("设备墙 / 主控"); SetWallViewMode("list"); UpdateUnifiedDirectory();
         await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
-        var previousStatus = ViewModel.StatusFilter;
+        var previousStatus = deviceStatusFilter;
         var previousCurrent = ViewModel.CurrentDevice;
         var previousMain = ViewModel.MainDevice;
         var selection = unifiedDevices.ToDictionary(row => row.Key, row => row.IsSelected);
@@ -64,7 +64,7 @@ public partial class MainWindow
             if (ldSelection is not null || ldCommandsByLabel["资源配置"].CanExecute(null))
                 throw new InvalidOperationException("多选目录仍保留单实例命令目标。");
             other.Device.Info = otherInfo with { State = "Ready" };
-            ViewModel.StatusFilter = "Ready";
+            deviceStatusChoice.SelectedItem = "已连接";
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
             if (unifiedDeviceView.Cast<UnifiedDeviceRow>().Contains(cold)) throw new InvalidOperationException("隐藏目标反例没有形成。");
             other.IsSelected = false;
@@ -76,12 +76,12 @@ public partial class MainWindow
                 throw new InvalidOperationException("表头取消选择没有清除隐藏目标或实例命令快照。");
 
             var beforeEmptyInfos = ViewModel.Devices.ToDictionary(row => row, row => row.Info);
-            var beforeEmptyStatus = ViewModel.StatusFilter;
+            var beforeEmptyStatus = deviceStatusFilter;
             try
             {
                 ClearWallSelection(); cold.IsSelected = true;
                 foreach (var row in ViewModel.Devices) row.Info = row.Info with { State = "Ready" };
-                ViewModel.StatusFilter = "Offline";
+                deviceStatusChoice.SelectedItem = "离线";
                 await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
                 if (!unifiedDeviceView.IsEmpty || !cold.IsSelected || selectAll.IsChecked is not null || !selectAll.IsEnabled)
                     throw new InvalidOperationException("空可见列表的隐藏勾选未显示为可取消的表头中间态。");
@@ -92,10 +92,10 @@ public partial class MainWindow
             finally
             {
                 foreach (var pair in beforeEmptyInfos) pair.Key.Info = pair.Value;
-                ViewModel.StatusFilter = beforeEmptyStatus;
+                deviceStatusChoice.SelectedItem = beforeEmptyStatus;
             }
 
-            ViewModel.StatusFilter = previousStatus;
+            deviceStatusChoice.SelectedItem = previousStatus;
             other.Device.Info = otherInfo;
             var confirm = ViewModel.Confirm;
             ViewModel.Confirm = (_, _) => true;
@@ -138,7 +138,7 @@ public partial class MainWindow
             menu.IsOpen = false;
             wallActionsViewport.ScrollToTop();
             other.Device.Info = otherInfo;
-            ViewModel.StatusFilter = previousStatus;
+            deviceStatusChoice.SelectedItem = previousStatus;
             foreach (var row in unifiedDevices.ToArray()) row.IsSelected = selection.GetValueOrDefault(row.Key);
         }
     }
