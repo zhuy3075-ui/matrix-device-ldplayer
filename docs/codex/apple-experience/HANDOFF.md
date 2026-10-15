@@ -20,6 +20,22 @@ A02主仓149/149（51.17秒）和最终1000×700界面通过；独立verifier149
 
 ## 当前状态与下一步
 
+### 最新执行：A06c1离线验收与交付入口
+
+本段优先于下方所有历史执行记录。上一goal轮针对最新用户四项列表请求完成实际主仓150/1000完整/390设备889复验，是有效证据进展；没有重复改源码。新的goal继续完整目标，恢复A06c1；原c7b6d24 HEAD/test备份未动，本机配置仍E4E33A8...BB05F0，不导入未验修复。
+
+生产r1b单VM raw41E4F7E6...A9CA/patch7177D2EB...CDF5不再改；正式夹具r1 EB029377...F516/MainA1878014...E34A已精确合入。原基线15产品红、首产品14PASS/4FAIL和仅七叶诊断均保留：四败只有Targets变化，其余六分量true，原离线安全门禁合法清有效目标，不偷换勾选。r1据此分开冻结行/统一行引用key/选择意图与有效目标保护，18场景/产物/等待/原四套不改，不倒填首轮为通过。
+
+最终独立150/50.98秒；三桌面首次exit0，每18/295检查/163观察/18清理，旧10/11/16/49及原套、12idle/Error空；六shell135、33本地PNG/JSON逐项重开。正式汇总04A22C40...3971D、DLL05EFB7C7...160D7。根代表150/50.96秒、一次1000完整exit0/87.585秒同新18及旧四套/12idle，390shell135通过；根汇总57E17C7A...2F4BD、DLL9E381B9D...A249C。root实读原JSON并重开代表PNG/JSON。全部exec结束，Build/GUI锁root空闲、自有进程0；125源各阶段前后同，旧四套raw/canonical同，实际配置E4E33A8...BB05F0未变，未开普通程序或真实实例。
+
+当前是完成运行验收后的交付门禁：10源码/正式文档raw冻结→已审helper562EDF08...C6B8E只在隔离快照打包并回写三清单→精确stage13→独立audit r1 68509E45...C3D89→单独commit/push原私有分支。实际结果须读本机tests树artifacts/completed-cache-package和主仓artifacts/cache-root/push-complete-r1.json，并核当前Git/远端；不要凭本段流程推断已经推送，也不要在Git已含本项且远端一致时重做交付。两个用户PNG/配置/依赖/原始证据不入提交，AP021旧tracked材料保留，不清worktree、不合并发布。详细边界见A06_COMPLETED_CACHE.md。
+
+下一项先验同Current行新Ready后的自动首载：现通知只在Current换引用/导航建pending，c1清Nodes只投影，HasActiveOperations释放只恢复既有pending，尚为静态候选。建议从完整目录接纳后的新Ready身份建意图，防metadata重复、自己几何预处理重试、离页/关闭和在途新身份丢pending；先新红测，不先扩大产品事件。outer desktop.colors=0如实保留，是旧夹具伪离线后未重载，不冒称外层取色成功；新10及18颜色各有独立证据。AP023/028、原生保存/在途crop、DPI/实机、A07..A12和最终双实例30分钟未完成，goal active。
+
+### 以下为先前阶段记录
+
+本轮续跑以此为准：A06b2b已独立交付推送c7b6d24258699d975310b902f7a66f0380d8932c，远端一致/test备份未变；297源/300 ZIP/153 Bundle实际核验，交付audit6E71FBE5...35321、主仓artifacts/scp-root/push-complete-r1.json留证。上一目标轮为实际进展。当前[A06c1完成缓存身份](A06_COMPLETED_CACHE.md)三棵apple-completed-cache/-tests/-verifier基于c7b6d24，冻结r0 C79EE9D6...AD952/MainA1878014...E34A/18例已双审。独立首次150/51.67秒/0警告错误，DLL62D8A38C...13408；一次1000 childexit1/8.312秒，18=3通过15产品红/18清理、168检查137观察。原报告550B2249...38FC、汇总7E022FD9...FDC0A；Catalog新t12/g2而旧row t11/g1仍输出旧PNG/JSON、Error空/完成，root实读18例及文件并目视。125源/原四套raw/canonical/配置E4E33A8...BB05F0前后同，exec结束/owned0后归锁，锁现root空闲。旧10/11/16/49与原全套未到，NOT-RUN。main只获独立树单VM首轮编码/冻源、不Build；hig只准备expectedExit0最终runner；full仅准备已静审helper562EDF08...C6B8E，不执行。保留精确Offline历史、metadata与后台独立检查，不改revision/主动自动首载/旧测试或真实环境。最终产品、主仓代表和交付审查未做，不提前标绿；原生保存/在途crop/同row自动首载、实机和A07..A12继续开放，完整goal active。以下b2b及更早段落均为已结束的过程，不是当前执行授权。
+
 最新阶段：[A06b2b截屏正文](A06_SCREENSHOT_RESPONSIVE.md)基于已推送29ab03feb858e87a875f4e41a82d3b79f35b4296，三新隔离树apple-screenshot-responsive、-tests、-verifier。基线六几何真实红、第一生产轮长坐标文本预算不足均保留，第二轮唯一坐标列70改100后通过。最终生产raw AB50FBBB53EB1C0641FDC9D2528F03C8387D0DC026B6F8170BB9423CF6DD361A、Main8356EF3694A3FCC403BFA31C330B66816196E84AAAB0E59C3EA1E9451F59C84D、新10例fixture59CAFC660A1C5427942EE453DE9BD6004DE13A48BA21479EB4CF4AFE84DE7762已精确合入主仓；仅BuildScreenshotPage与一行Demo接线，原11/16/49、VM/handlers/主题不变。
 
 当前执行以此更新为准：独立最终150/51.05秒/0警告错误，三桌面1000/1440/1920各新10/630/257/10清理+旧11/16/49原全套/12idle、六shell每135，均首次exit0；汇总44476DB4601B9AE07467906341080918FD6D80FF412551F7A549744B358F5946。主仓150/51.43秒/0警告错误、1000完整87.66秒同10及旧全套、390shell135通过；root直接实读/目视390分段与1440双栏，汇总artifacts/scp-root/root-summary-r2.json SHA7193658ADB2F19EEF637B026F2584B46D66E2DA9AF933777FA82AFE7C898839E，DLL4D5DE1381A5DBB6B6DD22B9FE7B7970CD71773EC6DF0EB6763E7337831ADDFF2。首汇总标量matrixCases误记1已按真实32纠正保留，未改源码/测试/首次执行结果。各阶段124源前后同、旧fixture同、配置E4E33A8...BB05F0，自有进程0/exec结束，锁归root空闲；未启动普通程序或真实实例。10文件冻结后用2539EE49...F680 helper在隔离快照打包，只回写三清单；hig实际审ZIP/Bundle/Tree与精确13路径后才提交push。新打包审查与Git结果以ignored audit和实际记录为准，不把旧b2a包作为本阶段产物。两用户PNG、运行配置和本轮原始证据不提交，AP021历史材料仍保留。完整goal继续active；下一步缓存身份/原生保存/未完成裁剪，再A07..A12、真实1/2与最终30分钟，不扩大本轮为物理点击/DPI/Android通过。

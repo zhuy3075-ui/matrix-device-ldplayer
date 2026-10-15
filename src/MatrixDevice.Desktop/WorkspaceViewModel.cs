@@ -28,6 +28,9 @@ public sealed class WorkspaceViewModel : ObservableObject
     private string status = "等待发现设备";
     private string error = "";
     private BitmapSource? debugImage;
+    private readonly Dictionary<DeviceRow, CompletedScreenshot> completedScreenshots = [];
+    private CompletedScreenshot? completedDebugImage;
+    private CompletedNodeTree? completedNodeTree;
     private long debugPublicationRevision;
     private AndroidNode? nodeRoot;
     private NodeRow? selectedNode;
@@ -130,11 +133,12 @@ public sealed class WorkspaceViewModel : ObservableObject
         get => currentDevice;
         set
         {
+            ReconcileCompletedDebugCaches();
             if (ReferenceEquals(currentDevice, value)) return;
             debugPublicationRevision++;
             Set(ref currentDevice, value);
             DeviceName = value?.Name ?? "";
-            DebugImage = value?.Screenshot;
+            ShowCompletedScreenshot(value);
             ClearNodes();
             Apps.Clear();
             LoadScriptLogs();
@@ -243,13 +247,14 @@ public sealed class WorkspaceViewModel : ObservableObject
                 row.PropertyChanged += (_, args) =>
                 {
                     if (args.PropertyName == nameof(DeviceRow.IsSelected)) UpdateSelection();
-                    if (args.PropertyName == nameof(DeviceRow.Info)) { Changed(nameof(DeviceContext)); Changed(nameof(MainContext)); Changed(nameof(Counts)); RefreshCommands(); WallChanged?.Invoke(); }
+                    if (args.PropertyName == nameof(DeviceRow.Info)) { ReconcileCompletedDebugCaches(); Changed(nameof(DeviceContext)); Changed(nameof(MainContext)); Changed(nameof(Counts)); RefreshCommands(); WallChanged?.Invoke(); }
                 };
                 Devices.Add(row);
             }
             else row.Info = info;
         }
         foreach (var row in Devices.Where(row => !rows.Any(info => info.Serial == row.Serial)).ToList()) Devices.Remove(row);
+        ReconcileCompletedDebugCaches();
         if (CurrentDevice is not null && !Devices.Contains(CurrentDevice)) CurrentDevice = null;
         if (MainDevice is not null && !Devices.Contains(MainDevice)) { await runtime.Input.HandoffAsync(null); MainDevice = null; }
         RefreshApiRows();
@@ -298,6 +303,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         catch { if (replacement is not null) await replacement.DisposeAsync(); throw; }
         old.Scripts.EntryAdded -= OnScriptLog; old.Scripts.StatusChanged -= OnScriptStatus;
         runtime = replacement;
+        ReconcileCompletedDebugCaches();
         runtime.Scripts.EntryAdded += OnScriptLog; runtime.Scripts.StatusChanged += OnScriptStatus;
         SyncApiWriteGuard();
         Settings.AdbSerialsJson = JsonSerializer.Serialize(runtime.Settings.AdbAllowedSerials, JsonDefaults.Options);
@@ -333,7 +339,7 @@ public sealed class WorkspaceViewModel : ObservableObject
             PublishScreenshotCache(identity, bytes);
             RequireDebugPublication(publication);
             ClearNodes();
-            DebugImage = row.Screenshot;
+            ShowCompletedScreenshot(row);
             WallChanged?.Invoke();
         }
         catch (Exception error) when (error is not OperationCanceledException) { throw new DebugReadFailure(publication, source, source?.Info.Serial ?? publication.SourceSerial, error); }
@@ -367,7 +373,7 @@ public sealed class WorkspaceViewModel : ObservableObject
             if (updatedCurrent is { } current && DebugPublicationIsCurrent(publication) && DebugSourceIsValid(current))
             {
                 ClearNodes();
-                DebugImage = current.Row.Screenshot;
+                ShowCompletedScreenshot(current.Row);
             }
             WallChanged?.Invoke();
         }
@@ -405,7 +411,7 @@ public sealed class WorkspaceViewModel : ObservableObject
                     row.ScreenState = "截图失败：" + message;
             }
         }
-        if (updatedCurrent is { } current && DebugPublicationIsCurrent(publication) && DebugSourceIsValid(current)) { ClearNodes(); DebugImage = current.Row.Screenshot; }
+        if (updatedCurrent is { } current && DebugPublicationIsCurrent(publication) && DebugSourceIsValid(current)) { ClearNodes(); ShowCompletedScreenshot(current.Row); }
         WallChanged?.Invoke();
     }
 
@@ -455,13 +461,14 @@ public sealed class WorkspaceViewModel : ObservableObject
             PublishScreenshotCache(identity, bytes);
             RequireDebugPublication(publication);
             ClearNodes();
-            DebugImage = row.Screenshot;
+            ShowCompletedScreenshot(row);
             RequireDebugSource(identity);
             RequireDebugPublication(publication);
             var freshRoot = await publication.Owner.Backend.DumpAsync(identity.Info.Serial);
             RequireDebugSource(identity);
             RequireDebugPublication(publication);
             nodeRoot = freshRoot;
+            completedNodeTree = new CompletedNodeTree(identity, freshRoot);
             Nodes.Clear(); Nodes.Add(new NodeRow(nodeRoot));
             SelectedNode = null;
             row.AutomationState = "节点可用";
@@ -483,6 +490,8 @@ public sealed class WorkspaceViewModel : ObservableObject
     // Source caches follow device identity; the current inspection additionally follows its revision.
     private readonly record struct DebugPublicationContext(MatrixRuntime Owner, DeviceRow? Current, string? SourceSerial, long Revision);
     private readonly record struct DebugSourceIdentity(MatrixRuntime Owner, DeviceRow Row, DeviceInfo Info);
+    private sealed record CompletedScreenshot(DebugSourceIdentity Source, BitmapSource Image, DateTimeOffset CapturedAt);
+    private sealed record CompletedNodeTree(DebugSourceIdentity Source, AndroidNode Root);
     private sealed class DebugSourceExpiredException() : OperationCanceledException("设备身份或几何已变化，旧结果未发布。") { }
     private sealed class DebugReadFailure(DebugPublicationContext publication, DebugSourceIdentity? source, string? sourceSerial, Exception error) : Exception(error.Message, error)
     {
@@ -534,13 +543,52 @@ public sealed class WorkspaceViewModel : ObservableObject
         RequireDebugSource(source);
         var screenshot = DecodeImage(bytes);
         RequireDebugSource(source);
+        var capturedAt = DateTimeOffset.UtcNow;
+        completedScreenshots[source.Row] = new CompletedScreenshot(source, screenshot, capturedAt);
         source.Row.Screenshot = screenshot;
-        source.Row.CapturedAt = DateTimeOffset.UtcNow;
+        source.Row.CapturedAt = capturedAt;
         source.Row.ScreenState = "截图可用";
+    }
+
+    private bool CompletedDebugSourceIsValid(DebugSourceIdentity source) => ReferenceEquals(runtime, source.Owner) && Devices.Contains(source.Row)
+        && CompletedDebugIdentityMatches(source.Row.Info, source.Info) && source.Owner.Devices.Snapshot.Any(info => CompletedDebugIdentityMatches(info, source.Info));
+    // Only completed local data may survive one observed, otherwise unchanged Offline transition.
+    private static bool CompletedDebugIdentityMatches(DeviceInfo actual, DeviceInfo expected) => SameDebugIdentity(actual, expected)
+        || expected.Online && actual.State == "Offline" && expected.Generation < long.MaxValue && actual.Generation == expected.Generation + 1
+        && actual.Serial == expected.Serial && actual.TransportId == expected.TransportId && actual.Width == expected.Width
+        && actual.Height == expected.Height && actual.Rotation == expected.Rotation;
+
+    private void ReconcileCompletedDebugCaches()
+    {
+        foreach (var (row, cache) in completedScreenshots.ToArray())
+        {
+            var sourceValid = CompletedDebugSourceIsValid(cache.Source);
+            if (sourceValid && ReferenceEquals(row.Screenshot, cache.Image)) continue;
+            completedScreenshots.Remove(row);
+            if (!sourceValid && row.AutomationState == "节点可用") row.AutomationState = "尚未刷新节点";
+            if (!ReferenceEquals(row.Screenshot, cache.Image)) continue;
+            row.Screenshot = null;
+            if (row.CapturedAt == cache.CapturedAt) row.CapturedAt = null;
+            if (row.ScreenState == "截图可用") row.ScreenState = "未载入";
+        }
+        var imageInvalid = completedDebugImage is { } image && (!ReferenceEquals(DebugImage, image.Image) || !ReferenceEquals(CurrentDevice, image.Source.Row) || !CompletedDebugSourceIsValid(image.Source));
+        var nodesInvalid = completedNodeTree is { } nodes && (!ReferenceEquals(nodeRoot, nodes.Root) || !ReferenceEquals(CurrentDevice, nodes.Source.Row) || !CompletedDebugSourceIsValid(nodes.Source));
+        if (!imageInvalid && !nodesInvalid) return;
+        completedDebugImage = null; completedNodeTree = null;
+        DebugImage = null;
+        if (nodeRoot is not null || Nodes.Count != 0 || SelectedNode is not null) ClearNodes();
+    }
+
+    private void ShowCompletedScreenshot(DeviceRow? row)
+    {
+        completedDebugImage = row is not null && completedScreenshots.TryGetValue(row, out var cache)
+            && ReferenceEquals(row.Screenshot, cache.Image) && CompletedDebugSourceIsValid(cache.Source) ? cache : null;
+        DebugImage = completedDebugImage?.Image;
     }
 
     private void ClearNodes()
     {
+        completedNodeTree = null;
         if (CurrentDevice is { } row) row.AutomationState = "尚未刷新节点";
         nodeRoot = null;
         Nodes.Clear();
@@ -551,7 +599,10 @@ public sealed class WorkspaceViewModel : ObservableObject
     public Task ExportNodesAsync(string path) => ExecuteAsync("导出节点", async () =>
     {
         if (nodeRoot is null) throw new InvalidOperationException("尚未刷新节点");
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(nodeRoot, JsonDefaults.Options));
+        ReconcileCompletedDebugCaches();
+        if (completedNodeTree is not { } tree || !ReferenceEquals(nodeRoot, tree.Root)) throw new InvalidOperationException("节点来源已变化，请重新刷新节点。");
+        var json = JsonSerializer.Serialize(tree.Root, JsonDefaults.Options);
+        await File.WriteAllTextAsync(path, json);
     });
 
     public IEnumerable<NodeRow> FlattenNodes()
@@ -562,6 +613,7 @@ public sealed class WorkspaceViewModel : ObservableObject
 
     public void SamplePixel(int x, int y)
     {
+        ReconcileCompletedDebugCaches();
         if (DebugImage is null || x < 0 || y < 0 || x >= DebugImage.PixelWidth || y >= DebugImage.PixelHeight) return;
         var converted = new FormatConvertedBitmap(DebugImage, PixelFormats.Bgra32, null, 0);
         var pixel = new byte[4];
@@ -573,7 +625,9 @@ public sealed class WorkspaceViewModel : ObservableObject
     public Task SaveScreenshotAsync(string path, Int32Rect? crop = null) => ExecuteAsync(crop is null ? "保存截图" : "保存裁剪", async () =>
     {
         if (DebugImage is null) throw new InvalidOperationException("尚未加载截图");
-        BitmapSource source = crop is { } region ? new CroppedBitmap(DebugImage, region) : DebugImage;
+        ReconcileCompletedDebugCaches();
+        if (completedDebugImage is not { } image || !ReferenceEquals(DebugImage, image.Image)) throw new InvalidOperationException("截图来源已变化，请重新刷新截图。");
+        BitmapSource source = crop is { } region ? new CroppedBitmap(image.Image, region) : image.Image;
         var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(source));
         using var memory = new MemoryStream(); encoder.Save(memory);
         await File.WriteAllBytesAsync(path, memory.ToArray());
