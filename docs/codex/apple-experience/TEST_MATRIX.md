@@ -26,6 +26,7 @@
 | MON-02 监控 | 主机/实例CPU和工作集趋势，首样本未知、后续增量，打开主控/原生窗口 | PIDbirth变化不续用旧样本，缺权限未知非0；高负载不阻止目录自动更新 | NOT-RUN；不扩张双路为23路容量 |
 | MON-LAYOUT 监控正文 | 六尺寸真实视口/44动作、两模式/范围/暂停、长文滚尾、同卡片与Bitmap、图表实际宽 | SCP条带/相交边界、九组Auto阈值、history/Latest不伪采样、同nonce待帧、空目录及Demo协调清理 | 独立PASS-OFFLINE-WPF-LAYOUT-OBSERVATION：[A05b2](A05_MONITOR_RESPONSIVE.md)，六尺寸各952/308、主仓两390同样通过。Open/Retry纯几何回调0，合成像素非视频；AP019/020原首败未解，MON-01/02实机仍NOT-RUN |
 | NODE-01 界面检查 | 自动首载、截图与节点、树/框双向选中、属性、展开/折叠、JSON导出 | 空树/超时/离线、刷新中切目标、旧节点不发给新目标、导出取消 | NOT-RUN |
+| DEBUG-PUBLISH 界面检查/截屏及后台源缓存 | Capture/LoadNodes/Wall/Automatic四入口固定来源；正常几何刷新、合法后台缓存返回、节点导出 | 首次await切目标/ABA、行及Catalog-only身份失效、新B检查不被旧Auto清除、Busy no-op、固定源故障日志、后端/外部取消与恢复 | 独立PASS-OFFLINE-A06A：[A06a](A06_DEBUG_PUBLICATION.md)，三桌面每49case/401检查/191观察、49清理/9正确来源；独立与主仓150、主仓49/390shell及原回归通过。不是NODE-01自动首载、按钮、生产timer、真实ADB或runtime热换证明；旧Appearance首败AP023保持开放 |
 | CAP-01 截屏 | 取色坐标/RGB/HEX、缩放、裁剪、PNG保存、颜色双击复制 | 缩放坐标、边界/零面积裁剪、目标改变丢弃旧裁剪、无图/保存失败/取消 | NOT-RUN |
 | SHELL-01 终端 | 目标选择→执行→输出/错误码、历史上下；输出框系统文本复制语义 | 长输出/空命令/超时/离线；不因切页发旧命令、不劫持文本编辑快捷键；专用取消/复制/清空控件不存在，记不适用 | NOT-RUN |
 | APP-01 应用 | 当前独立目标区双选→读取真实包/版本；第三方/系统应用过滤；应用行选择 | 空/离线目标、重入、别名去重、与设备群控/主控选择不互相授权 | NOT-RUN；旧LiveUiAcceptance未走当前批次UI |

@@ -309,6 +309,7 @@ public partial class MainWindow : Window
     public async Task RunSmokeAsync(string? screenshotPath = null)
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("启动验收仅允许显式演示模式");
+        await DebugPublicationSmoke.VerifyAsync(System.IO.Path.Combine(ViewModel.DataDirectory, "artifacts", "desktop-smoke"));
         if (tabs.SelectedIndex != 0 || wallViewMode != "list") throw new InvalidOperationException("初始页面必须是统一设备列表。");
         await VerifyDeviceActionLabelsAsync();
         await VerifyAppleAppearanceAsync(screenshotPath);

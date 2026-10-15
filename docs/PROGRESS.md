@@ -108,3 +108,24 @@
 - 主仓150/150（51.26秒）及fresh五代表首轮全过，DLL29EA3F8F7FFF131D5EF06DDACADD0C93365FB267672B4CA640E1624078A7FBAA；目视390墙/长文/空目录及1000设备。明确运行profile前后SHA仍E4E33A8...BB05F0；独立默认路径不存在的null比较不作用户配置证明，报告已纠正。
 - 下一步：本功能单独push后A06a先受控TCS验证截图/节点ABA与目录代次迟到，再A06b窄屏界面检查/截屏。所有这些候选尚未执行，不拿Demo手载当自动首载；A07-A12及真实双路/30分钟范围不缩小，完整目标继续active。
 - 打包审计边界：旧打包器仍含docs/verification历史PNG/JSON/txt；完整性校验不等于纯源码/无原始证据。口头绝对说法已纠正，AP-021留A12单独分类，不删除用户文件；本轮不新增这些历史材料、不上传本轮artifacts或ZIP。
+
+## 2026-10-15 / A06a先红验证开始
+
+- 上轮为实际进展：28cdd4ded947a4d303ecf39744925faaabb3a314已push，远端feature匹配、test备份49e4710不变；本轮从该基线独立展开，不重做监控布局。
+- 已读PRD/SPEC/TASKS/交接及四条DebugImage发布链；两名只读审查同意区分源行缓存与检查发布、正常几何预处理与后续身份冻结。轻规格A06_DEBUG_PUBLICATION，AP-022目前仅源码候选，暂无运行红或修复通过结论。
+- 三个新独立CLI worktree为apple-debug-context、-tests、-verifier；应用工作树工具因聊天根目录不是Git仓库不可用，已在实际核验的项目Git根用普通worktree，无重试创建同目录或清理旧工作。
+- main仅加现Demo smoke调用一行，full只拥有新正式Desktop/STA夹具，VM生产尚未改；hig独立审规格。GUI/构建锁仍root空闲，必须明确转交才可跑。所有数据在artifacts，不触真实配置/模拟器/共享ADB；A06布局和实机仍未开始。
+- r0已有实际红而非计划：实施树VM未改，正常6项A截图/节点/导出通过；Discover TCS期间切B，释放后真实Screenshot B/Dump B并改B检查，事件1→3，两case均清理完成。root直接读JSON确认；hig静审夹具有效。接入改为三段artifacts/desktop-smoke保留默认路径语义，未实际运行用户默认profile。现main已获仅VM四链修复+Build150+r0预检独占锁，full只补新fixture r1（不buildGUI），独立最终验收仍未做。
+- 第一版已预检150/52.42s，r0两case全PASS后按原合同PARTIAL停止，B事件保持1→1，新B可恢复；root已读实际JSON/log，不能计全面绿。main释锁且VM-r1暂冻结，full仍只补完整r1；独立静审另发现A迟到异常可能按CurrentB记日志/错误，已授权同链错误反例，不扩大到无关全局错误处理。下一步完整baseline红与修复绿、独立矩阵仍未执行。
+- 最新截图需求再次核对：8303cdc已移除全部分组、设备视图切换和重复启动/连接，表头统一选择、同步开关归主控、主控截图自动调度；root和独立只读审查均确认28c现行源码仍保持这些约束，不重复实施或删除原分组数据。此处是本轮源码复核，未冒称重新执行三尺寸旧验收。
+- 新r1正式夹具已冻结46独立case：增量patch SHA9E171B2B5D96AB21DBA6646ED9F49798A4C25B90B535163B30AF99D3E9811E82，完整源SHA3B516F533F336FEC860CD727E6A2E7F456ED1D490C21D627FA38AE2FD46864DA；root实核，r0原件不变。独立verifier获独占锁，先在28c未改VM上运行完整聚合红；main仅机械导入同fixture并等待，不构建GUI，第一版VM仍冻结。46case静态完成不算执行覆盖。
+- 独立完整r1先被长SQLite journal路径拦截，保留失败后仅改隔离短profile，同DLL完成46(10PASS/36FAIL)且全部清理。root实读后区分31产品首红+2混合+3纯夹具；两处安全UI期望纠正为原Describe且不泄rawmarker，r2同基线真实46(13PASS/33FAIL)全部清理，8磁盘日志错误来源仍实证。完整证据/摘要见A06报告，不将36项都算成产品缺陷。
+- 新VM-r2异常归属实现已冻结但被root和独立静审拒绝：宽OCE catch改变Auto后端取消传播与Wall单设备失败反馈，未BuildGUI/未push。full只加三例取消防回归、不改原46条件；main保留VM-r2等实际红，再最小私有SourceExpired区分。GUI锁已回root空闲，所有代理不自行运行；完整目标仍active。
+
+## 2026-10-15 / A06a发布隔离离线验收
+
+- 实际中间版49=47PASS/2取消回归FAIL、全部清理，root直接读核；之后仅SourceExpired私有类型四处最小第三生产修正。49/150先过但旧Hover首败，保留AP023；只读诊断不改原断言/等待/焦点，不把后续绿称原原因已解。
+- 最终四源VM79137...03D4、fixtureE3EF...051B2、hook6F99...F540、Appearance304D...8C90，root导入前实核每patch及canonical内容，fixture仅机械CRLF→准确LF，其余raw直接匹配。
+- 独立PASS-OFFLINE-A06A：150/51.09秒、三桌面每49/401/191/49清理/9正确源日志及原209/36/73/25/12idle、六shell135、设备889/140与847/139、监控各952/308，14进程首轮退出0、无最终矩阵重试；汇总SHA E9C1300886B8E55C1F3413DB4CC08974B6E304F66044E82BD907F31F3EF457D3已root读核。辅助modal图片固定名被覆盖只余最后一轮，六份主/抽屉图和JSON/原日志各独立，不称六modal视觉齐全。
+- 主仓150/51.65秒、fresh1000完整和390shell首次exit0；49/401/191/49清理/9来源及旧回归、135壳层通过并目视单一列表。最终DLL55D2AC54BC89B7C9A5A8B2589A16B479215DDC20FC8EDAFAFD8B34E66C9A67B7；实际profile前后SHA仍E4E33A8...BB05F0，所有exec/Desktop结束，锁空闲。不操作模拟器、账号或共享ADB。
+- 本阶段只提交相关四源码/正式测试、README/脱敏报告/清单，不上传本轮artifacts/本机配置/依赖/ZIP；归档旧材料范围AP021不变。下一步A06b先复现自动首载Busy调度/旧缓存身份及保存裁剪边界，再窄屏树/截图布局，A07..A12和实机全目标不缩小，不标goal完成。

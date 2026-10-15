@@ -28,6 +28,7 @@ public sealed class WorkspaceViewModel : ObservableObject
     private string status = "等待发现设备";
     private string error = "";
     private BitmapSource? debugImage;
+    private long debugPublicationRevision;
     private AndroidNode? nodeRoot;
     private NodeRow? selectedNode;
     private string shellInput = "";
@@ -129,7 +130,9 @@ public sealed class WorkspaceViewModel : ObservableObject
         get => currentDevice;
         set
         {
-            if (!Set(ref currentDevice, value)) return;
+            if (ReferenceEquals(currentDevice, value)) return;
+            debugPublicationRevision++;
+            Set(ref currentDevice, value);
             DeviceName = value?.Name ?? "";
             DebugImage = value?.Screenshot;
             ClearNodes();
@@ -200,6 +203,15 @@ public sealed class WorkspaceViewModel : ObservableObject
         Status = $"{label}…";
         try { await action(); Status = $"{label}完成"; AddActivity(Status); }
         catch (OperationCanceledException) { Status = $"{label}已停止"; AddActivity(Status); }
+        catch (DebugReadFailure failure)
+        {
+            var message = PresentDebugError(failure.OriginalError, failure.Publication.Owner, failure.SourceSerial);
+            if (!DebugPublicationIsCurrent(failure.Publication) || failure.DeviceSource is { } source && !DebugSourceIsValid(source))
+            {
+                Status = $"{label}已停止"; AddActivity(Status);
+            }
+            else { Error = $"{label}失败：{message}"; Status = "操作失败"; AddActivity(Error); }
+        }
         catch (Exception ex) { Error = $"{label}失败：{PresentError(ex)}"; Status = "操作失败"; AddActivity(Error); }
         finally { Busy = false; blockApiWhileBusy = true; }
     }
@@ -308,48 +320,91 @@ public sealed class WorkspaceViewModel : ObservableObject
 
     public Task CaptureAsync() => ExecuteAsync("刷新截图", async () =>
     {
-        await RefreshGeometryAsync();
-        var row = CurrentDevice ?? throw new InvalidOperationException("未选择设备");
-        var bytes = await runtime.Backend.ScreenshotAsync(row.Serial);
-        row.Screenshot = DecodeImage(bytes);
-        row.CapturedAt = DateTimeOffset.UtcNow;
-        row.ScreenState = "截图可用";
-        if (ReferenceEquals(CurrentDevice, row))
+        var publication = BeginDebugPublication();
+        DebugSourceIdentity? source = null;
+        try
         {
+            var row = publication.Current ?? throw new InvalidOperationException("未选择设备");
+            await RefreshGeometryAsync(publication, requireCurrent: true);
+            RequireDebugPublication(publication);
+            var identity = CaptureDebugSource(publication.Owner, row); source = identity;
+            var bytes = await publication.Owner.Backend.ScreenshotAsync(identity.Info.Serial);
+            PublishScreenshotCache(identity, bytes);
+            RequireDebugPublication(publication);
             ClearNodes();
             DebugImage = row.Screenshot;
+            WallChanged?.Invoke();
         }
-        WallChanged?.Invoke();
+        catch (Exception error) when (error is not OperationCanceledException) { throw new DebugReadFailure(publication, source, source?.Info.Serial ?? publication.SourceSerial, error); }
     });
 
     public Task RefreshWallAsync() => ExecuteAsync("刷新设备墙", async () =>
     {
-        await RefreshGeometryAsync();
-        foreach (var row in Devices.Where(row => row.Info.Online))
+        var publication = BeginDebugPublication();
+        try
         {
-            try { row.Screenshot = DecodeImage(await runtime.Backend.ScreenshotAsync(row.Serial)); row.CapturedAt = DateTimeOffset.UtcNow; row.ScreenState = "截图可用"; }
-            catch (Exception ex) { row.ScreenState = $"截图失败：{PresentError(ex)}"; }
+            await RefreshGeometryAsync(publication, requireCurrent: false);
+            DebugSourceIdentity? updatedCurrent = null;
+            foreach (var row in Devices.Where(row => row.Info.Online).ToArray())
+            {
+                DebugSourceIdentity? source = null; var serial = row.Serial;
+                try
+                {
+                    source = CaptureDebugSource(publication.Owner, row);
+                    var bytes = await publication.Owner.Backend.ScreenshotAsync(source.Value.Info.Serial);
+                    PublishScreenshotCache(source.Value, bytes);
+                    if (ReferenceEquals(row, publication.Current)) updatedCurrent = source;
+                }
+                catch (DebugSourceExpiredException) { RequireDebugRuntime(publication.Owner); }
+                catch (Exception error)
+                {
+                    var message = PresentDebugError(error, publication.Owner, source?.Info.Serial ?? serial);
+                    RequireDebugRuntime(publication.Owner);
+                    if (source is { } failed && DebugSourceIsValid(failed)) row.ScreenState = "截图失败：" + message;
+                }
+            }
+            if (updatedCurrent is { } current && DebugPublicationIsCurrent(publication) && DebugSourceIsValid(current))
+            {
+                ClearNodes();
+                DebugImage = current.Row.Screenshot;
+            }
+            WallChanged?.Invoke();
         }
-        if (CurrentDevice is not null)
-        {
-            ClearNodes();
-            DebugImage = CurrentDevice.Screenshot;
-        }
-        WallChanged?.Invoke();
+        catch (Exception error) when (error is not OperationCanceledException) { throw new DebugReadFailure(publication, null, null, error); }
     });
 
     internal async Task RefreshAutomaticScreensAsync(string[] serials, CancellationToken ct)
     {
-        foreach (var serial in serials)
+        var publication = SnapshotDebugPublication();
+        var rows = serials.ToArray().Select(serial => Devices.FirstOrDefault(row => row.Serial == serial && row.Info.Online)).OfType<DeviceRow>().ToArray();
+        DebugSourceIdentity? updatedCurrent = null;
+        foreach (var row in rows)
         {
             ct.ThrowIfCancellationRequested();
-            var row = Devices.FirstOrDefault(item => item.Serial == serial && item.Info.Online);
-            if (row is null) continue;
-            try { row.Screenshot = DecodeImage(await runtime.Backend.ScreenshotAsync(serial, ct)); row.CapturedAt = DateTimeOffset.UtcNow; row.ScreenState = "截图可用"; }
+            DebugSourceIdentity? source = null; var serial = row.Serial;
+            try
+            {
+                source = CaptureDebugSource(publication.Owner, row);
+                var bytes = await publication.Owner.Backend.ScreenshotAsync(source.Value.Info.Serial, ct);
+                ct.ThrowIfCancellationRequested();
+                PublishScreenshotCache(source.Value, bytes);
+                if (ReferenceEquals(row, publication.Current)) updatedCurrent = source;
+            }
+            catch (DebugSourceExpiredException)
+            {
+                ct.ThrowIfCancellationRequested();
+                RequireDebugRuntime(publication.Owner);
+            }
             catch (OperationCanceledException) { throw; }
-            catch (Exception ex) { row.ScreenState = "截图失败：" + PresentError(ex); runtime.Log.Write("auto-screenshot-error", ex.Message, serial); }
+            catch (Exception error)
+            {
+                var message = PresentDebugError(error, publication.Owner, source?.Info.Serial ?? serial, automatic: true);
+                RequireDebugRuntime(publication.Owner);
+                if (source is { } failed && DebugSourceIsValid(failed))
+                    row.ScreenState = "截图失败：" + message;
+            }
         }
-        if (CurrentDevice is not null) { ClearNodes(); DebugImage = CurrentDevice.Screenshot; }
+        if (updatedCurrent is { } current && DebugPublicationIsCurrent(publication) && DebugSourceIsValid(current)) { ClearNodes(); DebugImage = current.Row.Screenshot; }
         WallChanged?.Invoke();
     }
 
@@ -387,32 +442,100 @@ public sealed class WorkspaceViewModel : ObservableObject
 
     public Task LoadNodesAsync() => ExecuteAsync("刷新截图与节点", async () =>
     {
-        await RefreshGeometryAsync();
-        var row = CurrentDevice ?? throw new InvalidOperationException("未选择设备");
-        var bytes = await runtime.Backend.ScreenshotAsync(row.Serial);
-        row.Screenshot = DecodeImage(bytes);
-        row.CapturedAt = DateTimeOffset.UtcNow;
-        row.ScreenState = "截图可用";
-        if (ReferenceEquals(CurrentDevice, row))
+        var publication = BeginDebugPublication();
+        DebugSourceIdentity? source = null;
+        try
         {
+            var row = publication.Current ?? throw new InvalidOperationException("未选择设备");
+            await RefreshGeometryAsync(publication, requireCurrent: true);
+            RequireDebugPublication(publication);
+            var identity = CaptureDebugSource(publication.Owner, row); source = identity;
+            var bytes = await publication.Owner.Backend.ScreenshotAsync(identity.Info.Serial);
+            PublishScreenshotCache(identity, bytes);
+            RequireDebugPublication(publication);
             ClearNodes();
             DebugImage = row.Screenshot;
+            RequireDebugSource(identity);
+            RequireDebugPublication(publication);
+            var freshRoot = await publication.Owner.Backend.DumpAsync(identity.Info.Serial);
+            RequireDebugSource(identity);
+            RequireDebugPublication(publication);
+            nodeRoot = freshRoot;
+            Nodes.Clear(); Nodes.Add(new NodeRow(nodeRoot));
+            SelectedNode = null;
+            row.AutomationState = "节点可用";
+            NodesChanged?.Invoke();
         }
-        var freshRoot = await runtime.Backend.DumpAsync(row.Serial);
-        row.AutomationState = "节点可用";
-        if (!ReferenceEquals(CurrentDevice, row)) return;
-        nodeRoot = freshRoot;
-        Nodes.Clear(); Nodes.Add(new NodeRow(nodeRoot));
-        SelectedNode = null;
-        NodesChanged?.Invoke();
+        catch (Exception error) when (error is not OperationCanceledException) { throw new DebugReadFailure(publication, source, source?.Info.Serial ?? publication.SourceSerial, error); }
     });
 
-    private async Task RefreshGeometryAsync()
+    private async Task RefreshGeometryAsync(DebugPublicationContext publication, bool requireCurrent)
     {
-        await runtime.RefreshAsync();
-        var current = runtime.GetDevices();
-        foreach (var row in Devices)
+        await publication.Owner.RefreshAsync();
+        RequireDebugRuntime(publication.Owner);
+        if (requireCurrent) RequireDebugPublication(publication);
+        var current = publication.Owner.GetDevices();
+        foreach (var row in Devices.ToArray())
             row.Info = current.FirstOrDefault(device => device.Serial == row.Serial) ?? row.Info with { State = "Offline" };
+    }
+
+    // Source caches follow device identity; the current inspection additionally follows its revision.
+    private readonly record struct DebugPublicationContext(MatrixRuntime Owner, DeviceRow? Current, string? SourceSerial, long Revision);
+    private readonly record struct DebugSourceIdentity(MatrixRuntime Owner, DeviceRow Row, DeviceInfo Info);
+    private sealed class DebugSourceExpiredException() : OperationCanceledException("设备身份或几何已变化，旧结果未发布。") { }
+    private sealed class DebugReadFailure(DebugPublicationContext publication, DebugSourceIdentity? source, string? sourceSerial, Exception error) : Exception(error.Message, error)
+    {
+        internal DebugPublicationContext Publication { get; } = publication;
+        internal DebugSourceIdentity? DeviceSource { get; } = source;
+        internal string? SourceSerial { get; } = sourceSerial;
+        internal Exception OriginalError { get; } = error;
+    }
+    private static string PresentDebugError(Exception error, MatrixRuntime owner, string? serial, bool automatic = false)
+    {
+        try
+        {
+            owner.Log.Write("desktop-error", error.ToString(), serial);
+            if (automatic) owner.Log.Write("auto-screenshot-error", error.Message, serial);
+        }
+        catch (Exception logError) { System.Diagnostics.Trace.WriteLine("读取原异常：" + error + "\n界面诊断日志写入失败：" + logError); }
+        return UiErrorPresentation.Describe(error);
+    }
+    private DebugPublicationContext SnapshotDebugPublication() => new(runtime, CurrentDevice, CurrentDevice?.Serial, debugPublicationRevision);
+    private DebugPublicationContext BeginDebugPublication() { debugPublicationRevision++; return SnapshotDebugPublication(); }
+    private bool DebugPublicationIsCurrent(DebugPublicationContext publication) => ReferenceEquals(runtime, publication.Owner)
+        && debugPublicationRevision == publication.Revision && ReferenceEquals(CurrentDevice, publication.Current)
+        && (publication.Current is null || Devices.Contains(publication.Current));
+    private void RequireDebugPublication(DebugPublicationContext publication)
+    {
+        if (!DebugPublicationIsCurrent(publication)) throw new OperationCanceledException("检查目标或检查请求已变化，旧结果未发布。");
+    }
+    private void RequireDebugRuntime(MatrixRuntime owner)
+    {
+        if (!ReferenceEquals(runtime, owner)) throw new OperationCanceledException("设备连接上下文已变化，旧结果未发布。");
+    }
+    private DebugSourceIdentity CaptureDebugSource(MatrixRuntime owner, DeviceRow row)
+    {
+        var source = new DebugSourceIdentity(owner, row, row.Info);
+        RequireDebugSource(source);
+        return source;
+    }
+    private bool DebugSourceIsValid(DebugSourceIdentity source) => ReferenceEquals(runtime, source.Owner) && Devices.Contains(source.Row)
+        && SameDebugIdentity(source.Row.Info, source.Info) && source.Owner.Devices.Snapshot.Any(info => SameDebugIdentity(info, source.Info));
+    private static bool SameDebugIdentity(DeviceInfo actual, DeviceInfo expected) => actual.Online && expected.Online && actual.Serial == expected.Serial
+        && actual.Generation == expected.Generation && actual.TransportId == expected.TransportId && actual.Width == expected.Width
+        && actual.Height == expected.Height && actual.Rotation == expected.Rotation;
+    private void RequireDebugSource(DebugSourceIdentity source)
+    {
+        if (!DebugSourceIsValid(source)) throw new DebugSourceExpiredException();
+    }
+    private void PublishScreenshotCache(DebugSourceIdentity source, byte[] bytes)
+    {
+        RequireDebugSource(source);
+        var screenshot = DecodeImage(bytes);
+        RequireDebugSource(source);
+        source.Row.Screenshot = screenshot;
+        source.Row.CapturedAt = DateTimeOffset.UtcNow;
+        source.Row.ScreenState = "截图可用";
     }
 
     private void ClearNodes()

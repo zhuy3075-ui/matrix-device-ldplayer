@@ -93,12 +93,56 @@ public partial class MainWindow
         var animationMilliseconds = new List<double>();
         var syncMouse = ViewModel.SyncMouse;
         if (!GetAppearanceCursorPosition(out var pointer)) throw new InvalidOperationException("无法保存验收指针位置。");
+        var hoverDiagnosticCount = 0;
+        void ObserveHover(string stage, FrameworkElement control, Point requestedScreen, bool? setResult = null)
+        {
+            if (hoverDiagnosticCount >= 64) return;
+            var sequence = ++hoverDiagnosticCount;
+            try
+            {
+                static double? Finite(double value) => double.IsFinite(value) ? value : null;
+                static object Position(Point value) => new { x = Finite(value.X), y = Finite(value.Y) };
+                static object Element(IInputElement? value) => new { type = value?.GetType().FullName, name = value is FrameworkElement element ? element.Name : value is FrameworkContentElement content ? content.Name : null };
+                var cursorSucceeded = GetAppearanceCursorPosition(out var actual);
+                var owner = Window.GetWindow(control); var localMouse = Mouse.GetPosition(control);
+                var actualScreen = new Point(actual.X, actual.Y);
+                var ownerPoint = cursorSucceeded && owner is not null ? owner.PointFromScreen(actualScreen) : (Point?)null;
+                var shellPoint = cursorSucceeded ? Shell.PointFromScreen(actualScreen) : (Point?)null;
+                var controlPoint = cursorSucceeded ? control.PointFromScreen(actualScreen) : (Point?)null;
+                var snapshot = new
+                {
+                    sequence, stage, observedAt = DateTimeOffset.UtcNow, targetType = control.GetType().FullName, targetName = control.Name, targetAutomationName = AutomationProperties.GetName(control),
+                    actualWidth = Finite(control.ActualWidth), actualHeight = Finite(control.ActualHeight), requestedScreen = Position(requestedScreen), setResult, cursorSucceeded,
+                    actualScreen = cursorSucceeded ? Position(actualScreen) : null, ownerActive = owner?.IsActive, focused = Element(Keyboard.FocusedElement), directlyOver = Element(Mouse.DirectlyOver), captured = Element(Mouse.Captured),
+                    control.IsMouseOver, control.IsVisible, control.IsEnabled, localMouse = Position(localMouse),
+                    ownerPoint = ownerPoint is Point inOwner ? Position(inOwner) : null, ownerHit = Element(ownerPoint is Point ownerHitPoint ? owner?.InputHitTest(ownerHitPoint) : null),
+                    shellPoint = shellPoint is Point inShell ? Position(inShell) : null, shellHit = Element(shellPoint is Point shellHitPoint ? Shell.InputHitTest(shellHitPoint) : null),
+                    controlPoint = controlPoint is Point inControl ? Position(inControl) : null, controlHit = Element(controlPoint is Point controlHitPoint ? control.InputHitTest(controlHitPoint) : null)
+                };
+                Console.Error.WriteLine("APPEARANCE-HOVER-DIAGNOSTIC " + JsonSerializer.Serialize(snapshot, JsonDefaults.Options));
+            }
+            catch (Exception diagnosticError)
+            {
+                try { Console.Error.WriteLine($"APPEARANCE-HOVER-DIAGNOSTIC-ERROR sequence={sequence}; stage={stage}; type={diagnosticError.GetType().FullName}; message={diagnosticError.Message}"); }
+                catch (Exception) { }
+            }
+        }
         async Task Hover(FrameworkElement control)
         {
             var point = control.PointToScreen(new Point(control.ActualWidth / 2, control.ActualHeight / 2));
-            if (!SetAppearanceCursorPosition((int)Math.Round(point.X), (int)Math.Round(point.Y))) throw new InvalidOperationException("无法移动验收指针。");
-            Mouse.Synchronize(); await Render(); await Task.Delay(30);
-            Check(control.IsMouseOver, "真实指针悬停：" + control.GetType().Name);
+            var completed = false;
+            try
+            {
+                ObserveHover("beforeSet", control, point);
+                var moved = SetAppearanceCursorPosition((int)Math.Round(point.X), (int)Math.Round(point.Y));
+                ObserveHover("afterSet", control, point, moved);
+                if (!moved) throw new InvalidOperationException("无法移动验收指针。");
+                Mouse.Synchronize(); await Render(); await Task.Delay(30);
+                ObserveHover("afterWait", control, point, moved);
+                Check(control.IsMouseOver, "真实指针悬停：" + control.GetType().Name);
+                completed = true;
+            }
+            finally { if (!completed) ObserveHover("failure-finally", control, point); }
         }
         try
         {
