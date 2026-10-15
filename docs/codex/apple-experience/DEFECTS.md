@@ -4,13 +4,14 @@
 
 | ID | 级别/状态 | 事实与根因 | 处理/验证 |
 |---|---|---|---|
-| AP-001 | P0/已确认代码候选，待红测 | 主控面板标示MainDevice A；NativeView启动/嵌入及CanExecute读取CurrentDevice B，可能控制错目标 | A02独立worktree；零外部进程夹具先红；冻结主控/runtime/generation/transport/进程birth，confirm与await后重验；独立回归后才关闭 |
+| AP-001 | P0/代码修复已独立离线验收；真实投屏待验 | 主控面板标示MainDevice A；原NativeView读取CurrentDevice B，红测确认错目标 | [A02报告](A02_MAIN_TARGET.md)：25守卫/149项/独立三尺寸及主仓最终1000通过；主控、运行时/代次/transport及进程PID/birth/path冻结；真实确认/启动/嵌入仍NOT-RUN，纳入A11 |
 | AP-002 | P1/开放 | 最小尺寸四处不一致：XAML1000×700、smoke Clamp1000×700、设置Apply拒绝小尺寸、Normalize放大到1100×720 | A04统一最低契约，实际尺寸和390/768保存重载断言 |
 | AP-003 | P1/证据缺口 | 当前应用批次UI未有真实双实例安装/卸载完整证据，旧测试走过时ViewModel入口 | A07按APP-01..03使用自有唯一包；界面正常不算业务成功 |
 | AP-004 | P1/重复职责候选 | 设备详情包含全选/清空/行勾选和隐藏全局StatusFilter，可能关窗后仍影响列表/监控 | A05选择归设备列表，详情保留信息/改名；状态过滤清晰可见且不改目标 |
 | AP-005 | P1/开放 | 节点/截屏/应用/工具/设置/监控固定宽栏与固定弹窗，窄屏不可达 | A04..A10逐页重排与六尺寸真实路径；不整页缩放或藏功能 |
 | AP-006 | P1/证据缺口 | 原控件审计仅OBSERVED-NOT-EXERCISED，遗漏菜单/模态/画布/树/虚拟行等 | CONTROL_CATALOG补充S项，逐控件效果测试，不用控件数代表覆盖率 |
 | AP-007 | P1/依赖与风险待审 | 私有agent/ROM/代理/硬解等能力及HTTP Toolkit抓包尚无当前可用/安全证明 | 保留单项NOT-IMPLEMENTED/BLOCKED，记录真实失败和替代；不自动改证书/代理/共享服务 |
+| AP-008 | P1/实机测试依赖缺口 | 当前工作区/常用SDK目录/PATH没有Android平台、aapt/d8/apksigner和自有测试APK；仅发现签名有效的Temurin JDK与Gradle缓存，不能据此编译APK | A07先核验项目隔离的官方/开源构建工具与许可前提，记录源/摘要；不改用用户抖音执行清数据/卸载来凑覆盖 |
 
 ## 修复记录规则
 

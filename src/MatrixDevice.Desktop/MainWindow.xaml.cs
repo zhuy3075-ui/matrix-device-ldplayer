@@ -19,7 +19,7 @@ namespace MatrixDevice.Desktop;
 
 public partial class MainWindow : Window
 {
-    private readonly Dictionary<string, Process> screenProcesses = [];
+    private readonly Dictionary<string, ScrcpySession> screenProcesses = [];
     private readonly List<NativeWindowHost> nativeHosts = [];
     private readonly Dictionary<NodeRow, TreeViewItem> nodeTreeItems = [];
     private readonly Dictionary<NodeRow, Rectangle> nodeRectangles = [];
@@ -254,7 +254,7 @@ public partial class MainWindow : Window
             ViewModel.Runtime.Settings = ViewModel.Runtime.SettingsStore.Save(saved);
             await ViewModel.ShutdownAsync();
             LocalizationService.Current.LanguageChanged -= OnLanguageChanged;
-            foreach (var process in screenProcesses.Values) { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } process.Dispose(); }
+            foreach (var session in screenProcesses.Values) { if (session.IsCurrentProcess()) { session.Process.Kill(entireProcessTree: true); await session.Process.WaitForExitAsync(); } session.Process.Dispose(); }
             closeApproved = true; Close();
         }
         catch (Exception ex) { closing = false; MessageBox.Show(this, "退出未完成：" + ViewModel.PresentError(ex) + "\n投屏恢复记录已保留。", "退出失败", MessageBoxButton.OK, MessageBoxImage.Error); }
@@ -286,6 +286,7 @@ public partial class MainWindow : Window
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(screenshotPath)!);
         }
         await ViewModel.RefreshWallAsync();
+        await VerifyNativeMainTargetAsync();
         if (ViewModel.CurrentDevice is { } row) await ViewModel.SetMainAsync(row);
         await VerifyShellSimplificationAsync();
         await ViewModel.LoadNodesAsync();

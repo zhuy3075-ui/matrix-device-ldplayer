@@ -8,6 +8,7 @@ MatrixDevice.Reconstructed/
 |   |-- ASSUMPTIONS.md
 |   |-- codex/
 |   |   |-- apple-experience/
+|   |   |   |-- A02_MAIN_TARGET.md
 |   |   |   |-- CONTROL_CATALOG.md
 |   |   |   |-- DEFECTS.md
 |   |   |   +-- TEST_MATRIX.md
@@ -240,6 +241,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- MonitorAcceptance.cs
 |   |   |   |-- MonitorSmoke.cs
 |   |   |   |-- MonitorView.cs
+|   |   |   |-- NativeTargetSmoke.cs
 |   |   |   |-- NativeView.cs
 |   |   |   |-- NetworkScannerView.cs
 |   |   |   |-- OneClickStartAcceptance.cs

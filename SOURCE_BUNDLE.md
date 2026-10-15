@@ -4695,7 +4695,7 @@ namespace MatrixDevice.Desktop;
 
 public partial class MainWindow : Window
 {
-    private readonly Dictionary<string, Process> screenProcesses = [];
+    private readonly Dictionary<string, ScrcpySession> screenProcesses = [];
     private readonly List<NativeWindowHost> nativeHosts = [];
     private readonly Dictionary<NodeRow, TreeViewItem> nodeTreeItems = [];
     private readonly Dictionary<NodeRow, Rectangle> nodeRectangles = [];
@@ -4930,7 +4930,7 @@ public partial class MainWindow : Window
             ViewModel.Runtime.Settings = ViewModel.Runtime.SettingsStore.Save(saved);
             await ViewModel.ShutdownAsync();
             LocalizationService.Current.LanguageChanged -= OnLanguageChanged;
-            foreach (var process in screenProcesses.Values) { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } process.Dispose(); }
+            foreach (var session in screenProcesses.Values) { if (session.IsCurrentProcess()) { session.Process.Kill(entireProcessTree: true); await session.Process.WaitForExitAsync(); } session.Process.Dispose(); }
             closeApproved = true; Close();
         }
         catch (Exception ex) { closing = false; MessageBox.Show(this, "退出未完成：" + ViewModel.PresentError(ex) + "\n投屏恢复记录已保留。", "退出失败", MessageBoxButton.OK, MessageBoxImage.Error); }
@@ -4962,6 +4962,7 @@ public partial class MainWindow : Window
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(screenshotPath)!);
         }
         await ViewModel.RefreshWallAsync();
+        await VerifyNativeMainTargetAsync();
         if (ViewModel.CurrentDevice is { } row) await ViewModel.SetMainAsync(row);
         await VerifyShellSimplificationAsync();
         await ViewModel.LoadNodesAsync();
@@ -8553,6 +8554,135 @@ public partial class MainWindow
 
 ```
 
+## src/MatrixDevice.Desktop/Views/NativeTargetSmoke.cs
+
+```csharp
+using System.Diagnostics;
+using System.IO;
+using System.Text.Json;
+using MatrixDevice.Core;
+using MatrixDevice.Features;
+
+namespace MatrixDevice.Desktop;
+
+public partial class MainWindow
+{
+    private async Task VerifyNativeMainTargetAsync()
+    {
+        if (!ViewModel.Demo) throw new InvalidOperationException("投屏目标离线验收仅限演示模式。");
+        var previousCurrent = ViewModel.CurrentDevice;
+        var previousMain = ViewModel.MainDevice;
+        var main = ViewModel.Devices[0];
+        var other = ViewModel.Devices[1];
+        var mainInfo = main.Info;
+        var otherInfo = other.Info;
+        var otherSelected = other.IsSelected;
+        var syncMouse = ViewModel.SyncMouse;
+        var syncKeyboard = ViewModel.SyncKeyboard;
+        var cases = new List<string>();
+        using var self = Process.GetCurrentProcess();
+        var executable = self.MainModule?.FileName ?? throw new InvalidOperationException("当前进程路径不可用。");
+        void Check(bool condition, string name)
+        {
+            if (!condition) throw new InvalidOperationException("主控投屏离线验收失败：" + name);
+            cases.Add(name);
+        }
+        void Reject(Action action, string name)
+        {
+            try { action(); }
+            catch (DeviceException) { cases.Add(name); return; }
+            throw new InvalidOperationException("主控投屏未拒绝失效上下文：" + name);
+        }
+        try
+        {
+            Check(ViewModel.MainDevice is null && !CanEmbedScrcpy(), "没有明确主控时不回退到当前设备");
+            await ViewModel.SetMainAsync(main);
+            ViewModel.CurrentDevice = other;
+            var target = MainScreenSnapshot() ?? throw new InvalidOperationException("主控投屏快照缺失。");
+            var otherTarget = target with { Row = other, Serial = other.Serial, Generation = other.Info.Generation, TransportId = other.Info.TransportId };
+            screenProcesses.Add(other.Serial, new(otherTarget, self, self.Id, self.StartTime.ToUniversalTime().Ticks, executable));
+            Check(!CanEmbedScrcpy(), "主控 A 无投屏时，不嵌入当前设备 B 的进程");
+            var session = new ScrcpySession(target, self, self.Id, self.StartTime.ToUniversalTime().Ticks, executable);
+            screenProcesses.Add(main.Serial, session);
+            Check(CanEmbedScrcpy(), "当前设备 B 不覆盖主控 A 的投屏目标");
+            Check(!CanLaunchScrcpy(), "演示模式始终禁止启动外部客户端");
+            other.Info = otherInfo with { State = "Offline" };
+            Check(CanEmbedScrcpy(), "当前 B 离线不阻止在线主控 A 投屏");
+            other.IsSelected = true;
+            ViewModel.SyncMouse = ViewModel.SyncKeyboard = true;
+            Check(CanEmbedScrcpy(), "开启同步并勾选离线 B 不耦合单主控投屏");
+            other.IsSelected = otherSelected;
+            ViewModel.SyncMouse = syncMouse; ViewModel.SyncKeyboard = syncKeyboard;
+            ViewModel.CurrentDevice = null;
+            Check(CanEmbedScrcpy(), "当前设备为空仍使用明确主控 A");
+            ViewModel.CurrentDevice = other;
+            other.Info = otherInfo;
+            main.Info = mainInfo with { State = "Offline" };
+            Check(!CanEmbedScrcpy(), "主控 A 离线时不回退到在线 B");
+            Reject(() => RequireMainScreenTarget(target), "离线源拒绝旧快照");
+            main.Info = mainInfo with { Generation = mainInfo.Generation + 1 };
+            Check(!CanEmbedScrcpy(), "主控代次变化后旧投屏不可嵌入");
+            Reject(() => RequireMainScreenTarget(target), "拒绝旧主控代次");
+            main.Info = mainInfo with { TransportId = (mainInfo.TransportId ?? 0) + 1 };
+            Reject(() => RequireMainScreenTarget(target), "拒绝旧 transport");
+            main.Info = mainInfo;
+            Reject(() => RequireMainScreenTarget(target with { Runtime = null! }), "拒绝旧 runtime");
+            ViewModel.Devices.Remove(main);
+            try { Check(!CanEmbedScrcpy(), "已移出当前工作区的主控不可投屏"); }
+            finally { ViewModel.Devices.Insert(0, main); }
+            ViewModel.SetExternalBusy(true);
+            try { Check(!CanEmbedScrcpy(), "外部忙状态禁用投屏"); }
+            finally { ViewModel.SetExternalBusy(false); }
+            screenProcesses[main.Serial] = session with { BirthUtcTicks = session.BirthUtcTicks + 1 };
+            Check(!CanEmbedScrcpy(), "拒绝 birth 不匹配的进程");
+            Reject(() => RequireScrcpySession(target, screenProcesses[main.Serial]), "窗口等待后重验进程 birth");
+            screenProcesses[main.Serial] = session with { ProcessId = session.ProcessId + 1 };
+            Check(!CanEmbedScrcpy(), "拒绝 PID 不匹配的进程");
+            screenProcesses[main.Serial] = session with { ExecutablePath = executable + ".not-owned" };
+            Check(!CanEmbedScrcpy(), "拒绝可执行文件路径不匹配的进程");
+            screenProcesses[main.Serial] = session with { };
+            Reject(() => RequireScrcpySession(target, session), "窗口等待后拒绝已替换的所有权记录");
+            screenProcesses[main.Serial] = session;
+            var package = new ScriptPackage
+            {
+                Manifest = new ScriptManifest { Id = "native-main-gate", Name = "主控门禁离线夹具", Version = "1.0" },
+                Steps = [new ScriptStep { Action = "wait", DurationMs = 30000 }]
+            };
+            var otherScript = ViewModel.Runtime.Scripts.RunAsync(other.Serial, package);
+            try { Check(CanEmbedScrcpy(), "当前 B 的脚本不阻止主控 A 投屏"); }
+            finally { ViewModel.Runtime.Scripts.Stop(other.Serial); await otherScript; }
+            var mainScript = ViewModel.Runtime.Scripts.RunAsync(main.Serial, package);
+            try { Check(!CanEmbedScrcpy(), "主控 A 的活动脚本阻止投屏"); }
+            finally { ViewModel.Runtime.Scripts.Stop(main.Serial); await mainScript; }
+            await ViewModel.SetMainAsync(other);
+            await Task.Yield();
+            Reject(() => RequireMainScreenTarget(target), "异步让出后切换主控拒绝旧快照守卫");
+            await ViewModel.SetMainAsync(main);
+            Reject(() => RequireMainScreenTarget(target), "主控切走再切回仍拒绝旧输入代次");
+            Check(CanEmbedScrcpy(), "重新选择相同有效设备后仍可使用其自有投屏");
+            File.WriteAllText(Path.Combine(ViewModel.DataDirectory, "native-main-target.json"), JsonSerializer.Serialize(new
+            {
+                mode = "demo", status = "PASS-OFFLINE",
+                fixtureScope = "仅主控与会话守卫；外部进程启动、ADB、真实确认弹窗和嵌入路径均未调用；此处不是进程或网络探针计数。",
+                actualEmbeddingExercised = false, confirmationTimingExercised = false, cases
+            }, JsonDefaults.Options));
+        }
+        finally
+        {
+            foreach (var key in screenProcesses.Where(pair => ReferenceEquals(pair.Value.Process, self)).Select(pair => pair.Key).ToArray()) screenProcesses.Remove(key);
+            main.Info = mainInfo;
+            other.Info = otherInfo;
+            other.IsSelected = otherSelected;
+            ViewModel.SyncMouse = syncMouse; ViewModel.SyncKeyboard = syncKeyboard;
+            ViewModel.SetExternalBusy(false);
+            if (previousMain is not null) await ViewModel.SetMainAsync(previousMain);
+            ViewModel.CurrentDevice = previousCurrent;
+        }
+    }
+}
+
+```
+
 ## src/MatrixDevice.Desktop/Views/NativeView.cs
 
 ```csharp
@@ -8571,49 +8701,124 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using MatrixDevice.Core;
+using MatrixDevice.Features;
+using MatrixDevice.Host;
 using Microsoft.Win32;
 
 namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
-    private bool CanLaunchScrcpy() => !ViewModel.Demo && ViewModel.CanWriteDevice() && File.Exists(ViewModel.Runtime.Settings.ScrcpyPath) &&
-        (!screenProcesses.TryGetValue(ViewModel.CurrentDevice!.Serial, out var process) || process.HasExited);
-    private bool CanEmbedScrcpy() => ViewModel.CanWriteDevice() && screenProcesses.TryGetValue(ViewModel.CurrentDevice!.Serial, out var process) && !process.HasExited &&
-        !nativeHosts.Any(host => host.ProcessId == process.Id && host.IsAttached);
+    private sealed record MainScreenTarget(MatrixRuntime Runtime, DeviceRow Row, string Serial, long Generation, uint? TransportId, long InputGeneration);
+    private sealed record ScrcpySession(MainScreenTarget Target, Process Process, int ProcessId, long BirthUtcTicks, string ExecutablePath)
+    {
+        public bool IsCurrentProcess()
+        {
+            try
+            {
+                if (Process.HasExited || Process.Id != ProcessId) return false;
+                using var current = Process.GetProcessById(ProcessId);
+                return !current.HasExited && current.StartTime.ToUniversalTime().Ticks == BirthUtcTicks
+                    && string.Equals(current.MainModule?.FileName, ExecutablePath, StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception) { return false; }
+        }
+    }
+
+    private MainScreenTarget? MainScreenSnapshot()
+    {
+        if (ViewModel.Busy || ViewModel.MainDevice is not { } row) return null;
+        var target = new MainScreenTarget(ViewModel.Runtime, row, row.Serial, row.Info.Generation, row.Info.TransportId, ViewModel.Runtime.Input.CurrentGeneration);
+        try { RequireMainScreenTarget(target); return target; }
+        catch (DeviceException) { return null; }
+    }
+
+    private void RequireMainScreenTarget(MainScreenTarget target)
+    {
+        if (closing || ldBusy || !ReferenceEquals(target.Runtime, ViewModel.Runtime) || !ReferenceEquals(target.Row, ViewModel.MainDevice)
+            || !ViewModel.Devices.Contains(target.Row) || ViewModel.Transferring || target.Runtime.Api.HasActiveRequests
+            || target.Runtime.Scripts.GetStatus(target.Serial).State is ScriptRunState.Running or ScriptRunState.Cancelling
+            || target.Runtime.Input.CurrentGeneration != target.InputGeneration || !SameScreenDevice(target.Row.Info, target)
+            || !SameScreenDevice(target.Runtime.GetDevices().SingleOrDefault(row => row.Serial == target.Serial), target))
+            throw new DeviceException($"主控或连接身份已变化，未继续投屏：{target.Serial}。", 409, 1003);
+        target.Runtime.RequireFrozenConnectionSettings();
+    }
+
+    private static bool SameScreenDevice(DeviceInfo? device, MainScreenTarget target) => device is { Online: true }
+        && device.Serial == target.Serial && device.Generation == target.Generation && device.TransportId == target.TransportId;
+
+    private async Task VerifyMainScreenIdentityAsync(MainScreenTarget target)
+    {
+        RequireMainScreenTarget(target);
+        if (target.Runtime.Backend is AdbDeviceBackend backend) await backend.VerifyIdentityAsync(target.Serial);
+        RequireMainScreenTarget(target);
+    }
+
+    private bool CanLaunchScrcpy() => !ViewModel.Demo && MainScreenSnapshot() is { } target && File.Exists(target.Runtime.Settings.ScrcpyPath)
+        && (!screenProcesses.TryGetValue(target.Serial, out var session) || !session.IsCurrentProcess());
+    private bool CanEmbedScrcpy() => MainScreenSnapshot() is { } target && screenProcesses.TryGetValue(target.Serial, out var session)
+        && SessionMatchesTarget(session, target) && !nativeHosts.Any(host => host.ProcessId == session.ProcessId && host.IsAttached);
+
+    private static bool SessionMatchesTarget(ScrcpySession session, MainScreenTarget target) => ReferenceEquals(session.Target.Runtime, target.Runtime)
+        && ReferenceEquals(session.Target.Row, target.Row) && session.Target.Serial == target.Serial && session.Target.Generation == target.Generation
+        && session.Target.TransportId == target.TransportId && session.IsCurrentProcess();
+
+    private void RequireScrcpySession(MainScreenTarget target, ScrcpySession session)
+    {
+        RequireMainScreenTarget(target);
+        if (!screenProcesses.TryGetValue(target.Serial, out var owned) || !ReferenceEquals(session, owned) || !SessionMatchesTarget(session, target))
+            throw new DeviceException($"投屏进程或设备身份已变化，未嵌入窗口：{target.Serial}。", 409, 1003);
+        if (nativeHosts.Any(host => host.ProcessId == session.ProcessId && host.IsAttached)) throw new InvalidOperationException("窗口已嵌入");
+    }
     private async Task OpenScreenAsync()
     {
         if (!CanLaunchScrcpy()) return;
+        var target = MainScreenSnapshot() ?? throw new DeviceException("主控不可用，请重新打开控制面板。", 409, 1003);
+        var settings = target.Runtime.Settings;
         if (!ViewModel.Confirm("外部投屏客户端风险", "启动scrcpy会运行其外部ADB客户端，可能影响现有ADB服务。当前程序会在服务身份变化时拒绝继续。确认已核验该工具并接受此风险？")) return;
         await ViewModel.ExecuteAsync("启动 scrcpy", async () =>
         {
-            var row = ViewModel.CurrentDevice ?? throw new InvalidOperationException("未选择设备");
             if (ViewModel.Demo) throw new InvalidOperationException("演示模式不启动外部 scrcpy");
-            var path = ViewModel.Runtime.Settings.ScrcpyPath;
+            await VerifyMainScreenIdentityAsync(target);
+            var path = System.IO.Path.GetFullPath(settings.ScrcpyPath);
             if (!File.Exists(path)) throw new FileNotFoundException("请在设置中配置有效 scrcpy 路径", path);
-            if (screenProcesses.TryGetValue(row.Serial, out var existing) && !existing.HasExited) throw new InvalidOperationException("该设备已有本程序启动的投屏窗口");
+            if (screenProcesses.TryGetValue(target.Serial, out var existing) && existing.IsCurrentProcess()) throw new InvalidOperationException("该设备已有本程序启动的投屏窗口");
             var start = new ProcessStartInfo(path) { UseShellExecute = false, CreateNoWindow = true };
-            foreach (var argument in new[] { "--serial", row.Serial, "--window-title", "MatrixDevice · " + row.Serial, "--max-size", ViewModel.Runtime.Settings.MainMaxSize.ToString(), "--max-fps", ViewModel.Runtime.Settings.MainMaxFps.ToString(), "--video-bit-rate", ViewModel.Runtime.Settings.MainBitRate.ToString(), "--no-audio" }) start.ArgumentList.Add(argument);
-            if (ViewModel.Runtime.Settings.ShowFps) start.ArgumentList.Add("--print-fps");
-            var process = Process.Start(start) ?? throw new InvalidOperationException("无法创建 scrcpy 进程"); screenProcesses[row.Serial] = process; row.ScreenState = "scrcpy 进程已启动 · 待窗口核验";
-            await Task.Delay(400); if (process.HasExited) throw new InvalidOperationException($"scrcpy 已退出，退出码 {process.ExitCode}");
+            foreach (var argument in new[] { "--serial", target.Serial, "--window-title", "MatrixDevice · " + target.Serial, "--max-size", settings.MainMaxSize.ToString(), "--max-fps", settings.MainMaxFps.ToString(), "--video-bit-rate", settings.MainBitRate.ToString(), "--no-audio" }) start.ArgumentList.Add(argument);
+            if (settings.ShowFps) start.ArgumentList.Add("--print-fps");
+            var process = Process.Start(start) ?? throw new InvalidOperationException("无法创建 scrcpy 进程");
+            screenProcesses[target.Serial] = new(target, process, process.Id, process.StartTime.ToUniversalTime().Ticks, path);
+            target.Row.ScreenState = "scrcpy 进程已启动 · 待窗口核验";
+            await Task.Delay(400);
+            RequireMainScreenTarget(target);
+            if (process.HasExited) throw new InvalidOperationException($"scrcpy 已退出，退出码 {process.ExitCode}");
         });
     }
 
     private async Task EmbedScreenAsync()
     {
+        if (!CanEmbedScrcpy()) return;
+        var target = MainScreenSnapshot() ?? throw new DeviceException("主控不可用，请重新打开控制面板。", 409, 1003);
+        var session = screenProcesses[target.Serial];
         await ViewModel.ExecuteAsync("嵌入投屏窗口", async () =>
         {
-            var row = ViewModel.CurrentDevice ?? throw new InvalidOperationException("未选择设备");
-            if (!screenProcesses.TryGetValue(row.Serial, out var process) || process.HasExited) throw new InvalidOperationException("请先启动本程序管理的 scrcpy 投屏");
-            if (nativeHosts.Any(host => host.ProcessId == process.Id && host.IsAttached)) throw new InvalidOperationException("窗口已嵌入");
-            for (var retry = 0; retry < 20 && process.MainWindowHandle == IntPtr.Zero; retry++) { await Task.Delay(100); process.Refresh(); }
+            await VerifyMainScreenIdentityAsync(target);
+            RequireScrcpySession(target, session);
+            var process = session.Process;
+            for (var retry = 0; retry < 20 && process.MainWindowHandle == IntPtr.Zero; retry++)
+            {
+                await Task.Delay(100);
+                RequireScrcpySession(target, session);
+                process.Refresh();
+            }
             if (process.MainWindowHandle == IntPtr.Zero) throw new InvalidOperationException("投屏窗口尚未出现");
+            await VerifyMainScreenIdentityAsync(target);
+            RequireScrcpySession(target, session);
             var host = new NativeWindowHost(process, System.IO.Path.Combine(ViewModel.DataDirectory, "window-recovery"));
             nativeHosts.Add(host);
-            var window = new Window { Owner = this, Title = "投屏 · " + row.Serial, Width = 600, Height = 850, Content = host, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            var window = new Window { Owner = this, Title = "投屏 · " + target.Serial, Width = 600, Height = 850, Content = host, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             window.Closing += (_, args) => { try { host.Restore(); nativeHosts.Remove(host); } catch (Exception ex) { args.Cancel = true; MessageBox.Show(window, ViewModel.PresentError(ex), "窗口恢复失败", MessageBoxButton.OK, MessageBoxImage.Error); } };
-            window.Show(); row.ScreenState = "已嵌入自有 scrcpy 窗口";
+            window.Show(); target.Row.ScreenState = "已嵌入自有 scrcpy 窗口";
         });
     }
 
