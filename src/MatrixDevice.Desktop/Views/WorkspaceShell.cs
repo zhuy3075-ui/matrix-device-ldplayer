@@ -199,6 +199,7 @@ public partial class MainWindow
     private void UpdateNavigation()
     {
         var selected = (tabs.SelectedItem as TabItem)?.Tag?.ToString();
+        if (selected != "设备墙 / 主控") CancelMainGesture();
         var targetVisibility = selected is "节点" or "截图 / 取色" or "Shell" or "文件" or "文本" or "脚本" or "API" or "扩展" ? Visibility.Visible : Visibility.Collapsed;
         singleTargetLabel.Visibility = singleTargetChoice.Visibility = targetVisibility;
         singleTargetGroup.Visibility = targetVisibility;

@@ -42,6 +42,15 @@ public partial class MainWindow : Window
     private long gestureDeviceGeneration;
     private IReadOnlyList<string> gestureTargets = [];
     private readonly Dictionary<string, long> gestureTargetGenerations = [];
+    private Rect gestureImageBounds;
+    private Size gestureImagePixels;
+    private Image? gestureImage;
+    private Task mainGestureOperation = Task.CompletedTask;
+    private InputSnapshot? lastMainGestureSnapshot;
+    private long mainGestureDispatchCount;
+    private long mainCaptureDispatchCount;
+    private string[] lastMainCaptureTargets = [];
+    private Func<Task>? demoMainCaptureBarrier;
     private int shellHistoryCursor = -1;
     private bool closing;
     private bool closeApproved;
@@ -69,7 +78,8 @@ public partial class MainWindow : Window
         viewModel.NodeSelectionChanged = HighlightNode;
         viewModel.WallChanged = RefreshWall;
         BuildShell();
-        SizeChanged += (_, _) => ApplyResponsiveWorkspace();
+        SizeChanged += (_, _) => { CancelMainGesture(); ApplyResponsiveWorkspace(); };
+        LocationChanged += (_, _) => CancelMainGesture();
         Loaded += (_, _) => ApplyResponsiveWorkspace();
         PreviewKeyDown += (_, args) => { if (args.Key == Key.Escape && navigationDrawerOpen) { CloseNavigationDrawer(); args.Handled = true; } };
         LocalizationService.Current.LanguageChanged += OnLanguageChanged;
@@ -79,7 +89,7 @@ public partial class MainWindow : Window
         Closing += WindowClosing;
         Deactivated += async (_, _) =>
         {
-            gestureStart = null; gestureDevice = null;
+            CancelMainGesture();
             if (closing || closeApproved) return;
             try { await ViewModel.Runtime.Input.ReleaseAsync(); }
             catch (Exception ex) { await ViewModel.ExecuteAsync("释放输入", () => Task.FromException(ex)); }
@@ -216,7 +226,16 @@ public partial class MainWindow : Window
         var targets = new[] { main.Serial };
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(directoryCancellation.Token); deadline.CancelAfter(TimeSpan.FromSeconds(20));
         captureInProgress = true;
-        try { captureOperation = ViewModel.RefreshAutomaticScreensAsync(targets, deadline.Token); await captureOperation; }
+        try
+        {
+            mainCaptureDispatchCount++; lastMainCaptureTargets = targets.ToArray();
+            async Task Capture()
+            {
+                if (ViewModel.Demo && demoMainCaptureBarrier is { } barrier) await barrier();
+                await ViewModel.RefreshAutomaticScreensAsync(targets, deadline.Token);
+            }
+            captureOperation = Capture(); await captureOperation;
+        }
         catch (OperationCanceledException) { }
         finally { captureInProgress = false; }
     }
@@ -465,7 +484,7 @@ public partial class MainWindow : Window
         await OpenMainControlAsync(mainBeforeNavigation!);
         var expandedControls = VisualDescendants<Expander>(wallMainPanel).Single(); expandedControls.IsExpanded = true;
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-        if (wallMainPanel is ScrollViewer mainScroll) mainScroll.ScrollToEnd();
+        mainBodyScroll.ScrollToEnd();
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-expanded.png"));
         expandedControls.IsExpanded = false;

@@ -46,7 +46,10 @@ public partial class MainWindow
     {
         var grid = VisualDescendants<DataGrid>(wallList).Single();
         var expected = unifiedDeviceView.Cast<UnifiedDeviceRow>().ToArray();
-        var viewport = new Rect(0, grid.ColumnHeaderHeight, grid.ActualWidth, Math.Max(0, grid.ActualHeight - grid.ColumnHeaderHeight));
+        var scroll = DeviceListScrollViewer() ?? throw new InvalidOperationException("设备列表缺少实际滚动容器。");
+        var presenter = VisualDescendants<ScrollContentPresenter>(scroll).FirstOrDefault(item => item.Name == "PART_ScrollContentPresenter")
+            ?? throw new InvalidOperationException("设备列表缺少实际正文视口。");
+        var viewport = presenter.TransformToAncestor(grid).TransformBounds(new Rect(presenter.RenderSize));
         var rows = new List<object>();
         foreach (var item in expected)
         {
@@ -54,16 +57,25 @@ public partial class MainWindow
                 throw new InvalidOperationException("非空目录尚未生成实际行：" + item.Name);
             var bounds = row.TransformToAncestor(grid).TransformBounds(new Rect(row.RenderSize));
             var visible = Rect.Intersect(bounds, viewport);
-            if (visible.IsEmpty || visible.Width <= 0 || visible.Height <= 0) throw new InvalidOperationException("设备行不在实际视口：" + item.Name);
+            if (visible.IsEmpty || visible.Width <= 0 || bounds.Top < viewport.Top || bounds.Bottom > viewport.Bottom) throw new InvalidOperationException("设备行没有完整高度进入实际视口：" + item.Name);
             bool Visible(FrameworkElement control)
             {
                 if (!control.IsVisible || control.ActualWidth <= 0 || control.ActualHeight <= 0) return false;
-                var intersection = Rect.Intersect(control.TransformToAncestor(grid).TransformBounds(new Rect(control.RenderSize)), viewport);
-                return !intersection.IsEmpty && intersection.Width > 0 && intersection.Height > 0;
+                var controlBounds = control.TransformToAncestor(grid).TransformBounds(new Rect(control.RenderSize));
+                return viewport.Contains(controlBounds);
             }
             if (!VisualDescendants<TextBlock>(row).Any(text => text.Text == item.Name && Visible(text))) throw new InvalidOperationException("设备名称尚未呈现在视口：" + item.Name);
             var action = VisualDescendants<Button>(row).FirstOrDefault(button => Visible(button) && VisualDescendants<TextBlock>(button).Any(text => text.Text == item.PrimaryLabel && Visible(text)))
                 ?? throw new InvalidOperationException("设备操作尚未呈现在视口：" + item.Name);
+            foreach (var button in VisualDescendants<UnifiedDeviceTile>(row).SelectMany(tile => VisualDescendants<Button>(tile)).Where(button => button.Visibility == Visibility.Visible))
+            {
+                var cell = VisualDescendants<DataGridCell>(row).FirstOrDefault(cell => VisualDescendants<Button>(cell).Contains(button))
+                    ?? throw new InvalidOperationException("设备操作没有实际表格单元：" + item.Name);
+                var actionBounds = button.TransformToAncestor(grid).TransformBounds(new Rect(button.RenderSize));
+                var cellBounds = cell.TransformToAncestor(grid).TransformBounds(new Rect(cell.RenderSize));
+                if (button.ActualWidth < 44 || button.ActualHeight < 44 || !Visible(button) || !cellBounds.Contains(actionBounds) || !bounds.Contains(actionBounds))
+                    throw new InvalidOperationException("设备操作未完整进入实际单元/行/视口或不足44命中区：" + item.Name + ":" + button.Name);
+            }
             rows.Add(new { item.Key, item.Name, item.State, item.PrimaryLabel, row.ActualWidth, row.ActualHeight, visibleBounds = new { visible.X, visible.Y, visible.Width, visible.Height }, action = System.Windows.Automation.AutomationProperties.GetName(action) });
         }
         if (expected.Length != 0 && rows.Count == 0) throw new InvalidOperationException("非空目录截图没有实际设备行。");
@@ -177,7 +189,7 @@ public partial class MainWindow
             await Task.Delay(20);
             await OpenMainControlAsync(main);
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-            if (wallMainPanel.Visibility != Visibility.Visible || wallWorkspace.ColumnDefinitions[1].Width.Value <= 0)
+            if (wallMainPanel.Visibility != Visibility.Visible || !mainControlOpen || mainBodyScroll.ActualHeight <= 0 || mainControlBack.ActualWidth != 44 || mainControlBack.ActualHeight != 44)
                 throw new InvalidOperationException("列表主控入口没有展开嵌入面板。");
             if (!IsActive || main.CapturedAt is not { } captured || hiddenFrames[main] is { } beforeCapture && captured <= beforeCapture
                 || hiddenFrames.Any(pair => !ReferenceEquals(pair.Key, main) && pair.Key.CapturedAt != pair.Value))
@@ -195,7 +207,7 @@ public partial class MainWindow
             }
             var expected = new Dictionary<string, string> { ["MainVolumeUp"] = "增大音量", ["MainVolumeDown"] = "减小音量" };
             var buttons = VisualDescendants<Button>(wallMainPanel).Where(button => expected.ContainsKey(button.Name)).ToArray();
-            if (buttons.Length != 2 || buttons.Any(button => button.ToolTip as string != expected[button.Name] || button.Content is not TextBlock || button.ActualWidth != 34 || button.Command is not AsyncCommand))
+            if (buttons.Length != 2 || buttons.Any(button => button.ToolTip as string != expected[button.Name] || button.Content is not TextBlock || button.ActualWidth != 44 || button.ActualHeight != 44 || button.Command is not AsyncCommand))
                 throw new InvalidOperationException("主控音量图标、提示或稳定尺寸缺失。");
             var other = ViewModel.Devices.First(row => !ReferenceEquals(row, main));
             foreach (var row in ViewModel.Devices) row.IsSelected = ReferenceEquals(row, other);
@@ -219,13 +231,17 @@ public partial class MainWindow
             main.Info = info; ViewModel.SyncKeyboard = sync; ViewModel.SyncMouse = mouseSync;
             foreach (var pair in selections) pair.Key.IsSelected = pair.Value;
             ViewModel.UpdateSelection();
-            if (wallMainPanel is ScrollViewer viewport) viewport.ScrollToEnd();
+            mainBodyScroll.ScrollToEnd();
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
             foreach (var button in buttons)
             {
-                var y = button.TranslatePoint(new Point(), wallMainPanel).Y;
-                if (y < 0 || y + button.ActualHeight > wallMainPanel.ActualHeight + 1) throw new InvalidOperationException("主控音量按钮无法滚动到可见区。");
+                var bounds = button.TransformToAncestor(mainBodyScroll).TransformBounds(new Rect(button.RenderSize));
+                if (!new Rect(0, 0, mainBodyScroll.ViewportWidth, mainBodyScroll.ViewportHeight).Contains(bounds)) throw new InvalidOperationException("主控音量按钮未完整滚动到正文视口。");
             }
+            var cast = VisualDescendants<Expander>(wallMainPanel).Single(); cast.IsExpanded = true; await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render); mainBodyScroll.ScrollToEnd(); await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+            var lastCast = VisualDescendants<Button>(cast).Last(); var castBounds = lastCast.TransformToAncestor(mainBodyScroll).TransformBounds(new Rect(lastCast.RenderSize));
+            if (!new Rect(0, 0, mainBodyScroll.ViewportWidth, mainBodyScroll.ViewportHeight).Contains(castBounds) || !mainControlBack.IsVisible) throw new InvalidOperationException("投屏末端或固定返回不可达。");
+            cast.IsExpanded = false;
             if (screenshot is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshot)!, "canonical-main-controls.png"));
             NavigateTo("应用"); SyncApplicationTargets();
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
