@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -49,35 +50,42 @@ public partial class MainWindow
     private FrameworkElement BuildMonitorPage()
     {
         var page = Page();
-        var header = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
-        var pause = WallToggle("\uE769", "暂停监控"); pause.Content = ShellGlyph("\uE769"); pause.Width = 34; pause.MinWidth = 0; pause.Padding = new Thickness(0);
+        var header = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
+        var pause = WallToggle("\uE769", "暂停监控"); pause.Content = ShellGlyph("\uE769"); pause.Width = pause.MinWidth = pause.Height = 44; pause.Padding = new Thickness(0);
         monitorPauseChoice = pause;
         pause.Checked += (_, _) => { monitorPaused = true; monitorEpoch++; pause.ToolTip = "恢复监控"; System.Windows.Automation.AutomationProperties.SetName(pause, "恢复监控"); pause.Content = ShellGlyph("\uE768"); monitorLastReconcile = default; MonitorTick(); };
         pause.Unchecked += (_, _) => { monitorPaused = false; monitorEpoch++; pause.ToolTip = "暂停监控"; System.Windows.Automation.AutomationProperties.SetName(pause, "暂停监控"); pause.Content = ShellGlyph("\uE769"); monitorLastReconcile = default; monitorTimer.Start(); MonitorTick(); };
-        DockPanel.SetDock(pause, Dock.Right); header.Children.Add(pause);
-        var modes = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
+        var modes = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
         var wall = WallToggle("\uE8A9", "画面墙"); var list = WallToggle("\uE9D5", "资源列表"); wall.IsChecked = true;
+        wall.Height = list.Height = 44;
         monitorWallChoice = wall; monitorListChoice = list;
         wall.Click += (_, _) => { wall.IsChecked = true; list.IsChecked = false; SetMonitorMode(false); };
         list.Click += (_, _) => { wall.IsChecked = false; list.IsChecked = true; SetMonitorMode(true); };
         modes.Children.Add(wall); modes.Children.Add(list);
-        var scope = new ComboBox { Width = 118, Height = 34, Margin = new Thickness(0, 0, 8, 0), ItemsSource = new[] { "已连接设备", "全部目录" }, SelectedIndex = 0 };
+        var scope = new ComboBox { Width = 118, Height = 44, Margin = new Thickness(0, 0, 8, 6), ItemsSource = new[] { "已连接设备", "全部目录" }, SelectedIndex = 0 };
         monitorScopeChoice = scope;
         System.Windows.Automation.AutomationProperties.SetName(scope, "监控范围");
         scope.SelectionChanged += (_, _) => { monitorConnectedOnly = scope.SelectedIndex == 0; monitorEpoch++; monitorLastReconcile = default; MonitorTick(); };
-        modes.Children.Add(scope); DockPanel.SetDock(modes, Dock.Right); header.Children.Add(modes);
+        modes.Children.Add(scope); modes.Children.Add(pause);
         var heading = new StackPanel();
         heading.Children.Add(new TextBlock { Name = "PageHeading", Text = LocalizationService.PageDisplayName("实时监控"), FontSize = 20, FontWeight = FontWeights.SemiBold });
         monitorHost = new TextBlock { Text = "主机资源：待采样", Foreground = WallMuted, FontSize = 12, Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap };
-        heading.Children.Add(monitorHost); header.Children.Add(heading);
+        heading.Children.Add(new ScrollViewer { Content = monitorHost, MaxHeight = 48, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }); header.Children.Add(heading); header.Children.Add(modes);
         DockPanel.SetDock(header, Dock.Top); page.Children.Add(header);
         monitorSummary = new TextBlock { Foreground = WallMuted, Margin = new Thickness(0, 0, 0, 8), TextWrapping = TextWrapping.Wrap, ToolTip = "视频到帧率不等于应用帧率；静止画面可能不产生新帧。" };
-        DockPanel.SetDock(monitorSummary, Dock.Top); page.Children.Add(monitorSummary);
+        var summaryViewport = new ScrollViewer { Content = monitorSummary, MaxHeight = 48, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        DockPanel.SetDock(summaryViewport, Dock.Top); page.Children.Add(summaryViewport);
         monitorDetail = new TextBlock { Foreground = WallMuted, TextWrapping = TextWrapping.Wrap, MinHeight = 24, Margin = new Thickness(0, 8, 0, 0), Text = "未选中监看设备" };
-        DockPanel.SetDock(monitorDetail, Dock.Bottom); page.Children.Add(monitorDetail);
+        var detailViewport = new ScrollViewer { Name = "MonitorDetailScroll", Content = monitorDetail, MaxHeight = 72, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        DockPanel.SetDock(detailViewport, Dock.Bottom); page.Children.Add(detailViewport);
         monitorWall = new WrapPanel { Orientation = Orientation.Horizontal };
         monitorScroll = new ScrollViewer { Content = monitorWall, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, CanContentScroll = false };
-        monitorScroll.ScrollChanged += (_, _) => { monitorEpoch++; monitorLastReconcile = default; };
+        monitorScroll.SizeChanged += (_, _) => { foreach (var tile in monitorTiles.Values) tile.ApplyLayout(monitorCompact, monitorScroll.ViewportWidth); };
+        monitorScroll.ScrollChanged += (_, _) =>
+        {
+            monitorEpoch++; monitorLastReconcile = default;
+            foreach (var tile in monitorTiles.Values) tile.ApplyLayout(monitorCompact, monitorScroll.ViewportWidth);
+        };
         page.Children.Add(monitorScroll);
         monitorTimer.Tick += (_, _) => MonitorTick();
         ViewModel.PropertyChanged += (_, args) =>
@@ -315,6 +323,7 @@ public partial class MainWindow
         private readonly Border videoSurface;
         private readonly Polyline cpuLine = new() { Stroke = ThemeBrush("AccentBrush"), StrokeThickness = 1.5 };
         private readonly Polyline memoryLine = new() { Stroke = ThemeBrush("SuccessBrush"), StrokeThickness = 1.5 };
+        private readonly Canvas chart;
         private readonly List<MonitorResourceSample> history = [];
         private WriteableBitmap? bitmap;
         internal string Signature = "";
@@ -345,16 +354,19 @@ public partial class MainWindow
         internal MonitorTile(string key, Action select, Func<Task> open, Func<Task> retry)
         {
             Key = key;
-            Surface = new Border { Width = 330, Height = 306, Margin = new Thickness(0, 0, 12, 12), Padding = new Thickness(9), BorderThickness = new Thickness(1), BorderBrush = ThemeBrush("BorderBrush"), CornerRadius = new CornerRadius(8), Background = ThemeBrush("SurfaceBrush") };
+            Surface = new Border { Width = 330, Margin = new Thickness(0, 0, 12, 12), Padding = new Thickness(9), BorderThickness = new Thickness(1), BorderBrush = ThemeBrush("BorderBrush"), CornerRadius = new CornerRadius(8), Background = ThemeBrush("SurfaceBrush") };
             var stack = new StackPanel(); Surface.Child = stack;
             var title = new DockPanel();
             Open = MonitorIcon("\uE8A7", "打开模拟器窗口", open);
             DockPanel.SetDock(Open, Dock.Right); title.Children.Add(Open);
             var again = MonitorIcon("\uE72C", "重试视频", retry); DockPanel.SetDock(again, Dock.Right); title.Children.Add(again);
             var names = new StackPanel(); names.Children.Add(Name); names.Children.Add(Subtitle); title.Children.Add(names); stack.Children.Add(title);
+            Name.SetBinding(ToolTipProperty, new Binding(nameof(TextBlock.Text)) { Source = Name }); Subtitle.SetBinding(ToolTipProperty, new Binding(nameof(TextBlock.Text)) { Source = Subtitle });
+            Resource.TextTrimming = TextTrimming.CharacterEllipsis;
             videoSurface = new Border { Height = 180, Background = ThemeBrush("TextBrush"), Margin = new Thickness(0, 7, 0, 6), Child = Frame }; stack.Children.Add(videoSurface);
             stack.Children.Add(State); stack.Children.Add(Resource);
-            var chart = new Canvas { Height = 24, Width = 308, ClipToBounds = true, ToolTip = "最近15分钟：蓝色 CPU；绿色进程工作集（独立比例）", Margin = new Thickness(0, 5, 0, 0) };
+            chart = new Canvas { Height = 24, ClipToBounds = true, ToolTip = "最近15分钟：蓝色 CPU；绿色进程工作集（独立比例）", Margin = new Thickness(0, 5, 0, 0) };
+            chart.SizeChanged += (_, _) => DrawResourceHistory();
             chart.Children.Add(cpuLine); chart.Children.Add(memoryLine); stack.Children.Add(chart);
             Surface.MouseLeftButtonDown += async (_, args) =>
             {
@@ -366,8 +378,8 @@ public partial class MainWindow
 
         internal void ApplyLayout(bool compact, double viewportWidth)
         {
-            Surface.Width = compact && double.IsFinite(viewportWidth) ? Math.Max(330, viewportWidth - 14) : 330;
-            Surface.Height = compact ? 122 : 306;
+            var available = double.IsFinite(viewportWidth) && viewportWidth > 0 ? Math.Max(1, viewportWidth - Surface.Margin.Left - Surface.Margin.Right) : 330;
+            Surface.Width = compact ? available : Math.Min(330, available);
             videoSurface.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         }
 
@@ -378,7 +390,7 @@ public partial class MainWindow
         }
         private static Button MonitorIcon(string glyph, string tooltip, Func<Task> action)
         {
-            var button = new Button { Content = ShellGlyph(glyph, 14), Width = 29, Height = 28, MinWidth = 0, ToolTip = tooltip, Padding = new Thickness(0) };
+            var button = new Button { Content = ShellGlyph(glyph, 14), Width = 44, Height = 44, MinWidth = 44, ToolTip = tooltip, Padding = new Thickness(0) };
             System.Windows.Automation.AutomationProperties.SetName(button, tooltip);
             button.SetResourceReference(StyleProperty, "IconButton");
             button.Click += async (_, _) => { button.IsEnabled = false; try { await action(); } finally { button.IsEnabled = true; } };
@@ -387,7 +399,13 @@ public partial class MainWindow
         internal bool VisibleIn(ScrollViewer viewport)
         {
             if (!Surface.IsVisible || !Surface.IsLoaded || viewport.ActualHeight <= 0) return false;
-            try { return Surface.TransformToAncestor(viewport).TransformBounds(new Rect(Surface.RenderSize)).IntersectsWith(new Rect(0, 0, viewport.ActualWidth, viewport.ViewportHeight)); }
+            try
+            {
+                var content = VisualDescendants<ScrollContentPresenter>(viewport).FirstOrDefault(item => ReferenceEquals(item.TemplatedParent, viewport));
+                if (content is null) return false;
+                var intersection = Rect.Intersect(Surface.TransformToAncestor(content).TransformBounds(new Rect(Surface.RenderSize)), new Rect(content.RenderSize));
+                return !intersection.IsEmpty && intersection.Width > 0 && intersection.Height > 0;
+            }
             catch (InvalidOperationException) { return false; }
         }
         internal void Reset(string signature, LdPlayerInstance? instance, DeviceRow? device)
@@ -454,13 +472,18 @@ public partial class MainWindow
             if (history.Count > 451) history.RemoveRange(0, history.Count - 451);
             Resource.Text = $"CPU {Percent(sample.CpuPercent, sample.Error is null)} · 工作集 {Memory(sample.WorkingSetBytes)}";
             Resource.ToolTip = $"{sample.ObservedAt.ToLocalTime():HH:mm:ss} · Player+VBox工作集含共享页，非安卓内存\n{sample.Error}";
-            var memoryMax = Math.Max(1, history.Max(item => item.WorkingSetBytes ?? 0));
+            DrawResourceHistory();
+        }
+        private void DrawResourceHistory()
+        {
             cpuLine.Points.Clear(); memoryLine.Points.Clear();
+            if (history.Count == 0) return;
+            var memoryMax = Math.Max(1, history.Max(item => item.WorkingSetBytes ?? 0));
             var cpuStart = history.FindLastIndex(item => item.CpuPercent is null) + 1;
             var memoryStart = history.FindLastIndex(item => item.WorkingSetBytes is null) + 1;
             for (var i = 0; i < history.Count; i++)
             {
-                var x = i * 308d / Math.Max(1, history.Count - 1);
+                var x = i * chart.ActualWidth / Math.Max(1, history.Count - 1);
                 if (i >= cpuStart && history[i].CpuPercent is { } cpu) cpuLine.Points.Add(new Point(x, 23 - Math.Clamp(cpu, 0, 100) * .22));
                 if (i >= memoryStart && history[i].WorkingSetBytes is { } bytes) memoryLine.Points.Add(new Point(x, 23 - bytes * 22d / memoryMax));
             }

@@ -45,6 +45,11 @@
     "Sha256": "0deb295965b6457c315ff576af743072e8c2f23f85eb9c3f93948621095de297"
   },
   {
+    "Path": "docs/codex/apple-experience/A05_MONITOR_RESPONSIVE.md",
+    "Bytes": 20820,
+    "Sha256": "a9a3a971297fb40d6eb41fbdfc7f81d1b0f99b440e9879db460ca0335efda095"
+  },
+  {
     "Path": "docs/codex/apple-experience/AP008_DEPENDENCIES.md",
     "Bytes": 4127,
     "Sha256": "a9fc29dd13c6e56adf924bb428aa004a81151b3738b4e5d1940b70b349cf5e65"
@@ -56,18 +61,18 @@
   },
   {
     "Path": "docs/codex/apple-experience/DEFECTS.md",
-    "Bytes": 5735,
-    "Sha256": "a209a18ea283d02758652830f03e16d05f99539176219c62123ad74b0439b97b"
+    "Bytes": 8206,
+    "Sha256": "8baf419809bc2e4e210d890cf7a403329b0ec7ca7652d41aa8c787aca00c9172"
   },
   {
     "Path": "docs/codex/apple-experience/HANDOFF.md",
-    "Bytes": 10748,
-    "Sha256": "b427237732ffcb877b7279ec3ca2f7aabfbf88ed085f66c0b7a01bab07291e13"
+    "Bytes": 22208,
+    "Sha256": "27f4d06b98e956b5c3ba58b24f83e423e30bea0ae3ffbdf26cdacb6388adb830"
   },
   {
     "Path": "docs/codex/apple-experience/TEST_MATRIX.md",
-    "Bytes": 11036,
-    "Sha256": "ddc4fa2bf8dfee868ca9ab32f496bcadd161f32d6885a3ae9f4f121b472bf70c"
+    "Bytes": 11536,
+    "Sha256": "38fcd39c64fb5743b01cc5422c715a7843fa3b8c34eab3c3f7c695d18e2dac6d"
   },
   {
     "Path": "docs/codex/device-action-dedup/REPORT.md",
@@ -151,8 +156,8 @@
   },
   {
     "Path": "docs/PROGRESS.md",
-    "Bytes": 14270,
-    "Sha256": "0eb5ed0328d132677c8ad29c363c043b3247f5f9d543891613e6d8e162cb6a01"
+    "Bytes": 16230,
+    "Sha256": "0ad45b6ff7d1f90dc63e41abedf0b68ca17f1d0e64e7d6f0a95480b435da6146"
   },
   {
     "Path": "docs/reference/API.md",
@@ -221,8 +226,8 @@
   },
   {
     "Path": "docs/TASKS.md",
-    "Bytes": 4317,
-    "Sha256": "a25f409b4860453bac4b1ef09d5fe68507a3a5934f4eddc2f1acf4874339da2a"
+    "Bytes": 4487,
+    "Sha256": "695ca9ac15d672e14c2f2614288b852cf166279c813d4267cbd06222198a50ff"
   },
   {
     "Path": "docs/testing/API_MATRIX.md",
@@ -776,8 +781,8 @@
   },
   {
     "Path": "README.md",
-    "Bytes": 21767,
-    "Sha256": "ff679574561a5eeb02655da41c44f073cc588439eded6cd2f68466c18bed6a10"
+    "Bytes": 22349,
+    "Sha256": "ef5fd18b59ecede0519a34c19ba21b3e4bfa50784d7f555896753b8b421e6e90"
   },
   {
     "Path": "src/MatrixDevice.Cli/MatrixDevice.Cli.csproj",
@@ -926,8 +931,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/App.xaml.cs",
-    "Bytes": 13154,
-    "Sha256": "3d212c9636deee95b5e9d4a5b9307cef453f1ee1d890ad053117e97896ff5fac"
+    "Bytes": 13778,
+    "Sha256": "a8522cac1ae57e9637d8358f4253fe05407411f774549a3bedb00048de439850"
   },
   {
     "Path": "src/MatrixDevice.Desktop/LdWindowVisibility.cs",
@@ -1071,8 +1076,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/MonitorView.cs",
-    "Bytes": 32460,
-    "Sha256": "2f87a3be6fd5f07bd3e27b947c6fa093a0f47768827a9cdfa18d23b8bcfbac4b"
+    "Bytes": 34285,
+    "Sha256": "1281ed71d4e2b06e7f66ed1fde7b6f5edfb449f8f1cf4a78bff988720d39c86f"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/NativeTargetSmoke.cs",
@@ -1101,8 +1106,13 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/ResponsiveDevicesSmoke.cs",
-    "Bytes": 53186,
-    "Sha256": "ce3180f435b4f418e5f1489685170f34c819f40f9ad586fbbfc222282fe88fdc"
+    "Bytes": 63066,
+    "Sha256": "6ae2000f15c94f00b3d560d3804648a53632beefe1b7e9a3b5cc15ce8f6bb2bd"
+  },
+  {
+    "Path": "src/MatrixDevice.Desktop/Views/ResponsiveMonitorSmoke.cs",
+    "Bytes": 53874,
+    "Sha256": "7979647ce7547db5e1f4349790688db20aa3149157e9e088929579ac879d2848"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/ResponsiveShellSmoke.cs",

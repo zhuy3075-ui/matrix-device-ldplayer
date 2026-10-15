@@ -17,13 +17,15 @@ public partial class App : Application
             var smoke = e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
             var shellVerification = e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase);
             var deviceLayoutVerification = e.Args.Contains("--verify-device-layout", StringComparer.OrdinalIgnoreCase);
+            var monitorLayoutVerification = e.Args.Contains("--verify-monitor-layout", StringComparer.OrdinalIgnoreCase);
             var liveVerification = e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase);
             var unifiedVerification = e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase);
             var oneClickVerification = e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase);
             var monitorVerification = e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase);
-            if (new[] { smoke, shellVerification, deviceLayoutVerification, liveVerification, unifiedVerification, oneClickVerification, monitorVerification }.Count(enabled => enabled) > 1)
+            if (new[] { smoke, shellVerification, deviceLayoutVerification, monitorLayoutVerification, liveVerification, unifiedVerification, oneClickVerification, monitorVerification }.Count(enabled => enabled) > 1)
                 throw new ArgumentException("一次只能选择一种自动验收模式。");
-            if (deviceLayoutVerification) ValidateDeviceLayoutArguments(e.Args);
+            if (deviceLayoutVerification) ValidateLayoutArguments(e.Args, "--verify-device-layout", "设备正文");
+            if (monitorLayoutVerification) ValidateLayoutArguments(e.Args, "--verify-monitor-layout", "监控正文");
             string? unifiedCandidate = null;
             var demo = smoke || shellVerification || e.Args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
             var dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MatrixDevice.Reconstructed", demo ? "demo" : "data");
@@ -43,11 +45,11 @@ public partial class App : Application
                 if (ldConsoleIndex + 1 >= e.Args.Length || e.Args[ldConsoleIndex + 1].StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("--ldconsole 后必须提供雷电命令行程序的完整路径");
                 settings = settings with { LdConsolePath = Path.GetFullPath(e.Args[ldConsoleIndex + 1]) };
             }
-            if (smoke || shellVerification || deviceLayoutVerification)
+            if (smoke || shellVerification || deviceLayoutVerification || monitorLayoutVerification)
             {
                 settings = settings with { WindowWidth = 1440, WindowHeight = 900, AutoStartApi = false, AutoConnect = false };
                 var widthIndex = Array.FindIndex(e.Args, arg => arg == "--width"); var heightIndex = Array.FindIndex(e.Args, arg => arg == "--height");
-                if (deviceLayoutVerification)
+                if (deviceLayoutVerification || monitorLayoutVerification)
                 {
                     if (widthIndex >= 0) settings = settings with { WindowWidth = double.Parse(e.Args[widthIndex + 1], System.Globalization.CultureInfo.InvariantCulture) };
                     if (heightIndex >= 0) settings = settings with { WindowHeight = double.Parse(e.Args[heightIndex + 1], System.Globalization.CultureInfo.InvariantCulture) };
@@ -84,7 +86,11 @@ public partial class App : Application
             await window.RecoverBackgroundWindowsAsync();
             window.UpdateUnifiedDirectory();
             if (runtime.Settings.AutoStartApi) await window.ViewModel.StartApisAsync();
-            if (e.Args.Contains("--open-monitor", StringComparer.OrdinalIgnoreCase) && !smoke && !shellVerification && !deviceLayoutVerification && !liveVerification && !unifiedVerification && !oneClickVerification && !monitorVerification) window.NavigateTo("实时监控");
+            if (e.Args.Contains("--open-monitor", StringComparer.OrdinalIgnoreCase) && !smoke && !shellVerification && !deviceLayoutVerification && !monitorLayoutVerification && !liveVerification && !unifiedVerification && !oneClickVerification && !monitorVerification) window.NavigateTo("实时监控");
+            if (monitorLayoutVerification)
+            {
+                await window.RunMonitorLayoutAcceptanceAsync(e.Args); window.Close();
+            }
             if (deviceLayoutVerification)
             {
                 await window.RunDeviceLayoutAcceptanceAsync(e.Args); window.Close();
@@ -121,7 +127,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-device-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
+            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-device-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
             else MessageBox.Show(UiErrorPresentation.Describe(ex), "矩阵设备启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             try
@@ -134,21 +140,21 @@ public partial class App : Application
         }
     }
 
-    private static void ValidateDeviceLayoutArguments(string[] args)
+    private static void ValidateLayoutArguments(string[] args, string mode, string context)
     {
         var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         for (var index = 0; index < args.Length; index++)
         {
             var key = args[index];
-            if (key is not ("--verify-device-layout" or "--demo" or "--data-dir" or "--width" or "--height" or "--screenshot") || values.ContainsKey(key)) throw new ArgumentException("设备正文验收参数未知或重复：" + key);
-            if (key is "--verify-device-layout" or "--demo") { values.Add(key, null); continue; }
-            if (++index >= args.Length || args[index].StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("设备正文验收参数缺值：" + key);
+            if (key != mode && key is not ("--demo" or "--data-dir" or "--width" or "--height" or "--screenshot") || values.ContainsKey(key)) throw new ArgumentException(context + "验收参数未知或重复：" + key);
+            if (key == mode || key == "--demo") { values.Add(key, null); continue; }
+            if (++index >= args.Length || args[index].StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException(context + "验收参数缺值：" + key);
             values.Add(key, args[index]);
         }
         if (!values.ContainsKey("--demo") || !values.TryGetValue("--data-dir", out var directory) || directory is null || !Path.IsPathFullyQualified(directory)
-            || !Path.GetFullPath(directory).Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("设备正文验收必须显式指定--demo与artifacts下独立绝对--data-dir。");
+            || !Path.GetFullPath(directory).Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException(context + "验收必须显式指定--demo与artifacts下独立绝对--data-dir。");
         foreach (var (key, minimum, maximum) in new[] { ("--width", AppSettings.MinimumWindowWidth, AppSettings.MaximumWindowWidth), ("--height", AppSettings.MinimumWindowHeight, AppSettings.MaximumWindowHeight) })
-            if (values.TryGetValue(key, out var value) && (!double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var number) || !double.IsFinite(number) || number < minimum || number > maximum)) throw new ArgumentException("设备正文验收尺寸无效：" + key + "=" + value);
+            if (values.TryGetValue(key, out var value) && (!double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var number) || !double.IsFinite(number) || number < minimum || number > maximum)) throw new ArgumentException(context + "验收尺寸无效：" + key + "=" + value);
         if (values.TryGetValue("--screenshot", out var screenshot) && !Path.IsPathFullyQualified(screenshot!)) throw new ArgumentException("截图路径必须为绝对路径。");
     }
 }

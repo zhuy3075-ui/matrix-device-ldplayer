@@ -14,10 +14,23 @@
 - 08c4f8c9b0057a8c1eda0abb43367f8fb93bb7b4：A03共享外观与命名19源文件已独立验收推送；见A03_APPEARANCE.md。
 - 2b1fe6e：A04公共响应式已独立验收推送；15155a708802199d725d05523d02ceb8cb49f78a：A05a详情/筛选隔离已推送。
 - test备份始终49e471081d2648a4d533cc98ec00be4f5a103c77。
+- 76d0e43cb0badfa4b5ba6261a05d08b3f1e779dd：A05b1设备/主控正文已推送，7源+报告/README和清单共17文件；源码包287文件/290条目逐项SHA一致，配置与原始证据未上传。
 
 A02主仓149/149（51.17秒）和最终1000×700界面通过；独立verifier149/149（51.60秒）及三尺寸12页、25守卫通过。主仓DLL摘要A58A27BD9437F07503A8F5637C28528DDB48BC930F9867A514E0B3381E5FBC29。没有调用真实外部确认、scrcpy启动或嵌入；不能声称PASS-LIVE。
 
-## 当前进行
+## 当前状态与下一步
+
+A05b2 freeze4已获独立`PASS-OFFLINE-WPF-LAYOUT-OBSERVATION`，仅批准本阶段监控布局及观测；本阶段提交以Git记录为准。完整报告[A05_MONITOR_RESPONSIVE](A05_MONITOR_RESPONSIVE.md)保存所有旧红/夹具错误/首败/摘要失配，下面历史段落不是当前执行指令。禁止把AP019/020更新为已修复或把目标标complete。
+
+- 最终4源patch BE261FA04A241BC3600EACD5993E0E667D30C8B8417314C8249B6628441285E1，manifest BD57272F6EDCD3DCCD429FCCB3466C0DAA9395C7E34BA6B56ECC00459B5EACFB，root/实施/独立raw全同，生产App/Monitor仍freeze2不变。
+- 独立150/51.16s、六monitor952/308、六device889/140或847/139、三desktop209/36/73/32/22/25/12idle、六shell135和42CLI全过，64进程退出；汇总verification-freeze4.json SHA60D2646C9F95CACFFA6068943D0B3184C2FC37FA1659016AE3F258462320501E。DLL C7AF612F8019E940FCD6B34008887FFAA3D0CD977E7856EF051774B55045EF37。独立默认配置路径前后缺失，不是真用户配置SHA证明。
+- root150/51.26s、fresh五代表(device390640、两390monitor、1000完整、390shell)首轮全过，DLL29EA3F8F7FFF131D5EF06DDACADD0C93365FB267672B4CA640E1624078A7FBAA；已目视390墙/长文/空目录及1000设备。明确运行profile前后SHA仍下方原值；全部exec/GUI已结束，锁空闲归root，代理均不得自行重启GUI。
+- 下一小目标A06a：先定义并受控复现LoadNodes的A→B→同一A、目录Generation/Transport迟到；仅证实后小修VM发布守卫并单独push，之后A06b重排Debug/Screenshot。现有DemoBackend sealed且无TCS，复用ApplicationBatchTests的IDeviceBackend转发包装模式；新独立Desktop/STA夹具自建一致runtime（Catalog/Automation/Input/Scripts/API全用wrapper），artifacts数据且API不启动。不能仅换Backend复用旧服务、双重dispose或用Delay猜竞态。
+- ABA可走原CurrentDevice setter；代次可由wrapper Discover改变Transport并调用既有RefreshDeviceSnapshotAsync，经真实Catalog增加Generation。此为受控目录，不是ADB wire或真实timer，原timer在Busy暂停。VM无合法Demo热换runtime入口，禁止反射伪造授权取红；runtime热换/真实接入忙守卫仍待独立证据。
+- A06b必须保留已完成crop跨页旧合同；只取消未完成手势。窄屏复用原Canvas/Image/TreeView/属性/颜色Grid，不因resize重建/重载。Demo跳过自动节点首载，手调LoadNodes不算自动路径。原生保存/导出dialog期间global状态变化、裁剪失捕等均仅候选，尚未执行/修复。
+- 新AP021：旧NewSourcePackage仍收录基线docs/verification历史PNG/JSON/txt，不能称当前ZIP纯源码或完全无原始证据；独立包审提出后已纠正口头说法。本轮不新增上传旧材料/本轮artifacts/ZIP，不删除用户文件或改写历史；A12另做正式材料分类和过滤。SHA/条目核验只证明完整性，后续打包重算摘要以最终输出为准。
+
+## 历史阶段证据
 
 A04最终已独立PASS-OFFLINE共享层、由本阶段提交推送，当前HEAD以Git记录为准：14源文件；A04.patch摘要EF7D087D56AA2CA5AA825483214C715E6679AE48E2BB4322A96952A771432054及仅夹具增量5BB4928E12B68EB4AE9505784DC6DA1AC560F156983D9966DD442A80582849E9。两个新增文件git apply仅CRLF转LF，14归一化内容逐字相同。主仓150/150（51.41秒），最终DLL79E3F633E6594DF811D5F6DB563A849CC534BA9569E470128A09B7CF515771BF；390shell135及1000完整209外观/25守卫/12idle通过，root目视。
 
@@ -29,7 +42,29 @@ A05a已整合11个Desktop源/测试文件，最终补丁A12E4C2E3134B1D425E9EB04
 
 A05b文案AP-013/014已独立验收：冻结patch298F8EBACF345A22BB028847B1B90C8B4D95E5A2E40757F5433984A3ED9E5A46，5源raw SHA全同，无分类/门禁/协调器改动。实现150/53.67s、独立150/52.14s及三桌面各36labels/11观察、原73/32/22、209外观/25Native/12idle、390shell135首次全过。主仓150/51.60s、最终1000完整同样通过并目视，最终DLL2EF968DDC1C51C2171246928A50D2ECC693AF497C6D052EDB3190F7B3145395D，用户配置未变，全部exec/GUI已结束。报告A05_DEVICE_LABELS，当前commit/push以Git为准。专项commands never invoked，不代替权限/实机；首次red-1000旧Appearance失败和red2文案19失败/17通过保留，AP-015原因未解。没有声称旧静态Tooltip必然陈旧。
 
-## 后续依赖
+## A05b2迭代历史
+
+A05b2已开始独立worktree实施，轻规格A05_MONITOR_RESPONSIVE：仅监控头部/卡片/图表实际宽及正式Demo专项；main_target_fix持GUI锁，root与其它代理不同时GUI。先红测，冻结后由hig_ui_inventory另树独立重建验证；尚无新通过结论，不提前标完成。其它阶段与安全边界不变。
+
+当前分工：main在apple-monitor-responsive仅改MonitorView/App生产合同，full在apple-monitor-responsive-tests只写新ResponsiveMonitorSmoke，禁止双写；full不GUI，编译时段与main约定。独立apple-monitor-responsive-verifier已从76d0e43准备，runner只Parser通过未执行，必须等冻结和GUI锁。红390实际10项失败，green1剩卡宽时序两项，日志均保留。AP-017仅为异步按钮finally状态候选，留A10单独复现，不混本轮。
+
+当前进展：freshViewport修正后最小390和三桌面预检过，17新入口负例exit1/data未建。full早期r1可视守卫稿尚有后半pending，不算PASS；报告序列化Rect.Empty/Infinity遮住primary，先修日志取红。main为红测暂在自身树使用旧VisibleIn，新生产合同patch仍为SCP正面积相交；最终必须恢复新合同、合并完整fixture后同源重建全矩阵。GUI仍归main，root与hig不能启动GUI，最终7源A05b1不重做。
+
+最新A05b2：r2旧VisibleIn已真实红/新6guard+BottomTop过，仍pending exit1非整绿。r3首个选卡前OSPosition失败未Down，保留未知；hig独立认可仅本条改真实Name/SCP InputHitTest+底层Mouse.MouseDownEvent、观察Surface一次Left/OriginalSource/ClickCount及实际选择/detail/Context，非physical，不动MainGesture/Appearance坐标。r4单卡Height315真实振荡：bar/viewport336↔346、Surface324×303↔330×306、extent315↔318反复并3秒超时。root已批准main只删随宽变video.Height一行，保留原180+Uniform，full补新路由专项；两人仍各自树/文件、不双写。最终同源矩阵和独立复验尚未做，详见A05_MONITOR_RESPONSIVE。
+
+当前冻结已到freeze2：3源patch4F49F46BCC6160BB6792ABAE57B1A5308C61D57210403E83D84B9DD7B084AE54，同main artifacts目录freeze2-sources.json；产品App/Monitor与freeze1不变，fixture r7仅逐分量诊断。r6空目录已补齐，150/51.80s、首640过、844选卡后Context合取失败，原日志缺分量。r7单844一次952/307过，InputGen2→2/Active true，首败原因仍未知AP-019，不称修产品或环境确诊。main正最终Build150→六monitor/三desktop/六shell/六device/CLI，失败即停，仍持GUI锁；hig仅把自己的freeze1机械更新freeze2供静态审，不Build/GUI。full已冻结停止。root尚未apply监控源码，不重复问用户。
+
+最终实现矩阵已经完成：150/51.03s、六monitor各952/307、三desktop原209/36/73/32/22/25/12、六shell135、六device两手机889其它847、17新CLI拒绝/data未建。全部进程退出后锁已交hig；独立150/51.41s通过，DLL35A9EC13D55A9256921BEF4F730DABDE9B36DF96D62BC6C54BDC9A3EF398CC77，其余完整矩阵进行中，未最终批准。main DLL0BADAE9D9A94147097E6B443A089EF921FF19A53FBE8539F0C6C56893418807E；汇总freeze2-verification.json摘要6AC299AD17EB96611ED2D61FD1919A8E46EAD21FB7E02E34B334EFF79B47AA77。root已机械apply3源且raw精确核同freeze2-sources（App A8522C...、Monitor1281ED...、新fixture0672BB...），尚未构建/GUI。root ignored artifacts/apple-monitor-responsive-root/Run-FinalGui.ps1已Parser过但未执行，拟两390monitor+1000完整+390shell；必须等hig全部exec结束并释锁再Build150/主仓复验。README/报告已补实施结果，独立/主仓状态仍待验，不预称实机或全目标完成。
+
+当前实际阻断：hig freeze2首device390640 625checks/73obs于旧ResponsiveDevicesSmoke:188(workspace919后)五合取失败，未Position/Down，无分量，不能与AP019并根因；其余5device/42CLI未跑。独立REJECTED-INCOMPLETE、verification-partial-freeze2.json及raw保留，所有进程已退出，GUI锁已交root且root未使用。full现仅在tests树改旧ResponsiveDevicesSmoke只读有界事件/五分量+返回分量日志，不改条件/等待/基线/生产、不编译/GUI；main只读追五写入来源，不改3冻结源、不GUI/build，等full诊断patch。hig待新诊断与重新发锁。root不得提前push/complete；需机械合并第四诊断源、定位后新的冻结/完整验收。未重复问用户。
+
+最新续验：full第四文件诊断r1经main/root/hig静态审查，原断言/等待/基线不变；main机械整合freeze3四源patch94F7CA28B49B94715E9B8AE66BCD9E5012173DC261BAE5C9465BBDC6FCA3ABE9，单次Build0warn/0err和旧device390640过889/140，54事件全保留，919/920五分量及返回三分量true、gen2→2、Active true，边界前无失活；先前首败仍未知AP019，不能归因。main全部结束并释锁后，root已机械apply第四源并核4raw同manifest（第四6AE200...），未Build/GUI。当前GUI/构建锁明确交hig：freeze3独立Build150→先device390640，若通过继续其余5device/42CLI/六monitor/三desktop/六shell，失败即停不重试。root/main/full不Build/GUI；root仅文档/静态准备，full只读A06验收设计。当前阶段未验收/未push，配置摘要复查仍原值。
+
+freeze3最新独立已停且正式释锁回root：150/51.16s，DLL9EDFFF23C4891D30980C0CAB03FECF79E8BFA8998D51E641530E4F3857AD62F3，六device全过(两手机889/140、其余847/139)、42CLI全部拒绝且未建data。原390首调度因ignored runner tuple展开在Desktop启动前失败，processResults空；修runner后fresh实际单次，非产品重试。前三monitor各952/307过，1000×700 demo-coordinator在focusWindow三合取首败939/304，缺child/owner/MonitorActive与Activate返回，另登记AP020不并AP019。余两monitor/三desktop/六shell未跑，verification-partial-freeze3及所有原字节保留，独立REJECTED-INCOMPLETE。root仍未Build/GUI。full暂停A06只读，现仅给新MonitorSmoke加最小只读焦点分量/有界事件，原调用/等待/断言不变且不编译。main/hig无GUI；等patch静审后只做单1000诊断，不默认循环全矩阵取绿。
+
+最新freeze4已主仓代表复验通过：最终增量6FE736...706B只加焦点日志；交付时同路径替换曾使旧摘要失配、main先build实际最终稿但未GUI，hig拒绝后root重新hash/审稿并获独立静审才放行；编排失误见正式报告，不声称旧摘要验证通过。最终四源patch BE261FA04A241BC3600EACD5993E0E667D30C8B8417314C8249B6628441285E1、manifest BD57272F6EDCD3DCCD429FCCB3466C0DAA9395C7E34BA6B56ECC00459B5EACFB，root/main/hig四raw全同（新MonitorSmoke797964...2848），生产App/Monitor仍freeze2不变。main单1000过952/308，Activate true/三leaf和四因子true，6事件无drop，合法失活gen2→3；AP020首败仍未知。root150/51.26s、五代表fresh首轮全过(device390640889/140、两390monitor952/308、1000完整、390shell135)，DLL29EA3F8F7FFF131D5EF06DDACADD0C93365FB267672B4CA640E1624078A7FBAA；已目视390墙/长文/空目录与1000设备，配置SHA不变，exec49106/39506均结束/GUI0。root已将独占GUI/build锁交hig最后freeze4全矩阵：先1000monitor再剩5monitor/六device/三desktop/六shell/42CLI，同binary无重复1000；失败停不循环。其它代理/root不buildGUI，未最终批准/未push，完整goal仍active。
+
+A06只读准备：Debug固定star+300+270、截屏固定300侧栏；推荐同组件窄屏分段，resize不重建树/颜色/已完成裁剪。候选先红测：LoadNodes只核DeviceRow引用的A→B→A/代次/runtime迟到；保存原生对话框期间全局图/裁剪/root变化；RefreshScreens清cropStart未释放捕获以及离页/LostCapture。不能因导航取消已完成crop，旧smoke明确要求跨页保留；Demo跳过自动首载，手调LoadNodes不算该路径。仅源码候选，未执行/未修，不缩小NODE/CAP实机要求。
 
 A04实现已统一四契约与默认值，完成导航699/700与1099/1100、Field自身460、More菜单、Owner-fit。六尺寸只证明公共层，三尺寸完整smoke业务断言保留；A05-A09固定多栏不得冒称适配通过。AP-011首次Fit失败事件订阅可能残留、AP-012页脚ellipsis/tooltip在触屏不完整，两项P2已登记A10；不把这些路径算已修。
 
@@ -54,6 +89,8 @@ A01目录为103个页面可见键，加全局/源码补充和逐字段细表，�
 AP-008：仍无完整AndroidSDK或自有测试APK；已只读取得Central framework API16、Google Maven AAPT2 8.6.1、D8 8.6.27、apksig 8.6.1候选工件并核checksum/POM/归档，证据AP008_DEPENDENCIES。不要再称“无android.jar候选”，也不要把候选链称为可用构建。D8 manifest入口缺失应走官方class入口，apksig没有apksigner CLI；未执行、编译、签名、接受SDK条款或改环境。A07下一步仍需自有最小源码/签名/Android效果，不能拿抖音清数据/卸载凑覆盖。
 
 A07额外只读准备：fixed apksig public member有setAlignmentPreserved、V1/V2及Verifier范围；官方当前源码的4字节对齐说明不等于8.6.1工件效果，必须最终ZIP LocalHeader offset与签名验证。无res原生Activity/匿名监听器/Prefs回显、min23/target34/exported/无权限是最小候选；framework不含java/javax，D8 JDK-provider实际成员存在，但精确Temurin根路径当前尚待恢复，不能假装已具备完整JDK。工具执行/生成测试密钥/构建APK/安装均未做。不要全盘扫路径或借用用户APP数据；候选研究不算AP008解除。
+
+Temurin精确路径只读复查仍未找到：限定主仓dependency-inspect/旧artifacts文本及上级.tools，无可信JDK或安装器路径/SHA；旧“启动器签名有效”缺可复核路径，不能沿用为已有完整JDK，也不意味着全电脑不存在。没有全盘扫描、下载或执行工具。
 
 ## 保留工作
 

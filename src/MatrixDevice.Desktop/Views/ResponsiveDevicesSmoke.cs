@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Runtime.ExceptionServices;
@@ -71,9 +72,56 @@ public partial class MainWindow
         var gridIdentity = wallGrid; var sourceIdentity = wallGrid.ItemsSource; var panelIdentity = wallMainPanel;
         var a = ViewModel.Devices[0]; var b = ViewModel.Devices[1];
         var fixtureRows = new List<UnifiedDeviceRow>(); var fixtureInvocations = 0; Window? inactiveWindow = null;
+        var contextEvents = new Queue<object>(); var contextEventCount = 0;
+        var watchedDevices = new List<(DeviceRow Row, PropertyChangedEventHandler Handler)>();
+        var watchedFixtures = new List<(UnifiedDeviceRow Row, PropertyChangedEventHandler Handler)>();
+        int? ReferenceId(object? value) => value is null ? null : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(value);
+        string? InputIdentity(IInputElement? value) => value is null ? null : value.GetType().FullName + "#" + ReferenceId(value) + (value is FrameworkElement element ? "/" + element.Name + "/" + AutomationProperties.GetName(element) : "");
+        void RecordContextEvent(string reason, string? property = null, object? sender = null, string? key = null, string? detail = null, string[]? addedKeys = null, string[]? removedKeys = null)
+        {
+            var main = ViewModel.MainDevice; var current = ViewModel.CurrentDevice;
+            contextEventCount++;
+            if (contextEvents.Count == 128) contextEvents.Dequeue();
+            contextEvents.Enqueue(new
+            {
+                sequence = contextEventCount, phase, reason, property, senderId = ReferenceId(sender), key, detail, addedKeys, removedKeys, observedAt = DateTimeOffset.UtcNow,
+                mainId = ReferenceId(main), mainSerial = main?.Serial, mainIsA = ReferenceEquals(main, a), currentId = ReferenceId(current), currentSerial = current?.Serial, currentIsB = ReferenceEquals(current, b),
+                expectedAId = ReferenceId(a), expectedASerial = a.Serial, expectedBId = ReferenceId(b), expectedBSerial = b.Serial,
+                inputGeneration = ViewModel.Runtime.Input.CurrentGeneration, active = IsActive, focus = InputIdentity(Keyboard.FocusedElement), capture = InputIdentity(Mouse.Captured),
+                actualWidth = ActualWidth, actualHeight = ActualHeight, left = double.IsFinite(Left) ? (double?)Left : null, top = double.IsFinite(Top) ? (double?)Top : null,
+                hiddenSelected = fixtureRows.Count > 0 ? (bool?)fixtureRows[0].IsSelected : null, deviceStatusFilter, updatingUnifiedDirectory, refreshingUnifiedFilter, selectedKey = (wallGrid.SelectedItem as UnifiedDeviceRow)?.Key, currentKey = (wallGrid.CurrentItem as UnifiedDeviceRow)?.Key,
+                selectedDevices = ViewModel.Devices.Where(row => row.IsSelected).Select(row => new { id = ReferenceId(row), row.Serial }).ToArray(), selectedFixtureKeys = fixtureRows.Where(row => row.IsSelected).Select(row => row.Key).ToArray()
+            });
+        }
+        EventHandler activatedObserver = (_, _) => RecordContextEvent("window-activated");
+        EventHandler deactivatedObserver = (_, _) => RecordContextEvent("window-deactivated");
+        EventHandler locationObserver = (_, _) => RecordContextEvent("window-location-changed");
+        SizeChangedEventHandler sizeObserver = (_, change) => RecordContextEvent("window-size-changed", detail: change.PreviousSize.ToString(CultureInfo.InvariantCulture) + "->" + change.NewSize.ToString(CultureInfo.InvariantCulture));
+        SelectionChangedEventHandler gridSelectionObserver = (_, change) => RecordContextEvent("grid-selection-changed", sender: wallGrid, detail: "originalSource=" + change.OriginalSource?.GetType().FullName,
+            addedKeys: change.AddedItems.Cast<object>().Select(item => item is UnifiedDeviceRow row ? row.Key : item.GetType().FullName ?? item.GetType().Name).ToArray(),
+            removedKeys: change.RemovedItems.Cast<object>().Select(item => item is UnifiedDeviceRow row ? row.Key : item.GetType().FullName ?? item.GetType().Name).ToArray());
+        SelectionChangedEventHandler filterSelectionObserver = (_, _) => RecordContextEvent("filter-selection-changed", sender: deviceStatusChoice, detail: "selectedItem=" + deviceStatusChoice.SelectedItem?.ToString());
+        PropertyChangedEventHandler viewModelObserver = (_, change) =>
+        {
+            if (change.PropertyName is nameof(WorkspaceViewModel.MainDevice) or nameof(WorkspaceViewModel.CurrentDevice)) RecordContextEvent("viewmodel-context-changed", change.PropertyName, ViewModel);
+        };
+        void WatchDevice(DeviceRow row)
+        {
+            if (watchedDevices.Any(item => ReferenceEquals(item.Row, row))) return;
+            PropertyChangedEventHandler observer = (_, change) => { if (change.PropertyName == nameof(DeviceRow.IsSelected)) RecordContextEvent("device-selection-changed", change.PropertyName, row, row.Serial); };
+            row.PropertyChanged += observer; watchedDevices.Add((row, observer));
+        }
+        void WatchFixture(UnifiedDeviceRow row)
+        {
+            PropertyChangedEventHandler observer = (_, change) => { if (change.PropertyName == nameof(UnifiedDeviceRow.IsSelected)) RecordContextEvent("fixture-selection-changed", change.PropertyName, row, row.Key); };
+            row.PropertyChanged += observer; watchedFixtures.Add((row, observer));
+        }
         if (!GetAppearanceCursorPosition(out var pointer)) throw new InvalidOperationException("无法保存验收指针。");
         try
         {
+            Activated += activatedObserver; Deactivated += deactivatedObserver; SizeChanged += sizeObserver; LocationChanged += locationObserver; ViewModel.PropertyChanged += viewModelObserver; wallGrid.SelectionChanged += gridSelectionObserver; deviceStatusChoice.SelectionChanged += filterSelectionObserver;
+            foreach (var device in ViewModel.Devices) WatchDevice(device);
+            RecordContextEvent("fixture-observers-attached");
             captureTimer.Stop();
             Check(!captureDispatcherTimer.IsEnabled, "仅Demo专项暂停自动captureTimer；显式CaptureTickAsync仍走真实接纳路径");
             observations.Add(new { phase = "timer-isolation", originalCaptureTimerEnabled, actualCaptureTimerEnabled = captureDispatcherTimer.IsEnabled, scope = "Demo fixture isolation; not automatic-timer acceptance" });
@@ -91,6 +139,7 @@ public partial class MainWindow
                     _ => { fixtureInvocations++; return Task.CompletedTask; }, _ => fixtureIndex == 1, _ => { fixtureInvocations++; return Task.CompletedTask; });
                 fixture.Update(new LdPlayerInstance(protectedRow ? 99999 : 1000 + index, "几何夹具-" + index, connected ? 10 : 0, connected ? 11 : 0, connected, connected ? 12 : -1, connected ? 13 : -1, 1280, 720, 240), device, connected, "");
                 fixtureRows.Add(fixture);
+                WatchFixture(fixture); if (device is not null) WatchDevice(device);
                 if (index < 17) unifiedDevices.Insert(index, fixture); else unifiedDevices.Add(fixture);
             }
             RefreshUnifiedFilter(); await Settle();
@@ -164,6 +213,7 @@ public partial class MainWindow
             await Invoke(mainButton); await Until(() => mainControlOpen && !ViewModel.Busy && !captureInProgress, "真实控制入口未完成");
             RecordScroll("after-open");
             ViewModel.CurrentDevice = b; var generation = ViewModel.Runtime.Input.CurrentGeneration;
+            RecordContextEvent("main-context-baseline", detail: "expectedInputGeneration=" + generation.ToString(CultureInfo.InvariantCulture));
             a.Info = a.Info with { Name = "主控长标题-" + new string('测', 90) }; await Settle();
             var title = VisualDescendants<TextBlock>(wallMainPanel).Single(text => BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path.Path == nameof(WorkspaceViewModel.MainContext));
             Check(title.Text == ViewModel.MainContext && title.ToolTip as string == ViewModel.MainContext && title.TextWrapping == TextWrapping.NoWrap && title.ActualHeight <= 44 && mainBodyScroll.ActualHeight >= 100, "真实A长MainContext保留完整原值且不挤光正文");
@@ -185,14 +235,20 @@ public partial class MainWindow
                 for (var attempt = 0; attempt < 4 && Math.Abs(wallWorkspace.ActualWidth - boundary) > .5; attempt++) { Width += boundary - wallWorkspace.ActualWidth; await Settle(); RecordScroll("workspace-boundary-" + boundary.ToString(CultureInfo.InvariantCulture) + "-attempt-" + attempt); }
                 RecordScroll("after-workspace-boundary-" + boundary.ToString(CultureInfo.InvariantCulture));
                 Check(Math.Abs(wallWorkspace.ActualWidth - boundary) <= .5 && (wallList.Visibility == Visibility.Collapsed) == (boundary < 920), "实际工作区919/920布局边界: " + boundary);
-                Check(ReferenceEquals(ViewModel.MainDevice, a) && ReferenceEquals(ViewModel.CurrentDevice, b) && ViewModel.Runtime.Input.CurrentGeneration == generation && fixtureRows[0].IsSelected && deviceStatusFilter == "已连接", "重排保留A/B/代次/隐藏选择与筛选");
+                var actualMain = ViewModel.MainDevice; var actualCurrent = ViewModel.CurrentDevice; var actualGeneration = ViewModel.Runtime.Input.CurrentGeneration; var hiddenSelected = fixtureRows[0].IsSelected; var actualFilter = deviceStatusFilter;
+                var sameMain = ReferenceEquals(actualMain, a); var sameCurrent = ReferenceEquals(actualCurrent, b); var sameGeneration = actualGeneration == generation; var sameHiddenSelection = hiddenSelected; var sameFilter = actualFilter == "已连接";
+                observations.Add(new { phase = phase + "-boundary-context", boundary, sameMain, sameCurrent, sameGeneration, sameHiddenSelection, sameFilter, expected = new { mainId = ReferenceId(a), mainSerial = a.Serial, currentId = ReferenceId(b), currentSerial = b.Serial, inputGeneration = generation, hiddenRowKey = fixtureRows[0].Key, hiddenSelected = true, filter = "已连接" }, actual = new { mainId = ReferenceId(actualMain), mainSerial = actualMain?.Serial, currentId = ReferenceId(actualCurrent), currentSerial = actualCurrent?.Serial, inputGeneration = actualGeneration, hiddenRowKey = fixtureRows[0].Key, hiddenSelected, filter = actualFilter, active = IsActive, focus = InputIdentity(Keyboard.FocusedElement), capture = InputIdentity(Mouse.Captured) } });
+                Check(sameMain && sameCurrent && sameGeneration && sameHiddenSelection && sameFilter, $"重排保留A/B/代次/隐藏选择与筛选; main={sameMain} ({ReferenceId(a)}:{a.Serial}->{ReferenceId(actualMain)}:{actualMain?.Serial}); current={sameCurrent} ({ReferenceId(b)}:{b.Serial}->{ReferenceId(actualCurrent)}:{actualCurrent?.Serial}); generation={sameGeneration} ({generation}->{actualGeneration}); hiddenSelection={sameHiddenSelection} (true->{hiddenSelected}); filter={sameFilter} (已连接->{actualFilter}); active={IsActive}; focus={InputIdentity(Keyboard.FocusedElement)}; capture={InputIdentity(Mouse.Captured)}");
             }
             Width = width; await Settle();
             RecordScroll("requested-width-restored-before-return");
             await Invoke(mainControlBack); await Settle();
             RecordScroll("after-ordinary-return-before-anchor-assert");
             Check(ReferenceEquals(wallGrid, gridIdentity) && ReferenceEquals(wallGrid.ItemsSource, sourceIdentity) && ReferenceEquals(wallMainPanel, panelIdentity), "返回保留同Grid/ItemsSource/主控对象");
-            Check(ReferenceEquals(ViewModel.MainDevice, a) && ReferenceEquals(ViewModel.CurrentDevice, b) && ViewModel.Runtime.Input.CurrentGeneration == generation, "返回保留MainA/CurrentB及输入代次");
+            var returnedMain = ViewModel.MainDevice; var returnedCurrent = ViewModel.CurrentDevice; var returnedGeneration = ViewModel.Runtime.Input.CurrentGeneration;
+            var sameReturnedMain = ReferenceEquals(returnedMain, a); var sameReturnedCurrent = ReferenceEquals(returnedCurrent, b); var sameReturnedGeneration = returnedGeneration == generation;
+            observations.Add(new { phase = phase + "-return-context", sameReturnedMain, sameReturnedCurrent, sameReturnedGeneration, expected = new { mainId = ReferenceId(a), mainSerial = a.Serial, currentId = ReferenceId(b), currentSerial = b.Serial, inputGeneration = generation, hiddenSelected = true, filter = "已连接" }, actual = new { mainId = ReferenceId(returnedMain), mainSerial = returnedMain?.Serial, currentId = ReferenceId(returnedCurrent), currentSerial = returnedCurrent?.Serial, inputGeneration = returnedGeneration, hiddenSelected = fixtureRows[0].IsSelected, filter = deviceStatusFilter, active = IsActive, focus = InputIdentity(Keyboard.FocusedElement), capture = InputIdentity(Mouse.Captured) } });
+            Check(sameReturnedMain && sameReturnedCurrent && sameReturnedGeneration, $"返回保留MainA/CurrentB及输入代次; main={sameReturnedMain} ({ReferenceId(a)}:{a.Serial}->{ReferenceId(returnedMain)}:{returnedMain?.Serial}); current={sameReturnedCurrent} ({ReferenceId(b)}:{b.Serial}->{ReferenceId(returnedCurrent)}:{returnedCurrent?.Serial}); generation={sameReturnedGeneration} ({generation}->{returnedGeneration}); hiddenSelection={fixtureRows[0].IsSelected}; filter={deviceStatusFilter}; active={IsActive}; focus={InputIdentity(Keyboard.FocusedElement)}; capture={InputIdentity(Mouse.Captured)}");
             DeviceProbeCheckAnchor(wallGrid, scroll, anchor, horizontal, vertical, Check);
             cast.IsExpanded = false; deviceStatusChoice.SelectedItem = "全部状态"; await Settle();
             for (var boundaryIndex = 0; boundaryIndex < 2; boundaryIndex++)
@@ -439,9 +495,13 @@ public partial class MainWindow
             }
             phase = "complete"; Check(fixtureInvocations == 0, "所有纯几何fixture动作始终未执行"); Save("final");
         }
-        catch (Exception ex) { failure = ex; }
+        catch (Exception ex) { failure = ex; Console.Error.WriteLine(ex); }
         finally
         {
+            Activated -= activatedObserver; Deactivated -= deactivatedObserver; SizeChanged -= sizeObserver; LocationChanged -= locationObserver; ViewModel.PropertyChanged -= viewModelObserver; wallGrid.SelectionChanged -= gridSelectionObserver; deviceStatusChoice.SelectionChanged -= filterSelectionObserver;
+            foreach (var watched in watchedDevices) watched.Row.PropertyChanged -= watched.Handler;
+            foreach (var watched in watchedFixtures) watched.Row.PropertyChanged -= watched.Handler;
+            observations.Add(new { phase = "context-event-timeline", eventCount = contextEventCount, retainedCount = contextEvents.Count, droppedCount = contextEventCount - contextEvents.Count, maximum = 128, events = contextEvents.ToArray(), observersRemovedBeforeStateRestoration = true });
             try
             {
                 if (inactiveWindow is not null) { inactiveWindow.Close(); inactiveWindow = null; }
@@ -464,11 +524,12 @@ public partial class MainWindow
             catch (Exception timerError) { failure = failure is null ? timerError : new AggregateException("验收与定时器恢复均失败", failure, timerError); }
             try { if (screenshot is not null) { Directory.CreateDirectory(Path.GetDirectoryName(screenshot)!); SaveRender(screenshot); } }
             catch (Exception screenshotError) { failure = failure is null ? screenshotError : new AggregateException("验收与最终截图均失败", failure, screenshotError); }
-            File.WriteAllText(Path.Combine(ViewModel.DataDirectory, "device-layout.json"), JsonSerializer.Serialize(new
+            try { File.WriteAllText(Path.Combine(ViewModel.DataDirectory, "device-layout.json"), JsonSerializer.Serialize(new
             {
                 status = failure is null ? "PASS-OFFLINE-WPF" : "FAIL", scope = "Isolated Demo, actual WPF controls and routed events; not physical clicks, Android, ADB wire, DPI or discovery proof",
                 width, height, actualWidth = ActualWidth, actualHeight = ActualHeight, phase, checks, observations, fixtureInvocations, error = failure?.ToString()
-            }, JsonDefaults.Options));
+            }, JsonDefaults.Options)); }
+            catch (Exception reportError) { Console.Error.WriteLine(reportError); failure = failure is null ? reportError : new AggregateException("验收与报告保存均失败", failure, reportError); }
         }
         if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
     }
