@@ -13570,9 +13570,12 @@ public partial class MainWindow
                         var visible = Rect.Intersect(DeviceProbeBounds(state.Window.screenshotImage, state.Window.Shell), DeviceProbeViewport(state.Window.Shell, scroll)); visible.Intersect(state.PageClip());
                         state.Check(!visible.IsEmpty && visible.Width > 2 && visible.Height > 2, "缩放后真实Image/SCP交集存在，不把低倍率假定100像素");
                         var shellPoint = new Point(visible.X + visible.Width / 2, visible.Y + visible.Height / 2); var canvasPoint = state.Window.Shell.TransformToDescendant(state.Window.screenshotCanvas).Transform(shellPoint); var requestedScreen = state.Window.screenshotCanvas.PointToScreen(canvasPoint);
+                        ObserveScreenshotPointer(state, "before-set", zoom, requestedScreen);
                         state.Check(SetAppearanceCursorPosition((int)Math.Round(requestedScreen.X), (int)Math.Round(requestedScreen.Y)), "自有HWND单次系统指针定位成功");
+                        ObserveScreenshotPointer(state, "after-set", zoom, requestedScreen);
                         var watch = System.Diagnostics.Stopwatch.StartNew(); var pointerKnown = false; AppearancePointer actual = default; Point local = default;
                         do { await state.Window.Dispatcher.InvokeAsync(Mouse.Synchronize, System.Windows.Threading.DispatcherPriority.Input); await state.Window.Dispatcher.InvokeAsync(state.Window.UpdateLayout, System.Windows.Threading.DispatcherPriority.Render); pointerKnown = GetAppearanceCursorPosition(out actual); local = Mouse.GetPosition(state.Window.screenshotCanvas); if (pointerKnown && Math.Abs(actual.X - Math.Round(requestedScreen.X)) <= 1 && Math.Abs(actual.Y - Math.Round(requestedScreen.Y)) <= 1 && (local - canvasPoint).Length <= 1.5 / zoom) break; await Task.Delay(30); } while (watch.Elapsed < TimeSpan.FromMilliseconds(600));
+                        ObserveScreenshotPointer(state, "after-loop", zoom, requestedScreen);
                         var actualShell = state.Window.screenshotCanvas.TransformToAncestor(state.Window.Shell).Transform(local); var hit = state.Window.Shell.InputHitTest(actualShell) as UIElement;
                         var owned = hit is not null && (ReferenceEquals(hit, state.Window.screenshotImage) || state.Window.screenshotImage.IsAncestorOf(hit));
                         state.Observe("coordinate-position", new { zoom, canvasPoint.X, canvasPoint.Y, requestedScreen, pointerKnown, actualScreen = new { actual.X, actual.Y }, actualLocal = local, actualShell, owned, hitType = hit?.GetType().Name, visible = ShotCase.Finite(visible), waitMilliseconds = watch.ElapsedMilliseconds, singlePositionAttempt = true, state.Window.IsActive });
@@ -13609,6 +13612,52 @@ public partial class MainWindow
             finally { if (state is not null) { try { await state.Cleanup(); cleaned = true; } catch (Exception cleanupError) { error = error is null ? cleanupError : new AggregateException(error, cleanupError); } } reports.Add(new { name, status = error is null ? "PASS" : "FAIL", cleaned, checks = state?.Checks.ToArray(), observations = state?.Observations.ToArray(), calls = state?.Backend.Calls(), error = error?.ToString() }); }
             if (error is not null) { failures.Add(new InvalidOperationException(name, error)); if (!cleaned) ExceptionDispatchInfo.Capture(error).Throw(); }
         }
+    }
+
+    private static void ObserveScreenshotPointer(ShotCase state, string phase, double zoom, Point requestedScreen)
+    {
+        try
+        {
+            var window = state.Window; var canvas = window.screenshotCanvas; var shell = window.Shell;
+            var fields = new Dictionary<string, object?> { ["phase"] = phase, ["zoom"] = zoom, ["observedAt"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture) };
+            void Read(string name, Func<object?> read) { try { fields[name] = read(); } catch (Exception error) { fields[name + "Error"] = new { type = error.GetType().FullName, error.Message }; } }
+            static object Position(Point value) => new { x = double.IsFinite(value.X) ? (double?)value.X : null, y = double.IsFinite(value.Y) ? (double?)value.Y : null, finite = double.IsFinite(value.X) && double.IsFinite(value.Y) };
+            static object? Identity(object? value) => value is null ? null : new { type = value.GetType().FullName, id = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(value) };
+            Point? os = null, mouse = null; PresentationSource? active = null, target = null;
+            Read("requestedScreen", () => Position(requestedScreen));
+            Read("cursorBefore", () => { var succeeded = GetAppearanceCursorPosition(out var value); if (succeeded) os = new Point(value.X, value.Y); return new { succeeded, x = succeeded ? (int?)value.X : null, y = succeeded ? (int?)value.Y : null }; });
+            Read("requestedShell", () => Position(shell.PointFromScreen(requestedScreen)));
+            Read("requestedCanvas", () => Position(canvas.PointFromScreen(requestedScreen)));
+            Read("requestedHit", () => Identity(shell.InputHitTest(shell.PointFromScreen(requestedScreen))));
+            Read("osShell", () => os is Point value ? Position(shell.PointFromScreen(value)) : null);
+            Read("osCanvas", () => os is Point value ? Position(canvas.PointFromScreen(value)) : null);
+            Read("osHit", () => os is Point value ? Identity(shell.InputHitTest(shell.PointFromScreen(value))) : null);
+            Read("mouseCanvas", () => { mouse = Mouse.GetPosition(canvas); return Position(mouse.Value); });
+            Read("mouseScreen", () => mouse is Point value ? Position(canvas.PointToScreen(value)) : null);
+            Read("mouseShell", () => Position(Mouse.GetPosition(shell)));
+            Read("activeSource", () => { active = Mouse.PrimaryDevice.ActiveSource; return active?.GetType().FullName; });
+            Read("activeSourceId", () => active is null ? (int?)null : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(active));
+            Read("activeHwnd", () => (active as HwndSource)?.Handle.ToInt64());
+            Read("activeRoot", () => Identity(active?.RootVisual));
+            Read("targetSource", () => { target = PresentationSource.FromVisual(canvas); return target?.GetType().FullName; });
+            Read("targetSourceId", () => target is null ? (int?)null : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(target));
+            Read("targetHwnd", () => (target as HwndSource)?.Handle.ToInt64());
+            Read("targetRoot", () => Identity(target?.RootVisual));
+            Read("sameSource", () => active is not null && ReferenceEquals(active, target));
+            Read("captured", () => Identity(Mouse.Captured));
+            Read("directlyOver", () => Identity(Mouse.DirectlyOver));
+            Read("focused", () => Identity(Keyboard.FocusedElement));
+            Read("windowHwnd", () => new WindowInteropHelper(window).Handle.ToInt64());
+            Read("isActive", () => window.IsActive);
+            Read("isLoaded", () => window.IsLoaded);
+            Read("isVisible", () => window.IsVisible);
+            Read("windowState", () => window.WindowState.ToString());
+            Read("keyboardWithin", () => window.IsKeyboardFocusWithin);
+            Read("cursorAfter", () => { var succeeded = GetAppearanceCursorPosition(out var value); return new { succeeded, x = succeeded ? (int?)value.X : null, y = succeeded ? (int?)value.Y : null }; });
+            fields["completedAt"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+            state.Observations.Add(new { stage = "coordinate-pointer-diagnostic", detail = fields });
+        }
+        catch (Exception error) { try { state.Observations.Add(new { stage = "coordinate-pointer-diagnostic-error", phase, type = error.GetType().FullName, error.Message }); } catch (Exception) { } }
     }
 
     private sealed class ShotCase

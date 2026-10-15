@@ -130,6 +130,8 @@ Automator 默认 `http://127.0.0.1:17171/`，路径允许 `/api/` 前缀。所�
 
 `tools/Build.ps1 -Verify` 构建六个项目并运行全部验证。`--smoke --screenshot ABSOLUTE_PATH` 自动使用 demo 渲染各页面后退出；真实设备验收步骤见 `docs/VERIFICATION.md`。文档逐项覆盖见 `docs/COVERAGE.md`，缺失/矛盾处理见 `docs/ASSUMPTIONS.md`。
 
+截屏输入验收保留原定位与命中断言，新增有限OS/WPF坐标和输入源诊断。本轮独立正式150项通过，但完整GUI在输入前置失败；三个快照已确认活动鼠标源缺失，成因未定，不是坐标算法或实机修复通过。原始失败、采样范围及未执行项见[输入诊断报告](docs/codex/apple-experience/AP033_INPUT_DIAGNOSTICS.md)。
+
 本轮计划与实机日志见[测试计划](plan.md)、[阶段记录](docs/testing/TEST_LOG.md)、[缺陷账本](docs/testing/DEFECTS.md)。原始截图/节点/响应位于私有artifacts/acceptance，不进入公开源码包；离线、实机、拒绝路径和未实现能力分别标记。
 
 历史单实例验收结论见[独立实例报告](docs/testing/REPORT.md)，本轮多实例结论以[专项报告](docs/testing/multi-instance/REPORT.md)为准。本机可双击`tools/Start-VerifiedDesktop.cmd`或在PowerShell 7运行对应`.ps1`，使用保留的测试实例1及本机独立配置；不调用原实例0。源码包不分发该授权配置，换电脑须显式重新确认。

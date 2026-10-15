@@ -20,6 +20,18 @@ A02主仓149/149（51.17秒）和最终1000×700界面通过；独立verifier149
 
 ## 当前状态与下一步
 
+### 最新执行：AP-033诊断采证完成，成因仍开放
+
+上一轮已实际commit/push `ab11ec94fe6b7ab139a922ac346850ed7c292501`，feature远端相同、test仍49e4710；`artifacts/app-identity-root/push-complete-r1.json`记录16文件限域交付、304源/307ZIP/156Bundle、配置E4E33与owned0。主仓tracked/index干净，两用户PNG保留；上一目标轮为progress，不重做已完成交付。
+
+当前轻规格及完整结果见[AP033_INPUT_DIAGNOSTICS](AP033_INPUT_DIAGNOSTICS.md)。两新树均ab11，唯一旧测试49+（70DF/patch0315）经双静审，原266行/定位/同步/loop/等待/断言恢复一致，无新PInvoke或生产变更。基线48E0/runner650524固定；独立p01 session61127已terminal，Build51736 exit0/77.536秒，150/54.33秒/0警告错误；Smoke16172 exit1/33.665秒。原RL19/CC18过，SL9PASS1前置FAIL/10清理，Main346先败，其后节点/自动/发布/A07与旧应用/12页NOT-RUN，无重试。raw/五次127源前后/旧fixture/config E4E33同，owned0/无kill/清理错，锁已归root空闲。
+
+三快照仅zoom0.1，均ActiveSource/Captured/DirectlyOver=null、目标HwndSource有效且同window、焦点/可见/激活true，WPF回转屏幕(0,0)；after-set OS911573直接转Canvas800450/命中Image，after-loop OS325352、原loop采330355，两采样非同一时刻。观测确认本轮输入源缺失与OS后移，成因未知；不归因用户、不改坐标、不抢焦点/追加同步或盲重跑。输入源观测有时序开销，后续PASS也不证明根因已修。SL983927...682D7，acceptanceA8C976...69FC，原失败保留。
+
+非实现者批准诊断增强限域交付条件：root核全编译输入并明确未重跑。root现仅机械copy同70DF单源，src/tools/tests diff49+；143输入=127+12tests含lock+4根配置，59raw同/84仅换行、normalized全同，proof430F1F...543C7。初142计数预检在Copy前拒绝，原记录保留；root本轮未Build/GUI，不冒称root新150。正式交付含测试源、README/五状态文档/AP033报告和三清单，实际commit/远端以Git及artifacts/pointer-root记录为准，原两PNG/配置/raw不stage，不合并发布。
+
+下一步A07b优先实际复现AP-034：脚本/稳定Push跨真实timer tick可能清pending、API无释放事件、小屏固定栏目前均是未实测候选；自身running暂无普通UI反例，不强行造红。后续轻规格/12例矩阵见AP033末节及只读agent结果；旧套已经有输入前置缺口，不以盲全smoke替代专项。完整A07/API/布局/原生保存/A08-A12/实机与30分钟全goal仍开放。
+
 ### 最新执行：A07a已获限域独审，主仓GUI前置缺口保留
 
 本段优先于下方全部旧即时状态。r1只改ApplicationsView/ApplicationRows，原合法改名三红后独立f02正式150/51.58秒、0警告错误，新10/114检查/10清理，旧六19/18/10/11/16/49、旧应用smoke及12页完整通过。f01截屏坐标首败不倒填；r0b只将新hook移回自然应用阶段，Main5864、新fixture03FD、生产9941/F57冻结，原七夹具不动。详见[A07报告](A07_APPLICATION_IDENTITY.md)。

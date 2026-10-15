@@ -24,6 +24,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- A06_SCREENSHOT_RESPONSIVE.md
 |   |   |   |-- A07_APPLICATION_IDENTITY.md
 |   |   |   |-- AP008_DEPENDENCIES.md
+|   |   |   |-- AP033_INPUT_DIAGNOSTICS.md
 |   |   |   |-- CONTROL_CATALOG.md
 |   |   |   |-- DEFECTS.md
 |   |   |   |-- HANDOFF.md

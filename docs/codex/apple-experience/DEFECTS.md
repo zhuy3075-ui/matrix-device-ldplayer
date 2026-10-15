@@ -41,7 +41,8 @@
 | AP-030 | P1/原生保存源码候选，尚未复现 | SaveImageAsync在原生框返回后才取crop/图；合法新帧会清crop，存在裁剪退化新全图候选，但首次实际输入未到 | [A06d](A06_NATIVE_IMAGE_SAVE.md)保留r0；不能把工具捕获超时当产品红。恢复实际交互后取证原图/裁剪保存意图，再实施，不默认取消合法保存 |
 | AP-031 | P1/测试工具前置故障，非产品缺陷 | sky两次自有WPF窗口capture timeout，已按一次恢复规则停止；真实crop/保存Click0，fixture90秒前置超时后正常清理 | 原FAIL/清理/127源与配置证据见同报告。单独helper只读诊断不能代替原生验收；不改生产渲染、共享服务或权限来凑通过。其他页面安全工作继续 |
 | AP-032 | P1/已独立离线修复，主仓完整GUI仍有限制 | 应用页把显示名称纳入连接身份；metadata仅改名后旧应用名称不更新、启停/确认/在途List误拒绝 | [A07a](A07_APPLICATION_IDENTITY.md)原10例3红保留；r1两生产文件后独立新10/114检查及完整旧套/12页通过，四源raw同主仓、127源逻辑同，主仓150通过。root-r02在新hook前旧截屏前置失败，新10当轮NOT-RUN；限域交付已获独审，AP-033不冒称已修。在线、Runtime、明确选择和活动门禁未放宽 |
-| AP-033 | P2/旧截屏输入前置可靠性缺口，根因未定 | A07a独立f01与主仓r02在旧coordinate-route的OS/WPF/原Image命中前置失败，尚未RaiseEvent；r02发生在新应用夹具调用前，实际OS也偏离请求 | [A07a](A07_APPLICATION_IDENTITY.md)保留两FAIL，f02受控隔离新轮通过不倒填根因；不归咎用户、不弱化断言或抢焦点取绿。新应用独立结果与主仓NOT-RUN分列。下一步只读采样输入源/捕获/真实前台与窗口生命周期，不与AP-028或其它焦点候选未经证据合并 |
+| AP-033 | P2/本轮输入源缺失已取证，成因仍未知 | 旧coordinate-route在RaiseEvent前失败；[诊断p01](AP033_INPUT_DIAGNOSTICS.md)三快照均ActiveSource/Captured/DirectlyOver=null、目标源有效；after-set OS和直接映射命中Image，之后OS移动、WPF仍屏幕零点 | 独立150通过，完整GUI仍FAIL，旧19/18过、截屏9PASS1FAIL/10清理，其后含A07和12页NOT-RUN。49+仅日志不变旧断言；143编译输入已核，root不再运行。不归因操作者、不做坐标生产修复、不并同AP-028，不把诊断采证当根因已解 |
+| AP-034 | P1/应用自动读取源码候选，未运行 | pending在CanManage之前清除，脚本/稳定传输跨真实timer后可能丢读取意图；API计数又无结束通知 | 下一A07b用实际应用勾选/350ms tick、真实ScriptScheduler与Push TCS先取证；API通知生命周期和小屏正文另验。自身running暂无普通UI反例，不修改禁用控件伪造产品红；保留身份/活动门禁，不轮询取绿 |
 
 ## 修复记录规则
 
