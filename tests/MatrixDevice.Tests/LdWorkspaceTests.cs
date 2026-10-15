@@ -13,6 +13,7 @@ public static class LdWorkspaceTests
         test("LD workspace launch timeout never retries or starts later instances", LaunchTimeoutAsync);
         test("LD workspace launch cancellation leaves launched instances alone", LaunchCancellationAsync);
         test("LD workspace launch resource rejection stops the remaining batch", ResourceRejectionAsync);
+        test("LD workspace launch resource cancellation stops the remaining batch without closing guests", ResourceCancellationAsync);
         test("LD workspace launch rejects changed generations after the resource callback", ResourceGenerationAsync);
         test("LD workspace launch rejects changed instance identity while waiting", LaunchIdentityAsync);
         test("LD workspace coordinator serializes overlapping batches", OverlappingBatchesAsync);
@@ -45,9 +46,17 @@ public static class LdWorkspaceTests
             if (index == 2) Assert(runner.Instances.Single(item => item.Index == 1).Flag == 1, "Second instance started before the first was ready.");
         };
         await using var service = new LdPlayerService(runner);
-        var resources = 0; var progress = new RecordingProgress();
-        var result = await Coordinator(service).StartAsync([1, 2], _ => { resources++; return Task.CompletedTask; }, progress);
+        var resources = 0; var checkedIndices = new List<int>(); var progress = new RecordingProgress();
+        var result = await Coordinator(service).StartAsync([1, 2], (instance, ct) =>
+        {
+            ct.ThrowIfCancellationRequested();
+            checkedIndices.Add(instance.Index); resources++;
+            Assert(instance.ProcessId <= 0 && instance.VBoxProcessId <= 0, "Resource check did not receive the stopped target snapshot.");
+            Assert(instance.Index == 1 || runner.Instances.Single(item => item.Index == 1).Flag == 1, "Next resource check ran before the previous instance was ready.");
+            return Task.CompletedTask;
+        }, progress);
         Assert(resources == 2 && runner.Count("launch") == 2, "Launch or resource checks were skipped or repeated.");
+        Assert(checkedIndices.SequenceEqual([1, 2]), "Resource estimates were not associated with each target instance.");
         Assert(result.Select(item => item.Index).SequenceEqual([1, 2]) && result.All(item => item.State == "ready"), "Sequential results were incomplete.");
         Assert(progress.Items.Any(item => item.State == "waiting") && result.All(item => item.Message.Contains("ADB", StringComparison.Ordinal)), "Progress incorrectly claimed guest readiness.");
         Assert(!runner.Calls.Any(call => call.Contains("0") || call[0] is "adb" or "quit" or "quitall"), "Batch touched protected or global operations.");
@@ -101,7 +110,7 @@ public static class LdWorkspaceTests
         runner.Instances[0] = new(1, "A", 1, 101, 201);
         runner.Instances.Add(new(2, "B", 2, 102, -1) { BootReads = 3 });
         await using var service = new LdPlayerService(runner);
-        var result = await Coordinator(service).StartAsync([1, 2], _ => throw new InvalidOperationException("Existing processes must not reserve another launch."));
+        var result = await Coordinator(service).StartAsync([1, 2], (instance, ct) => throw new InvalidOperationException("Existing processes must not reserve another launch."));
         Assert(result[0].State == "skipped" && result[1].State == "ready" && runner.Count("launch") == 0, "Existing processes were relaunched or marked ready too early.");
         var zeroPid = new FakeConsole(); zeroPid.Instances[0] = new(1, "A", 2) { BootReads = 3 };
         await using var zeroPidService = new LdPlayerService(zeroPid);
@@ -138,6 +147,28 @@ public static class LdWorkspaceTests
         var resources = 0;
         await Expect(503, () => Coordinator(service).StartAsync([1, 2], _ => ++resources == 1 ? Task.CompletedTask : throw new DeviceException("reserve rejected", 503, 2000)));
         Assert(resources == 2 && runner.Count("launch") == 1 && runner.Count("quit") == 0, "Resource rejection did not stop after the first ready instance.");
+    }
+
+    private static async Task ResourceCancellationAsync()
+    {
+        var runner = new FakeConsole(); runner.Instances.Add(new(2, "B")); runner.Instances.Add(new(3, "C"));
+        await using var service = new LdPlayerService(runner);
+        using var cancellation = new CancellationTokenSource();
+        var checkedIndices = new List<int>();
+        try
+        {
+            await Coordinator(service).StartAsync([1, 2, 3], (instance, ct) =>
+            {
+                checkedIndices.Add(instance.Index);
+                if (instance.Index == 2) cancellation.Cancel();
+                ct.ThrowIfCancellationRequested();
+                return Task.CompletedTask;
+            }, ct: cancellation.Token);
+            throw new InvalidOperationException("Resource warning cancellation was ignored.");
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        Assert(checkedIndices.SequenceEqual([1, 2]) && runner.Count("launch") == 1 && runner.Count("quit") == 0,
+            "Declined resource warning started the declined or later instance, or closed an already started instance.");
     }
 
     private static async Task LaunchIdentityAsync()

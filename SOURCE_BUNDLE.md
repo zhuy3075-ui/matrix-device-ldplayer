@@ -1131,6 +1131,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
@@ -1148,8 +1149,14 @@ public sealed class AdbDeviceBackend : IDeviceBackend
     private readonly ConcurrentDictionary<string, PhoneAgentClient> _agents = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Func<string, CancellationToken, Task>> _unicodeInputs = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Func<CancellationToken, Task>> _identityGuards = new(StringComparer.Ordinal);
+    private readonly object _videoGate = new();
+    private readonly CancellationTokenSource _videoShutdown = new();
+    private readonly Dictionary<string, TaskCompletionSource> _videoLeases = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _blockedVideos = new(StringComparer.Ordinal);
     public const int MaximumStdoutBytes = 32 * 1024 * 1024;
     public const int MaximumStderrBytes = 1024 * 1024;
+    public const string MonitorServerVersion = "3.3.4";
+    public const string MonitorServerSha256 = "8588238c9a5a00aa542906b6ec7e6d5541d9ffb9b5d0f6e1bc0e365e2303079e";
     private int _disposed;
     public AdbDeviceBackend(AppSettings settings, IPEndPoint? serverEndpoint = null)
     {
@@ -1208,6 +1215,10 @@ public sealed class AdbDeviceBackend : IDeviceBackend
     public async Task<IReadOnlyList<AdbRegisteredDevice>> ListRegisteredDevicesAsync(CancellationToken ct = default)
     {
         var output = Decode(await ExecuteAsync(null, ["devices", "-l"], ct).ConfigureAwait(false));
+        return ParseRegisteredDevices(output);
+    }
+    private static IReadOnlyList<AdbRegisteredDevice> ParseRegisteredDevices(string output)
+    {
         var devices = new List<AdbRegisteredDevice>();
         foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
@@ -1462,6 +1473,114 @@ public sealed class AdbDeviceBackend : IDeviceBackend
         return RunDeviceAsync(serial, token => agent.SetNodeTextAsync(selector, text, token), ct);
     }
 
+    public async Task StreamScreenVideoAsync(string serial, int width, int height, Stream output, CancellationToken ct = default)
+    {
+        AuthorizeSerial(serial);
+        ArgumentNullException.ThrowIfNull(output);
+        if (!output.CanWrite) throw new ArgumentException("Video output must be writable.", nameof(output));
+        if (width is < 16 or > 1920 || height is < 16 or > 1920 || width % 2 != 0 || height % 2 != 0 || (long)width * height > 2073600)
+            throw new DeviceException($"Invalid video dimensions: {width}x{height}; require even dimensions 16..1920 and at most 2073600 pixels.", 400, 1007);
+        if (!_identityGuards.TryGetValue(serial, out var verify)) throw new DeviceException($"Video requires an explicitly bound device identity: serial={serial}.", 403, 1003);
+        var expected = _transport.CurrentTransport(serial) ?? throw new DeviceException($"ADB transport has not been discovered: {serial}; refresh devices first.", 503, 2000);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationTokenSource running;
+        lock (_videoGate)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            if (_blockedVideos.TryGetValue(serial, out var reason)) throw new DeviceException(reason, 409, 1003);
+            if (!_videoLeases.TryAdd(serial, finished)) throw new DeviceException($"A video stream is already active: serial={serial}.", 409, 1003);
+            running = CancellationTokenSource.CreateLinkedTokenSource(ct, _videoShutdown.Token);
+        }
+        var scid = RandomNumberGenerator.GetInt32(1, int.MaxValue).ToString("x8", CultureInfo.InvariantCulture);
+        var remoteServer = "/data/local/tmp/matrix-scrcpy-" + Guid.NewGuid().ToString("N") + ".jar";
+        var uploaded = false;
+        Exception? failure = null;
+        try
+        {
+            await VerifyVideoIdentityAsync(serial, expected, verify, running.Token).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(_settings.MonitorServerPath) || !File.Exists(_settings.MonitorServerPath))
+                throw new DeviceException("官方视频服务组件未配置或不存在；请配置经过校验的 scrcpy-server 3.3.4。", 501, 2001);
+            // Keep a read-only file handle open through push so the validated artifact cannot be replaced mid-upload.
+            using (var artifact = File.OpenRead(_settings.MonitorServerPath))
+            {
+                var digest = Convert.ToHexString(await SHA256.HashDataAsync(artifact, running.Token).ConfigureAwait(false));
+                if (!digest.Equals(MonitorServerSha256, StringComparison.OrdinalIgnoreCase))
+                    throw new DeviceException($"视频服务组件 SHA256 不匹配：expected={MonitorServerSha256}, actual={digest}。", 403, 1007);
+                uploaded = true;
+                await _transport.RunPinnedAsync(serial, expected, token => _transport.ExecuteAsync(serial, ["push", Path.GetFullPath(_settings.MonitorServerPath), remoteServer], token), running.Token).ConfigureAwait(false);
+            }
+            await VerifyVideoIdentityAsync(serial, expected, verify, running.Token).ConfigureAwait(false);
+            var watch = WatchVideoIdentityAsync(serial, expected, verify, running.Token);
+            var stream = _transport.StreamScreenVideoAsync(serial, expected, remoteServer, scid, Math.Max(width, height), output,
+                token => VerifyVideoIdentityAsync(serial, expected, verify, token, allowDisposed: true), running.Token);
+            try
+            {
+                var completed = await Task.WhenAny(watch, stream).ConfigureAwait(false);
+                await completed.ConfigureAwait(false);
+                if (watch.IsFaulted) await watch.ConfigureAwait(false);
+            }
+            finally
+            {
+                await running.CancelAsync().ConfigureAwait(false);
+                try { await Task.WhenAll(watch, stream).ConfigureAwait(false); }
+                catch
+                {
+                    var cleanupError = stream.Exception?.GetBaseException();
+                    if (cleanupError?.Data.Contains("VideoCleanupUnconfirmed") == true)
+                    {
+                        lock (_videoGate) _blockedVideos[serial] = cleanupError.Message;
+                        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cleanupError).Throw();
+                    }
+                }
+            }
+        }
+        catch (Exception ex) { failure = ex; throw; }
+        finally
+        {
+            bool blocked;
+            lock (_videoGate) blocked = _blockedVideos.ContainsKey(serial);
+            if (uploaded && !blocked)
+            {
+                try
+                {
+                    using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                    await VerifyVideoIdentityAsync(serial, expected, verify, cleanup.Token, allowDisposed: true).ConfigureAwait(false);
+                    await _transport.RunPinnedAsync(serial, expected, token => _transport.ExecuteAsync(serial, ["shell", "rm -f " + Quote(remoteServer)], token), cleanup.Token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is DeviceException or IOException or OperationCanceledException or ObjectDisposedException)
+                {
+                    if (failure is not null) failure.Data["VideoServerFileCleanupError"] = ex.Message;
+                    else failure = ex;
+                }
+            }
+            lock (_videoGate) _videoLeases.Remove(serial);
+            running.Dispose();
+            finished.TrySetResult();
+        }
+    }
+
+    private async Task VerifyVideoIdentityAsync(string serial, uint expected, Func<CancellationToken, Task> verify, CancellationToken ct, bool allowDisposed = false)
+    {
+        _transport.RequireTransport(serial, expected);
+        await verify(ct).ConfigureAwait(false);
+        var rows = allowDisposed
+            ? ParseRegisteredDevices(Decode(await _transport.ExecuteAsync(null, ["devices", "-l"], ct).ConfigureAwait(false)))
+            : await ListRegisteredDevicesAsync(ct).ConfigureAwait(false);
+        var matches = rows.Where(row => row.Serial == serial).ToArray();
+        if (matches.Length != 1 || matches[0].State != "device" || matches[0].TransportId != expected)
+            throw new DeviceException($"Video device identity or transport changed: serial={serial}, expected={expected}.", 409, 1003);
+        _transport.RequireTransport(serial, expected);
+    }
+
+    private async Task WatchVideoIdentityAsync(string serial, uint expected, Func<CancellationToken, Task> verify, CancellationToken ct)
+    {
+        while (true)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+            await VerifyVideoIdentityAsync(serial, expected, verify, ct).ConfigureAwait(false);
+        }
+    }
+
     private Task CommandAsync(string serial, string command, CancellationToken ct) => RunDeviceAsync(serial, async token => { await ExecuteAsync(serial, ["shell", command], token); }, ct);
     private Task<T> RunDeviceAsync<T>(string serial, Func<CancellationToken, Task<T>> action, CancellationToken ct)
     {
@@ -1493,7 +1612,20 @@ public sealed class AdbDeviceBackend : IDeviceBackend
     private static void ValidatePackage(string value) { if (value != "android" && !Regex.IsMatch(value ?? "", @"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")) throw new DeviceException($"Invalid package name: {value}.", 400, 1007); }
     private static void ValidateLocalFile(string path) { if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) throw new DeviceException($"Local file does not exist: {path}.", 400, 1007); }
     private static void ValidateRemotePath(string path) { if (string.IsNullOrWhiteSpace(path) || !path.StartsWith('/') || path.Contains('\0') || path.Contains('\n')) throw new DeviceException($"Invalid absolute Android path: {path}.", 400, 1007); }
-    public async ValueTask DisposeAsync() { if (Interlocked.Exchange(ref _disposed, 1) != 0) return; await _queue.DisposeAsync(); foreach (var agent in _agents.Values) await agent.DisposeAsync(); }
+    public async ValueTask DisposeAsync()
+    {
+        Task[] videos;
+        lock (_videoGate)
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            videos = _videoLeases.Values.Select(lease => lease.Task).ToArray();
+        }
+        await _videoShutdown.CancelAsync().ConfigureAwait(false);
+        await Task.WhenAll(videos).ConfigureAwait(false);
+        _videoShutdown.Dispose();
+        await _queue.DisposeAsync();
+        foreach (var agent in _agents.Values) await agent.DisposeAsync();
+    }
 }
 
 public sealed record AdbRegisteredDevice(string Serial, string State, uint? TransportId);
@@ -2087,6 +2219,252 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
         catch (Exception ex) when (ex.GetBaseException() is SocketException or IOException or AdbException or ObjectDisposedException)
         {
             throw new DeviceException($"Existing ADB server request failed: serial={serial ?? "host"}, operation={args[0]}: {ex.Message}", 503, 2000);
+        }
+    }
+
+    public async Task StreamScreenVideoAsync(string serial, uint expectedTransport, string remoteServer, string scid, int maximumSize, Stream output, Func<CancellationToken, Task> verifyIdentity, CancellationToken ct)
+    {
+        if (!allowedSerials.Contains(serial)) throw new DeviceException($"ADB serial is not authorized: {serial}.", 403, 1007);
+        try
+        {
+            RequireTransport(serial, expectedTransport);
+            await CheckVersionAsync(ct).ConfigureAwait(false);
+            using var shell = await OpenVerifiedAsync(ct).ConfigureAwait(false);
+            using var serverStop = new CancellationTokenSource();
+            using var shellCancellation = serverStop.Token.Register(shell.Dispose);
+            var device = new DeviceData { Serial = serial, TransportId = expectedTransport.ToString(CultureInfo.InvariantCulture) };
+            await shell.SetDeviceAsync(device, ct).ConfigureAwait(false);
+            var nonce = Guid.NewGuid().ToString("N");
+            var marker = "MATRIX_VIDEO_" + nonce + ":";
+            var command = FormattableString.Invariant($"printf '{marker}%s\\n' $$; cat /proc/$$/stat; CLASSPATH={remoteServer} exec app_process -Dmatrix.video.session={nonce} / com.genymobile.scrcpy.Server 3.3.4 scid={scid} tunnel_forward=true video=true audio=false control=false raw_stream=true cleanup=false video_codec=h264 max_size={maximumSize} max_fps=10 video_bit_rate=1000000 power_on=false clipboard_autosync=false power_off_on_close=false");
+            using var shellStream = shell.Socket.GetStream();
+            var log = new VideoServerLog(marker);
+            Task<int>? server = null;
+            ExistingAdbSocket? video = null;
+            Task? copy = null;
+            var startRequestIssued = false;
+            using var copying = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                // Once any start-request byte may reach adbd, cancellation needs proven cleanup or a blocked lease.
+                startRequestIssued = true;
+                await shell.SendAdbRequestAsync("shell,v2,raw:" + command, ct).ConfigureAwait(false);
+                await shell.ReadAdbResponseAsync(ct).ConfigureAwait(false);
+                await shell.SendAsync(new byte[] { 4, 0, 0, 0, 0 }, ct).ConfigureAwait(false);
+                server = ReadVideoServerAsync(shellStream, log, serverStop.Token);
+                using var startup = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                startup.CancelAfter(TimeSpan.FromSeconds(10));
+                while (video is null)
+                {
+                    startup.Token.ThrowIfCancellationRequested();
+                    if (server.IsCompleted) throw new DeviceException($"Video server exited before opening its socket: serial={serial}, {log.Snapshot}", 501, 2001);
+                    RequireTransport(serial, expectedTransport);
+                    var candidate = await OpenVerifiedAsync(startup.Token).ConfigureAwait(false);
+                    try
+                    {
+                        await candidate.SetDeviceAsync(device, startup.Token).ConfigureAwait(false);
+                        await candidate.SendAdbRequestAsync("localabstract:scrcpy_" + scid, startup.Token).ConfigureAwait(false);
+                        await candidate.ReadAdbResponseAsync(startup.Token).ConfigureAwait(false);
+                        video = candidate;
+                    }
+                    catch (AdbException ex) when (IsSocketNotReady(ex))
+                    {
+                        candidate.Dispose();
+                        await Task.Delay(100, startup.Token).ConfigureAwait(false);
+                    }
+                    catch { candidate.Dispose(); throw; }
+                }
+                using var cancellation = copying.Token.Register(video.Dispose);
+                using var stream = video.Socket.GetStream();
+                copy = CopyH264Async(stream, output, copying.Token);
+                await AwaitVideoCompletionAsync(copy, server, serial, () => log.Snapshot, ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                await copying.CancelAsync().ConfigureAwait(false);
+                video?.Dispose();
+                if (copy is not null)
+                {
+                    try { await copy.ConfigureAwait(false); }
+                    catch (Exception) { /* The main copy await preserves its failure; server cleanup must always run. */ }
+                }
+                try
+                {
+                    if (server is null && startRequestIssued)
+                    {
+                        var unconfirmed = new DeviceException($"视频启动握手未完成，无法确认本次服务是否已启动；已禁止本实例继续叠加会话：serial={serial}, jar={remoteServer}。", 409, 1003);
+                        unconfirmed.Data["VideoCleanupUnconfirmed"] = true;
+                        throw unconfirmed;
+                    }
+                    // First let normal socket disconnection terminate the encoder. Kill only a proven owned PID if it stalls.
+                    try { if (server is not null) await server.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
+                    catch (Exception ex) when (ex is IOException or OperationCanceledException or TimeoutException)
+                    {
+                        try { await StopOwnedVideoServerAsync(serial, expectedTransport, scid, nonce, log, verifyIdentity).ConfigureAwait(false); }
+                        catch (Exception cleanupError)
+                        {
+                            var unconfirmed = new DeviceException($"视频服务退出清理未确认，已禁止本实例继续叠加会话：serial={serial}, jar={remoteServer}: {cleanupError.Message}", 409, 1003);
+                            unconfirmed.Data["VideoCleanupUnconfirmed"] = true;
+                            throw unconfirmed;
+                        }
+                    }
+                }
+                finally
+                {
+                    await serverStop.CancelAsync().ConfigureAwait(false);
+                    try { if (server is not null) await server.ConfigureAwait(false); }
+                    catch (Exception ex) when (serverStop.IsCancellationRequested && ex is IOException or OperationCanceledException or ObjectDisposedException) { }
+                }
+            }
+        }
+        catch (Exception ex) when (ct.IsCancellationRequested && ex is not DeviceException) { throw new OperationCanceledException(ct); }
+        catch (Exception ex) when (ex.GetBaseException() is SocketException or IOException or AdbException or ObjectDisposedException)
+        {
+            throw new DeviceException($"Existing ADB video stream failed: serial={serial}: {ex.Message}", 503, 2000);
+        }
+    }
+
+    internal static async Task AwaitVideoCompletionAsync(Task copy, Task<int> server, string serial, Func<string> readLog, CancellationToken ct)
+    {
+        var completed = await Task.WhenAny(copy, server).ConfigureAwait(false);
+        if (completed == server)
+        {
+            var code = await server.ConfigureAwait(false);
+            if (code == 0) ct.ThrowIfCancellationRequested();
+            throw new DeviceException($"Video server exited: serial={serial}, code={code}, {readLog()}", 503, 2000);
+        }
+        await copy.ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        throw new DeviceException($"Video connection closed: serial={serial}, {readLog()}", 503, 2000);
+    }
+
+    private async Task StopOwnedVideoServerAsync(string serial, uint transport, string scid, string nonce, VideoServerLog log, Func<CancellationToken, Task> verifyIdentity)
+    {
+        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var ct = cleanup.Token;
+        if (log.Identity is not { } identity) throw new DeviceException($"视频服务退出未确认，未获得本次进程出生证明；请停止重连并检查实例：serial={serial}。", 409, 1003);
+        await verifyIdentity(ct).ConfigureAwait(false);
+        await RunPinnedAsync(serial, transport, async token =>
+        {
+            var snapshot = await ExecuteOwnedProcessCommandAsync(serial, identity.ProcessId,
+                $"cat /proc/{identity.ProcessId}/stat && printf '\\n' && cat /proc/{identity.ProcessId}/cmdline", token).ConfigureAwait(false);
+            if (snapshot is null) return true;
+            var lineEnd = snapshot.IndexOf('\n');
+            if (lineEnd < 0 || ParseProcessIdentity(snapshot[..lineEnd]) != identity)
+                throw new DeviceException($"视频服务 PID 已变化，拒绝清理其他进程：serial={serial}, pid={identity.ProcessId}。", 409, 1003);
+            var commandLine = snapshot[(lineEnd + 1)..];
+            var arguments = commandLine.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+            if (!arguments.Contains("-Dmatrix.video.session=" + nonce, StringComparer.Ordinal) ||
+                !arguments.Contains("com.genymobile.scrcpy.Server", StringComparer.Ordinal) ||
+                !arguments.Contains("3.3.4", StringComparer.Ordinal) || !arguments.Contains("scid=" + scid, StringComparer.Ordinal))
+                throw new DeviceException($"无法核验本次视频进程命令行，拒绝终止：serial={serial}, pid={identity.ProcessId}, scid={scid}。", 409, 1003);
+            // Recheck birth immediately in the same shell before signalling this numeric PID.
+            var kill = FormattableString.Invariant($"record=$(cat /proc/{identity.ProcessId}/stat) || exit 41; fields=${{record##*) }}; set -- $fields; shift 19; [ \"$1\" = \"{identity.StartedTicks}\" ] || exit 42; kill -TERM {identity.ProcessId}");
+            if (await ExecuteOwnedProcessCommandAsync(serial, identity.ProcessId, kill, token).ConfigureAwait(false) is null) return true;
+            for (var attempt = 0; attempt < 10; attempt++)
+            {
+                var after = await ExecuteOwnedProcessCommandAsync(serial, identity.ProcessId, $"cat /proc/{identity.ProcessId}/stat", token).ConfigureAwait(false);
+                if (after is null) return true;
+                var observed = ParseProcessIdentity(after.Trim()) ?? throw new IOException($"Malformed owned video process stat: pid={identity.ProcessId}.");
+                if (observed != identity) return true;
+                await Task.Delay(100, token).ConfigureAwait(false);
+            }
+            throw new DeviceException($"本次视频进程终止未确认，请停止重连并检查实例：serial={serial}, pid={identity.ProcessId}。", 409, 1003);
+        }, ct).ConfigureAwait(false);
+    }
+
+    private async Task<string?> ExecuteOwnedProcessCommandAsync(string serial, int processId, string command, CancellationToken ct)
+    {
+        try { return Encoding.UTF8.GetString(await ExecuteAsync(serial, ["shell", command], ct).ConfigureAwait(false)); }
+        catch (DeviceException error) when (error.Status == 503)
+        {
+            // The process may exit between any /proc read or signal. Only a second absence check confirms this case.
+            var marker = "MATRIX_VIDEO_PID_" + processId.ToString(CultureInfo.InvariantCulture) + "_ABSENT";
+            var recheck = $"if [ ! -d /proc/{processId} ]; then printf '{marker}'; fi";
+            var result = Encoding.UTF8.GetString(await ExecuteAsync(serial, ["shell", recheck], ct).ConfigureAwait(false));
+            if (result == marker) return null;
+            throw;
+        }
+    }
+
+    private static VideoProcessIdentity? ParseProcessIdentity(string stat)
+    {
+        var open = stat.IndexOf('('); var close = stat.LastIndexOf(')');
+        if (open < 1 || close <= open || !int.TryParse(stat.AsSpan(0, open).Trim(), out var pid) || pid < 1) return null;
+        var fields = stat[(close + 1)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return fields.Length > 19 && ulong.TryParse(fields[19], NumberStyles.None, CultureInfo.InvariantCulture, out var ticks) && ticks > 0 ? new(pid, ticks) : null;
+    }
+
+    private sealed record VideoProcessIdentity(int ProcessId, ulong StartedTicks);
+
+    private static bool IsSocketNotReady(AdbException error) =>
+        error.Message.Contains("connect", StringComparison.OrdinalIgnoreCase) ||
+        error.Message.Contains("closed", StringComparison.OrdinalIgnoreCase) ||
+        error.Message.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+        error.Message.Contains("No such file", StringComparison.OrdinalIgnoreCase);
+
+    private static async Task CopyH264Async(Stream stream, Stream output, CancellationToken ct)
+    {
+        var prefix = new byte[512];
+        var count = 0;
+        while (count < 5)
+        {
+            var read = await stream.ReadAsync(prefix.AsMemory(count), ct).ConfigureAwait(false);
+            if (read == 0) break;
+            count += read;
+        }
+        var start = count >= 5 && prefix[0] == 0 && prefix[1] == 0
+            ? prefix[2] == 1 ? 3 : prefix[2] == 0 && prefix[3] == 1 ? 4 : -1 : -1;
+        if (start < 0 || (prefix[start] & 0x1f) is < 1 or > 12)
+            throw new DeviceException("Video server did not produce raw H.264 Annex-B data.", 501, 2001);
+        await output.WriteAsync(prefix.AsMemory(0, count), ct).ConfigureAwait(false);
+        await stream.CopyToAsync(output, 64 * 1024, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<int> ReadVideoServerAsync(Stream stream, VideoServerLog log, CancellationToken ct)
+    {
+        var header = new byte[5];
+        var block = new byte[4096];
+        while (true)
+        {
+            await stream.ReadExactlyAsync(header, ct).ConfigureAwait(false);
+            var remaining = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(1));
+            if (header[0] is not (1 or 2 or 3) || (header[0] == 3 && remaining != 1)) throw new IOException("Malformed video server shell packet.");
+            if (header[0] == 3) { await stream.ReadExactlyAsync(block.AsMemory(0, 1), ct).ConfigureAwait(false); return block[0]; }
+            while (remaining > 0)
+            {
+                var length = (int)Math.Min(remaining, (uint)block.Length);
+                await stream.ReadExactlyAsync(block.AsMemory(0, length), ct).ConfigureAwait(false);
+                log.Append(Encoding.UTF8.GetString(block, 0, length));
+                remaining -= (uint)length;
+            }
+        }
+    }
+
+    private sealed class VideoServerLog(string marker)
+    {
+        private readonly StringBuilder text = new();
+        private VideoProcessIdentity? identity;
+        public VideoProcessIdentity? Identity { get { lock (text) return identity; } }
+        public string Snapshot { get { lock (text) return text.ToString(); } }
+        public void Append(string value)
+        {
+            lock (text)
+            {
+                text.Append(value);
+                if (identity is null)
+                {
+                    var snapshot = text.ToString(); var start = snapshot.IndexOf(marker, StringComparison.Ordinal);
+                    if (start >= 0)
+                    {
+                        var pidEnd = snapshot.IndexOf('\n', start); var statEnd = pidEnd < 0 ? -1 : snapshot.IndexOf('\n', pidEnd + 1);
+                        if (statEnd > pidEnd && int.TryParse(snapshot.AsSpan(start + marker.Length, pidEnd - start - marker.Length).Trim(), out var pid) && ParseProcessIdentity(snapshot[(pidEnd + 1)..statEnd]) is { } parsed && parsed.ProcessId == pid)
+                            identity = parsed;
+                    }
+                }
+                if (text.Length > 8192) text.Remove(0, text.Length - 8192);
+            }
         }
     }
 
@@ -2892,8 +3270,16 @@ public sealed class LdLaunchCoordinator
             throw new ArgumentOutOfRangeException(nameof(pollInterval), "轮询间隔必须大于零且不超过实例等待期限。");
     }
 
-    public async Task<IReadOnlyList<LdLaunchProgress>> StartAsync(int[] indices,
+    public Task<IReadOnlyList<LdLaunchProgress>> StartAsync(int[] indices,
         Func<CancellationToken, Task> ensureResourceReserve, IProgress<LdLaunchProgress>? progress = null,
+        CancellationToken ct = default, IReadOnlyList<LdPlayerInstance>? expectedInstances = null)
+    {
+        ArgumentNullException.ThrowIfNull(ensureResourceReserve);
+        return StartAsync(indices, (_, token) => ensureResourceReserve(token), progress, ct, expectedInstances);
+    }
+
+    public async Task<IReadOnlyList<LdLaunchProgress>> StartAsync(int[] indices,
+        Func<LdPlayerInstance, CancellationToken, Task> ensureResourceReserve, IProgress<LdLaunchProgress>? progress = null,
         CancellationToken ct = default, IReadOnlyList<LdPlayerInstance>? expectedInstances = null)
     {
         if (indices is null || indices.Length == 0 || indices.Any(index => index <= 0 || index == 99999) || indices.Distinct().Count() != indices.Length)
@@ -2928,8 +3314,8 @@ public sealed class LdLaunchCoordinator
                     }
                     if (IsStopped(original))
                     {
-                        progress?.Report(new(index, "checking-resources", "正在检查本次启动的资源预留，不推测未知实例内存。", original));
-                        await ensureResourceReserve(token).ConfigureAwait(false);
+                        progress?.Report(new(index, "checking-resources", "正在按当前实例内存配置评估资源；估算不是雷电官方启动限制。", original));
+                        await ensureResourceReserve(original, token).ConfigureAwait(false);
                         token.ThrowIfCancellationRequested();
                         await service.RefreshAsync(token).ConfigureAwait(false);
                         var before = RequireSameIdentity(original);
@@ -3465,6 +3851,8 @@ public sealed record AppSettings
     public string LdConsolePath { get; init; } = "";
     public Dictionary<int, string> LdSerialBindings { get; init; } = [];
     public string AdbPath { get; init; } = "";
+    public string MonitorServerPath { get; init; } = "";
+    public string MonitorFfmpegPath { get; init; } = "";
     public string[] AdbAllowedSerials { get; init; } = [];
     public string ScrcpyPath { get; init; } = "";
     public string? AgentBaseUrl { get; init; }
@@ -3795,7 +4183,8 @@ public partial class App : Application
             var liveVerification = e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase);
             var unifiedVerification = e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase);
             var oneClickVerification = e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase);
-            if (new[] { smoke, liveVerification, unifiedVerification, oneClickVerification }.Count(enabled => enabled) > 1)
+            var monitorVerification = e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase);
+            if (new[] { smoke, liveVerification, unifiedVerification, oneClickVerification, monitorVerification }.Count(enabled => enabled) > 1)
                 throw new ArgumentException("一次只能选择一种自动验收模式。");
             string? unifiedCandidate = null;
             var demo = smoke || e.Args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
@@ -3837,6 +4226,10 @@ public partial class App : Application
                 unifiedCandidate = candidate;
                 settings = settings with { AutoStartApi = false, AutoConnect = false, AdbAllowedSerials = [], LdSerialBindings = new(), AgentBaseUrl = null, AgentSerial = null };
             }
+            if (monitorVerification && (demo || directoryIndex < 0 || !dataDirectory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || settings.LdSerialBindings.Count != 2 || !settings.LdSerialBindings.ContainsKey(1) || !settings.LdSerialBindings.ContainsKey(2) || settings.AdbAllowedSerials.Length != 2 || settings.LdSerialBindings.Values.Distinct(StringComparer.Ordinal).Count() != 2
+                || !settings.LdSerialBindings.Values.ToHashSet(StringComparer.Ordinal).SetEquals(settings.AdbAllowedSerials) || settings.AutoStartApi || settings.AgentBaseUrl is not null))
+                throw new ArgumentException("监控验收必须使用artifacts下仅授权专用实例1、2的配置，禁用API与Agent。");
             runtime = await MatrixRuntime.CreateAsync(settings, dataDirectory, demo);
             var window = new MainWindow(new WorkspaceViewModel(runtime, dataDirectory, demo));
             MainWindow = window;
@@ -3845,6 +4238,7 @@ public partial class App : Application
             await window.RecoverBackgroundWindowsAsync();
             window.UpdateUnifiedDirectory();
             if (runtime.Settings.AutoStartApi) await window.ViewModel.StartApisAsync();
+            if (e.Args.Contains("--open-monitor", StringComparer.OrdinalIgnoreCase) && !smoke && !liveVerification && !unifiedVerification && !oneClickVerification && !monitorVerification) window.NavigateTo("实时监控");
             if (smoke)
             {
                 var screenshotIndex = Array.FindIndex(e.Args, arg => arg.Equals("--screenshot", StringComparison.OrdinalIgnoreCase));
@@ -3866,15 +4260,19 @@ public partial class App : Application
             {
                 await window.RunOneClickStartAcceptanceAsync(Path.Combine(dataDirectory, "evidence"), unifiedCandidate!); window.Close();
             }
+            if (monitorVerification)
+            {
+                await window.RunMonitorAcceptanceAsync(Path.Combine(dataDirectory, "evidence")); window.Close();
+            }
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
+            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
             else MessageBox.Show(UiErrorPresentation.Describe(ex), "矩阵设备启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             try
             {
-                if (MainWindow is MatrixDevice.Desktop.MainWindow failedWindow) failedWindow.AbortStartup();
+                if (MainWindow is MatrixDevice.Desktop.MainWindow failedWindow) { await failedWindow.StopMonitorAfterFailureAsync(); failedWindow.AbortStartup(); }
                 if (runtime is not null) await runtime.DisposeAsync();
             }
             catch (Exception cleanupError) { Console.Error.WriteLine("启动失败后的资源清理异常：" + cleanupError); }
@@ -4327,6 +4725,8 @@ public partial class MainWindow : Window
     private Task? captureOperation;
     private int captureCursor;
     private bool autoCapture = true;
+    private bool debugAutoLoading;
+    private bool debugAutoPending;
     public WorkspaceViewModel ViewModel { get; }
 
     public MainWindow(WorkspaceViewModel viewModel)
@@ -4340,7 +4740,7 @@ public partial class MainWindow : Window
         Width = viewModel.Runtime.Settings.WindowWidth;
         Height = viewModel.Runtime.Settings.WindowHeight;
         Title = viewModel.Demo ? "矩阵设备 · 演示模式" : "矩阵设备";
-        viewModel.DeviceChanged = RefreshScreens;
+        viewModel.DeviceChanged = () => { RefreshScreens(); _ = EnsureDebugLoadedAsync(); };
         viewModel.NodesChanged = RebuildNodes;
         viewModel.NodeSelectionChanged = HighlightNode;
         viewModel.WallChanged = RefreshWall;
@@ -4357,7 +4757,11 @@ public partial class MainWindow : Window
             try { await ViewModel.Runtime.Input.ReleaseAsync(); }
             catch (Exception ex) { await ViewModel.ExecuteAsync("释放输入", () => Task.FromException(ex)); }
         };
-        viewModel.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(WorkspaceViewModel.DebugImage)) RefreshScreens(); };
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(WorkspaceViewModel.DebugImage)) RefreshScreens();
+            if (args.PropertyName == nameof(WorkspaceViewModel.Busy) && !ViewModel.Busy && debugAutoPending) _ = EnsureDebugLoadedAsync();
+        };
     }
 
     private void BuildShell()
@@ -4377,7 +4781,8 @@ public partial class MainWindow : Window
         AddTab("API", BuildApiPage());
         AddTab("扩展", BuildExtensionsPage());
         AddTab("设置", BuildSettingsPage());
-        tabs.SelectionChanged += (_, args) => { if (ReferenceEquals(args.Source, tabs)) { UpdateNavigation(); RebuildNodes(); } };
+        AddTab("实时监控", BuildMonitorPage());
+        tabs.SelectionChanged += (_, args) => { if (ReferenceEquals(args.Source, tabs)) { UpdateNavigation(); RebuildNodes(); MonitorNavigationChanged(); _ = EnsureDebugLoadedAsync(); } };
         AttachWorkspacePages();
         NavigateTo("设备墙 / 主控");
     }
@@ -4491,6 +4896,21 @@ public partial class MainWindow : Window
         finally { captureInProgress = false; }
     }
 
+    private async Task EnsureDebugLoadedAsync()
+    {
+        if (ViewModel.Demo || closing || ViewModel.HasActiveOperations || tabs?.SelectedIndex != 2 || ViewModel.CurrentDevice?.Info.Online != true || ViewModel.Nodes.Count != 0) return;
+        if (debugAutoLoading || ViewModel.Busy) { debugAutoPending = true; return; }
+        var requested = ViewModel.CurrentDevice;
+        debugAutoPending = false;
+        debugAutoLoading = true;
+        try { await ViewModel.LoadNodesAsync(); }
+        finally
+        {
+            debugAutoLoading = false;
+            if (debugAutoPending || !ReferenceEquals(requested, ViewModel.CurrentDevice)) { debugAutoPending = false; await EnsureDebugLoadedAsync(); }
+        }
+    }
+
     private async void WindowClosing(object? sender, CancelEventArgs e)
     {
         if (closeApproved) return;
@@ -4501,6 +4921,7 @@ public partial class MainWindow : Window
         closing = true;
         directoryCancellation.Cancel();
         directoryTimer.Stop(); captureTimer.Stop();
+        await StopMonitorAsync();
         if (directoryOperation is not null) { try { await directoryOperation; } catch (OperationCanceledException) { } }
         if (captureOperation is not null) { try { await captureOperation; } catch (OperationCanceledException) { } }
         try
@@ -4524,6 +4945,7 @@ public partial class MainWindow : Window
         closing = closeApproved = true;
         captureTimer?.Stop();
         directoryTimer?.Stop(); directoryCancellation.Cancel();
+        monitorTimer.Stop();
         scanCancellation?.Cancel();
         Close();
     }
@@ -4560,6 +4982,7 @@ public partial class MainWindow : Window
         await ViewModel.LoadAppsAsync();
         await VerifyOperationGatesAsync();
         await VerifyOneClickProjectionAsync();
+        await VerifyLaunchMemoryUiAsync();
         await LdWindowVisibilitySmoke.VerifyAsync(System.IO.Path.Combine(ViewModel.DataDirectory, "window-visibility-smoke"));
         ViewModel.SamplePixel(10, 10);
         ViewModel.ShellInput = "wm size"; await ViewModel.ExecuteShellAsync();
@@ -4604,8 +5027,9 @@ public partial class MainWindow : Window
         if (hardwareField.IsEnabled) throw new InvalidOperationException("未实现的硬件解码控件必须禁用");
         await RefreshLdPlayerUiAsync();
         if (ldRows.Count != 2) throw new InvalidOperationException("演示雷电实例目录不完整");
-        if (tabs.Items.Count != 12) throw new InvalidOperationException("桌面页面数量不完整");
-        if (navigation.Count != 11 || navigation.ContainsKey("雷电实例") || deviceModes.Count != 4) throw new InvalidOperationException("设备管理统一入口不完整");
+        if (tabs.Items.Count != WorkspacePages.Length) throw new InvalidOperationException("桌面页面数量不完整");
+        if (navigation.Count != WorkspacePages.Length - 1 || navigation.ContainsKey("雷电实例") || deviceModes.Count != 4) throw new InvalidOperationException("设备管理统一入口不完整");
+        await VerifyMonitorProjectionAsync(screenshotPath);
         NavigateTo("设备墙 / 主控");
         var removedLabels = new[] { "刷新设备", "扫描设备", "刷新截图" };
         if (VisualDescendants<TextBlock>(Shell).Any(text => removedLabels.Contains(text.Text))) throw new InvalidOperationException("旧重复刷新入口仍可见");
@@ -6866,6 +7290,896 @@ public partial class MainWindow
 
 ```
 
+## src/MatrixDevice.Desktop/Views/MonitorAcceptance.cs
+
+```csharp
+using System.Diagnostics;
+using System.IO;
+using System.Security.Cryptography;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Threading;
+using MatrixDevice.Core;
+
+namespace MatrixDevice.Desktop;
+
+public partial class MainWindow
+{
+    internal async Task RunMonitorAcceptanceAsync(string output)
+    {
+        var runtime = ViewModel.Runtime;
+        var bindings = runtime.Settings.LdSerialBindings;
+        if (ViewModel.Demo || !Path.IsPathFullyQualified(output) || bindings.Count != 2 || !bindings.ContainsKey(1) || !bindings.ContainsKey(2)
+            || runtime.Settings.AdbAllowedSerials.Length != 2 || bindings.Values.Distinct(StringComparer.Ordinal).Count() != 2 || !bindings.Values.ToHashSet(StringComparer.Ordinal).SetEquals(runtime.Settings.AdbAllowedSerials)
+            || runtime.Settings.AutoStartApi || runtime.Settings.AgentBaseUrl is not null)
+            throw new InvalidOperationException("监控实机验收仅允许独立配置中已授权的测试实例1、2，禁用API与Agent。");
+        Directory.CreateDirectory(output);
+        var runId = Guid.NewGuid().ToString("N");
+        var records = new List<object>();
+        var observations = new List<object>();
+        var started = DateTimeOffset.UtcNow;
+        var passed = false;
+        using var suiteDeadline = new CancellationTokenSource(TimeSpan.FromMinutes(8));
+        await File.WriteAllTextAsync(Path.Combine(output, "summary.json"), JsonSerializer.Serialize(new { runId, started, running = true, passed = false }, JsonDefaults.Options));
+        async Task Observe(string stage)
+        {
+            observations.Add(new
+            {
+                stage, at = DateTimeOffset.UtcNow, elapsedSeconds = (DateTimeOffset.UtcNow - started).TotalSeconds,
+                page = (tabs.SelectedItem as System.Windows.Controls.TabItem)?.Tag, window = WindowState.ToString(), IsActive,
+                monitorEpoch, monitorPaused, active = MonitorActive, compact = monitorCompact,
+                viewport = new { monitorScroll.ActualWidth, monitorScroll.ActualHeight, monitorScroll.ViewportHeight },
+                host = monitorLatestHost, hostDisplay = monitorHost.Text,
+                tiles = monitorTiles.Values.Select(tile => new
+                {
+                    tile.Key, tile.Signature, serial = tile.Device?.Serial, visible = tile.VisibleIn(monitorScroll),
+                    session = tile.Session is null ? (int?)null : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(tile.Session),
+                    running = tile.Session?.IsRunning, tile.Received, tile.Presented, tile.LastFrameAt, tile.Failed,
+                    resource = tile.LatestResource, tile.ValidResourceSamples, digest = FrameDigest(tile), detail = tile.Detail
+                }).ToArray()
+            });
+            await File.WriteAllTextAsync(Path.Combine(output, "observations.json"), JsonSerializer.Serialize(observations, JsonDefaults.Options));
+        }
+        async Task Record(string id, Func<Task> action)
+        {
+            try { await Observe(id + ":before"); await action(); await Observe(id + ":after"); records.Add(new { id, status = "PASS", at = DateTimeOffset.UtcNow }); }
+            catch (Exception ex)
+            {
+                records.Add(new { id, status = "FAIL", at = DateTimeOffset.UtcNow, error = ex.ToString(), page = (tabs.SelectedItem as System.Windows.Controls.TabItem)?.Tag, window = WindowState.ToString(), monitorPaused, active = MonitorActive, viewport = new { monitorScroll.ActualWidth, monitorScroll.ActualHeight, monitorScroll.ViewportHeight }, tiles = monitorTiles.Values.Select(tile => new { tile.Key, visible = tile.VisibleIn(monitorScroll), tile.Received, tile.Presented, tile.LastFrameAt, detail = tile.Detail }).ToArray() });
+                SaveRender(Path.Combine(output, "failure.png"));
+                throw;
+            }
+            finally { await File.WriteAllTextAsync(Path.Combine(output, "monitor-results.json"), JsonSerializer.Serialize(records, JsonDefaults.Options)); }
+        }
+        var before = ViewModel.CurrentDevice;
+        var main = ViewModel.MainDevice;
+        var selected = ViewModel.Devices.Where(row => row.IsSelected).Select(row => row.Serial).ToArray();
+        var nodes = ViewModel.Nodes.ToArray();
+        var seen = bindings.Keys.ToDictionary(index => index, _ => new HashSet<string>());
+        var nextMotionRound = 0;
+        async Task RequireStoppedAsync()
+        {
+            await Task.WhenAll(monitorTiles.Values.Select(tile => tile.StopCompletion));
+            if (monitorTiles.Values.Any(tile => tile.Session is not null || tile.Failed)) throw new InvalidOperationException("视频会话或清理仍异常：" + string.Join("; ", monitorTiles.Values.Where(tile => tile.Session is not null || tile.Failed).Select(tile => tile.Detail)));
+        }
+        async Task ReconcileNowAsync()
+        {
+            while (!monitorReconcile.IsCompleted) await monitorReconcile;
+            monitorReconcile = ReconcileMonitorAsync();
+            await monitorReconcile;
+        }
+        try
+        {
+            await Record("targets-identity", async () =>
+            {
+                foreach (var pair in bindings)
+                {
+                    var instance = runtime.LdPlayer?.Instances.Single(item => item.Index == pair.Key) ?? throw new InvalidOperationException("无雷电目录");
+                    if (!instance.Name.StartsWith("MatrixAcceptance", StringComparison.Ordinal) || !instance.AndroidStarted || !LdInstanceConnected(pair.Key)) throw new InvalidOperationException("仅已运行且身份核验通过的专用测试实例可验收：" + pair.Key);
+                    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(suiteDeadline.Token); deadline.CancelAfter(TimeSpan.FromSeconds(15));
+                    var response = await runtime.Backend.ShellAsync(pair.Value, "am start -a android.settings.SETTINGS", ct: deadline.Token);
+                    if (response.Contains("Error", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("打开系统设置失败：" + response);
+                }
+            });
+            ViewModel.Search = "MatrixAcceptance";
+            NavigateTo("实时监控");
+            await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+            await Record("two-cards-no-selection", async () =>
+            {
+                var deadline = DateTimeOffset.UtcNow.AddSeconds(45);
+                while (DateTimeOffset.UtcNow < deadline && bindings.Keys.Any(index => !monitorTiles.TryGetValue("ld:" + index, out var tile) || tile.Presented < 2)) await Task.Delay(250);
+                if (bindings.Keys.Any(index => !monitorTiles.TryGetValue("ld:" + index, out var tile) || tile.Presented < 2 || tile.Failed))
+                    throw new InvalidOperationException("两卡未同时获得连续帧：" + string.Join("; ", monitorTiles.Values.Select(tile => tile.Detail)));
+                if (monitorSelected is not null) throw new InvalidOperationException("未选择监看卡片时不应自动选中。");
+                SaveRender(Path.Combine(output, "monitor-first-frames.png"));
+            });
+            var timeline = new List<object>();
+            await Record("continuous-190-seconds", async () =>
+            {
+                var watch = Stopwatch.StartNew();
+                var round = 0;
+                var subjects = bindings.Keys.ToDictionary(index => index, index => (monitorTiles["ld:" + index].Session, monitorTiles["ld:" + index].Signature));
+                var previous = bindings.Keys.ToDictionary(index => index, index => monitorTiles["ld:" + index].Received);
+                while (watch.Elapsed < TimeSpan.FromSeconds(190))
+                {
+                    foreach (var pair in bindings)
+                    {
+                        var row = ViewModel.Devices.Single(item => item.Serial == pair.Value);
+                        var up = (round + pair.Key) % 2 == 0;
+                        await runtime.Backend.SwipeAsync(pair.Value, row.Info.Width / 2, row.Info.Height * (up ? 3 : 1) / 4,
+                            row.Info.Width / 2, row.Info.Height * (up ? 1 : 3) / 4, 350, suiteDeadline.Token);
+                    }
+                    await Task.Delay(1600);
+                    foreach (var index in bindings.Keys)
+                    {
+                        var tile = monitorTiles["ld:" + index];
+                        if (tile.Failed || !tile.Eligible || !tile.VisibleIn(monitorScroll) || tile.Session?.IsRunning != true || !RecentMonitorFrame(tile.LastFrameAt, DateTimeOffset.UtcNow)) throw new InvalidOperationException("视频会话中断、不可见或超过12秒无新帧：" + tile.Detail);
+                        if (tile.Received < previous[index] || tile.Signature != subjects[index].Signature || !ReferenceEquals(tile.Session, subjects[index].Session)) throw new InvalidOperationException("连续阶段会话/身份变化或帧序号回退：" + tile.Detail);
+                        previous[index] = tile.Received;
+                        if (tile.Frame.Source is System.Windows.Media.Imaging.BitmapSource bitmap)
+                        {
+                            var bytes = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4]; bitmap.CopyPixels(bytes, bitmap.PixelWidth * 4, 0);
+                            seen[index].Add(Convert.ToHexString(SHA256.HashData(bytes)));
+                        }
+                        timeline.Add(new { seconds = watch.Elapsed.TotalSeconds, index, tile.Received, tile.Presented, tile.LastFrameAt, resource = tile.Resource.Text, state = tile.State.Text });
+                    }
+                    round++;
+                    nextMotionRound = round;
+                    await Observe("continuous-190-seconds:sample");
+                    await File.WriteAllTextAsync(Path.Combine(output, "timeline.json"), JsonSerializer.Serialize(timeline, JsonDefaults.Options));
+                }
+                if (seen.Any(pair => pair.Value.Count < 3)) throw new InvalidOperationException("画面变化不足，不能确认两路差异化视频。");
+                SaveRender(Path.Combine(output, "monitor-continuous.png"));
+                await File.WriteAllTextAsync(Path.Combine(output, "timeline.json"), JsonSerializer.Serialize(timeline, JsonDefaults.Options));
+            });
+            await Record("resources-valid", () =>
+            {
+                if (monitorHostValidSamples < 2 || bindings.Keys.Any(index => monitorTiles["ld:" + index].ValidResourceSamples < 2)) throw new InvalidOperationException("真实CPU/工作集采样不足两次，不能算资源监控通过。");
+                var now = DateTimeOffset.UtcNow;
+                if (monitorLatestHost is not { CpuPercent: not null, Error: null } host || now - host.ObservedAt > TimeSpan.FromSeconds(12)
+                    || bindings.Keys.Any(index => monitorTiles["ld:" + index].LatestResource is not { CpuPercent: not null, WorkingSetBytes: > 0, Error: null } sample || now - sample.ObservedAt > TimeSpan.FromSeconds(12)))
+                    throw new InvalidOperationException("最近资源采样未知或陈旧，不能用历史有效次数代替当前状态。");
+                return Task.CompletedTask;
+            });
+            await Record("selection-isolation", () =>
+            {
+                SelectMonitor("ld:2");
+                if (!ReferenceEquals(before, ViewModel.CurrentDevice) || !ReferenceEquals(main, ViewModel.MainDevice) || !nodes.SequenceEqual(ViewModel.Nodes)
+                    || !selected.SequenceEqual(ViewModel.Devices.Where(row => row.IsSelected).Select(row => row.Serial))) throw new InvalidOperationException("监看选择污染了控制上下文。");
+                return Task.CompletedTask;
+            });
+            await Record("all-directory-two-authorized-videos-45s", async () =>
+            {
+                ViewModel.Search = ""; monitorScopeChoice.SelectedIndex = 1;
+                await ReconcileNowAsync(); await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+                var watch = Stopwatch.StartNew();
+                var round = nextMotionRound;
+                var subjects = bindings.Keys.ToDictionary(index => index, index => (monitorTiles["ld:" + index].Session, monitorTiles["ld:" + index].Signature));
+                var previous = bindings.Keys.ToDictionary(index => index, index => monitorTiles["ld:" + index].Received);
+                var distinct = bindings.Keys.ToDictionary(index => index, _ => new HashSet<string>());
+                while (watch.Elapsed < TimeSpan.FromSeconds(45))
+                {
+                    foreach (var pair in bindings)
+                    {
+                        var tile = monitorTiles["ld:" + pair.Key]; var row = tile.Device!;
+                        var up = (round + pair.Key) % 2 == 0;
+                        await runtime.Backend.SwipeAsync(pair.Value, row.Info.Width / 2, row.Info.Height * (up ? 3 : 1) / 4, row.Info.Width / 2, row.Info.Height * (up ? 1 : 3) / 4, 350, suiteDeadline.Token);
+                    }
+                    if (monitorTiles.Values.Any(tile => tile.Session is not null && tile.Instance?.Index is not (1 or 2))) throw new InvalidOperationException("出现未批准的视频通道。");
+                    await Task.Delay(1500);
+                    foreach (var index in bindings.Keys)
+                    {
+                        var tile = monitorTiles["ld:" + index];
+                        if (!tile.VisibleIn(monitorScroll) || !tile.Eligible || tile.Failed || tile.Session?.IsRunning != true || !RecentMonitorFrame(tile.LastFrameAt, DateTimeOffset.UtcNow)) throw new InvalidOperationException("全部目录视图中授权卡片停止更新：" + tile.Detail);
+                        if (tile.Received < previous[index] || tile.Signature != subjects[index].Signature || !ReferenceEquals(tile.Session, subjects[index].Session)) throw new InvalidOperationException("全部目录阶段会话/身份变化或帧序号回退：" + tile.Detail);
+                        previous[index] = tile.Received;
+                        if (tile.Frame.Source is System.Windows.Media.Imaging.BitmapSource bitmap)
+                        {
+                            var bytes = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4]; bitmap.CopyPixels(bytes, bitmap.PixelWidth * 4, 0);
+                            distinct[index].Add(Convert.ToHexString(SHA256.HashData(bytes)));
+                        }
+                    }
+                    round++;
+                    await Observe("all-directory-two-authorized-videos-45s:sample");
+                }
+                if (distinct.Any(pair => pair.Value.Count < 3)) throw new InvalidOperationException("全部目录阶段真实画面变化不足。");
+                await File.WriteAllTextAsync(Path.Combine(output, "all-directory-distinct-frames.json"), JsonSerializer.Serialize(distinct.ToDictionary(pair => pair.Key, pair => pair.Value.Count), JsonDefaults.Options));
+                SaveRender(Path.Combine(output, "monitor-all-directory.png"));
+                monitorScopeChoice.SelectedIndex = 0;
+                await ReconcileNowAsync();
+            });
+            await Record("hidden-native-window-video-and-open", async () =>
+            {
+                var tile = monitorTiles["ld:1"];
+                var instance = tile.Instance!;
+                var target = tile.Target!;
+                if (ldWindowVisibility is null) throw new InvalidOperationException("未初始化窗口身份恢复组件。");
+                try
+                {
+                    await ldWindowVisibility.HideAsync(instance, target.PlayerBirth);
+                    if (MonitorWindowVisible(new IntPtr(instance.TopWindow))) throw new InvalidOperationException("测试窗口未隐藏。");
+                    var hiddenAt = DateTimeOffset.UtcNow;
+                    await Task.Delay(700, suiteDeadline.Token);
+                    if (MonitorWindowVisible(new IntPtr(instance.TopWindow))) throw new InvalidOperationException("隐藏保持阶段窗口重新可见。");
+                    var beforeChange = FrameDigest(tile) ?? throw new InvalidOperationException("隐藏刺激前没有有效画面。");
+                    var expectedSession = tile.Session ?? throw new InvalidOperationException("隐藏刺激前没有视频会话。");
+                    var expectedSignature = tile.Signature;
+                    var count = tile.Presented;
+                    var stimulusAt = DateTimeOffset.UtcNow;
+                    var row = tile.Device!;
+                    await runtime.Backend.SwipeAsync(row.Serial, row.Info.Width / 2, row.Info.Height * 3 / 4, row.Info.Width / 2, row.Info.Height / 4, 350, suiteDeadline.Token);
+                    var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+                    bool HasNewHiddenFrame() => tile.Presented >= count + 2 && tile.LastFrameAt is { } at && at >= stimulusAt
+                        && tile.Eligible && !tile.Failed && tile.Session?.IsRunning == true && ReferenceEquals(tile.Session, expectedSession)
+                        && tile.Signature == expectedSignature && FrameDigest(tile) is { } digest && digest != beforeChange;
+                    while (!HasNewHiddenFrame() && DateTimeOffset.UtcNow < deadline)
+                    {
+                        if (MonitorWindowVisible(new IntPtr(instance.TopWindow))) throw new InvalidOperationException("隐藏等待阶段窗口重新可见。");
+                        await Task.Delay(100);
+                    }
+                    if (!HasNewHiddenFrame()) throw new InvalidOperationException("隐藏雷电窗口后未呈现同一会话的新帧及滚动后的画面变化。");
+                    if (MonitorWindowVisible(new IntPtr(instance.TopWindow))) throw new InvalidOperationException("隐藏画面采样时窗口已重新可见。");
+                    await File.WriteAllTextAsync(Path.Combine(output, "hidden-frame-proof.json"), JsonSerializer.Serialize(new { hiddenAt, stimulusAt, observedAt = DateTimeOffset.UtcNow, beforeDigest = beforeChange, afterDigest = FrameDigest(tile), nativeWindowVisible = false, tile.LastFrameAt, presentedBefore = count, tile.Presented }, JsonDefaults.Options));
+                    await Observe("hidden-native-window:frames-while-hidden");
+                    SaveRender(Path.Combine(output, "monitor-hidden-native.png"));
+                    await OpenMonitorWindowAsync("ld:1");
+                    deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+                    while ((!MonitorWindowVisible(new IntPtr(instance.TopWindow)) || MonitorWindowIconic(new IntPtr(instance.TopWindow))) && DateTimeOffset.UtcNow < deadline) await Task.Delay(100);
+                    if (monitorNotice.StartsWith("打开窗口失败", StringComparison.Ordinal) || !MonitorWindowVisible(new IntPtr(instance.TopWindow)) || MonitorWindowIconic(new IntPtr(instance.TopWindow))) throw new InvalidOperationException("真实窗口未恢复：" + monitorNotice);
+                }
+                finally { await ldWindowVisibility.ShowAsync(1); }
+            });
+            await Record("resource-list-pauses-video", async () =>
+            {
+                SetMonitorMode(true); await ReconcileNowAsync(); await RequireStoppedAsync();
+                var countsBefore = bindings.Keys.ToDictionary(index => index, index => monitorTiles["ld:" + index].ValidResourceSamples);
+                await Task.Delay(4500, suiteDeadline.Token);
+                if (countsBefore.Any(pair => monitorTiles["ld:" + pair.Key].ValidResourceSamples <= pair.Value)) throw new InvalidOperationException("资源列表中没有新的有效资源采样。");
+                await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+                SaveRender(Path.Combine(output, "monitor-resources.png"));
+                SetMonitorMode(false); await ReconcileNowAsync();
+                var counts = bindings.Keys.ToDictionary(index => index, index => monitorTiles["ld:" + index].Presented);
+                var deadline = DateTimeOffset.UtcNow.AddSeconds(35);
+                while (DateTimeOffset.UtcNow < deadline && counts.Any(pair => monitorTiles["ld:" + pair.Key].Presented <= pair.Value)) await Task.Delay(250);
+                if (counts.Any(pair => monitorTiles["ld:" + pair.Key].Presented <= pair.Value)) throw new InvalidOperationException("从资源列表回画面墙后视频未恢复。");
+            });
+            await Record("pause-and-release", async () =>
+            {
+                monitorPauseChoice.IsChecked = true;
+                await ReconcileNowAsync();
+                await RequireStoppedAsync();
+                var pausedCounts = bindings.Keys.ToDictionary(index => index, index => monitorTiles["ld:" + index].Presented);
+                await Task.Delay(700);
+                if (pausedCounts.Any(pair => monitorTiles["ld:" + pair.Key].Presented != pair.Value)) throw new InvalidOperationException("暂停后仍在呈现新帧。");
+                SaveRender(Path.Combine(output, "monitor-paused.png"));
+                monitorPauseChoice.IsChecked = false;
+                var deadline = DateTimeOffset.UtcNow.AddSeconds(35);
+                var counts = bindings.Keys.ToDictionary(index => index, index => monitorTiles["ld:" + index].Presented);
+                while (DateTimeOffset.UtcNow < deadline && counts.Any(pair => monitorTiles["ld:" + pair.Key].Presented <= pair.Value)) await Task.Delay(250);
+                if (counts.Any(pair => monitorTiles["ld:" + pair.Key].Presented <= pair.Value)) throw new InvalidOperationException("恢复后视频未继续到帧。");
+            });
+            await Record("leave-page-cleanup", async () =>
+            {
+                NavigateTo("设备墙 / 主控");
+                await ReconcileNowAsync();
+                await RequireStoppedAsync();
+            });
+            await Record("node-page-auto-load-after-fast-switch", async () =>
+            {
+                var target = ViewModel.Devices.Single(row => row.Serial == bindings[2]);
+                target.Screenshot = null; target.CapturedAt = null;
+                var requestedAt = DateTimeOffset.UtcNow;
+                ViewModel.CurrentDevice = ViewModel.Devices.Single(row => row.Serial == bindings[1]);
+                NavigateTo("节点");
+                ViewModel.CurrentDevice = target;
+                var deadline = DateTimeOffset.UtcNow.AddSeconds(35);
+                while (DateTimeOffset.UtcNow < deadline && (ViewModel.Busy || ViewModel.Nodes.Count == 0 || ViewModel.DebugImage is null)) await Task.Delay(100);
+                if (ViewModel.Busy || ViewModel.Nodes.Count == 0 || ViewModel.DebugImage is null || !ReferenceEquals(ViewModel.CurrentDevice, target)
+                    || !ReferenceEquals(ViewModel.DebugImage, target.Screenshot) || target.CapturedAt is null || target.CapturedAt < requestedAt)
+                    throw new InvalidOperationException("快速切到实例2后未自动取得属于本轮实例2的定位截图和节点：" + ViewModel.Error);
+                await File.WriteAllTextAsync(Path.Combine(output, "node-capture-proof.json"), JsonSerializer.Serialize(new { serial = target.Serial, requestedAt, target.CapturedAt, nodes = ViewModel.FlattenNodes().Count(), screenshotBelongsToTarget = ReferenceEquals(ViewModel.DebugImage, target.Screenshot), overlapRaceClaim = false }, JsonDefaults.Options));
+                await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+                SaveRender(Path.Combine(output, "nodes-auto-load.png"));
+                NavigateTo("设备墙 / 主控");
+            });
+            passed = true;
+        }
+        finally
+        {
+            try { await StopMonitorAsync(); await RequireStoppedAsync(); }
+            catch (Exception ex) { passed = false; records.Add(new { id = "final-cleanup", status = "FAIL", error = ex.ToString() }); throw; }
+            finally
+            {
+                var hashes = new[] { typeof(MainWindow).Assembly, typeof(AdbDeviceBackend).Assembly, typeof(MatrixDevice.Host.ScreenVideoSession).Assembly }
+                    .ToDictionary(assembly => assembly.GetName().Name!, assembly => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(assembly.Location))));
+                await File.WriteAllTextAsync(Path.Combine(output, "monitor-results.json"), JsonSerializer.Serialize(records, JsonDefaults.Options));
+                await File.WriteAllTextAsync(Path.Combine(output, "summary.json"), JsonSerializer.Serialize(new { runId, started, ended = DateTimeOffset.UtcNow, running = false, passed, bindings, distinctFrames = seen.ToDictionary(pair => pair.Key, pair => pair.Value.Count), tests = records.Count, declaredScope = new { noExternalAdbClient = true, noInstanceLaunch = true, noInstance0Operations = true }, capacityClaim = "2路实测，非23路验收", assemblySha256 = hashes[typeof(MainWindow).Assembly.GetName().Name!], loadedAssemblyHashes = hashes }, JsonDefaults.Options));
+            }
+        }
+    }
+
+    private static string? FrameDigest(MonitorTile tile)
+    {
+        if (tile.Frame.Source is not System.Windows.Media.Imaging.BitmapSource bitmap) return null;
+        var bytes = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4]; bitmap.CopyPixels(bytes, bitmap.PixelWidth * 4, 0);
+        return Convert.ToHexString(SHA256.HashData(bytes));
+    }
+
+    private static bool RecentMonitorFrame(DateTimeOffset? lastFrameAt, DateTimeOffset now) =>
+        lastFrameAt is { } received && received <= now && now - received <= TimeSpan.FromSeconds(12);
+
+    [DllImport("user32.dll", EntryPoint = "IsWindowVisible")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool MonitorWindowVisible(IntPtr window);
+    [DllImport("user32.dll", EntryPoint = "IsIconic")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool MonitorWindowIconic(IntPtr window);
+}
+
+```
+
+## src/MatrixDevice.Desktop/Views/MonitorSmoke.cs
+
+```csharp
+using System.IO;
+using System.Windows;
+using System.Windows.Threading;
+using MatrixDevice.Host;
+
+namespace MatrixDevice.Desktop;
+
+public partial class MainWindow
+{
+    private async Task VerifyMonitorProjectionAsync(string? screenshot)
+    {
+        if (!ViewModel.Demo) throw new InvalidOperationException("离线监控夹具仅限演示模式。");
+        var sampledAt = new DateTimeOffset(2026, 10, 15, 0, 0, 0, TimeSpan.Zero);
+        if (RecentMonitorFrame(null, sampledAt) || RecentMonitorFrame(sampledAt.AddSeconds(-12).AddTicks(-1), sampledAt)
+            || RecentMonitorFrame(sampledAt.AddTicks(1), sampledAt) || !RecentMonitorFrame(sampledAt.AddSeconds(-2.4), sampledAt)
+            || !RecentMonitorFrame(sampledAt.AddSeconds(-12), sampledAt)) throw new InvalidOperationException("新帧时间窗口未正确区分短时静止、缺失、陈旧与未来时间。");
+        await StopMonitorAsync(); monitorStopping = true;
+        var current = ViewModel.CurrentDevice;
+        var main = ViewModel.MainDevice;
+        var targets = ViewModel.Targets().ToArray();
+        var nodes = ViewModel.Nodes.ToArray();
+        try
+        {
+            NavigateTo("实时监控");
+            monitorTiles.Clear(); monitorWall.Children.Clear();
+            for (var index = 1; index <= 2; index++)
+            {
+                var key = "fixture:" + index;
+                var tile = new MonitorTile(key, () => SelectMonitor(key), () => Task.CompletedTask, () => Task.CompletedTask) { Eligible = true };
+                tile.Name.Text = $"离线测试画面 {index}"; tile.Subtitle.Text = "合成像素夹具 · 非真实设备";
+                monitorTiles.Add(key, tile); monitorWall.Children.Add(tile.Surface);
+                var oldEpoch = tile.BeginVideo();
+                tile.ClearUntrustedFrame();
+                tile.AcceptFrame(oldEpoch, new(32, 18, new byte[32 * 18 * 4], 1, DateTimeOffset.UtcNow));
+                tile.Present(DateTimeOffset.UtcNow, true);
+                if (tile.LastFrameAt is not null || tile.Frame.Source is not null) throw new InvalidOperationException("已失效会话仍可发布帧。");
+                var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                tile.StopCompletion = stop.Task;
+                if (!ReferenceEquals(tile.StopAsync(), stop.Task) || tile.StopAsync().IsCompleted) throw new InvalidOperationException("重复停止未共享尚未完成的清理任务。");
+                stop.SetResult(); await tile.StopAsync();
+                var pixels = new byte[32 * 18 * 4];
+                for (var pixel = 0; pixel < pixels.Length; pixel += 4) { pixels[pixel] = (byte)(index == 1 ? 210 : 40); pixels[pixel + 1] = (byte)(pixel / 4 % 32 * 7); pixels[pixel + 2] = (byte)(index == 1 ? 30 : 220); pixels[pixel + 3] = 255; }
+                var epoch = tile.BeginVideo();
+                tile.AcceptFrame(epoch, new(32, 18, pixels, 2, DateTimeOffset.UtcNow)); tile.Present(DateTimeOffset.UtcNow, true);
+                if (tile.Frame.Source is null || tile.Presented != 1) throw new InvalidOperationException("未选中卡片没有呈现视频帧。");
+                if (!tile.State.Text.EndsWith(tile.LastFrameAt!.Value.ToLocalTime().ToString("HH:mm:ss"), StringComparison.Ordinal))
+                    throw new InvalidOperationException("卡片到帧时间未按本地时区显示。");
+                tile.Present(tile.LastFrameAt.Value.AddSeconds(6), true);
+                if (!tile.State.Text.StartsWith("等待新帧", StringComparison.Ordinal) || !tile.State.Text.EndsWith(tile.LastFrameAt.Value.ToLocalTime().ToString("HH:mm:ss"), StringComparison.Ordinal))
+                    throw new InvalidOperationException("陈旧帧时间未按本地时区显示。");
+                tile.SetResource(new(index, 1, DateTimeOffset.UtcNow.AddSeconds(-2), null, 128 * 1048576, null));
+                tile.SetResource(new(index, 1, DateTimeOffset.UtcNow, 7 * index, 160 * 1048576, null));
+                if (tile.LatestResource is not { Error: null, WorkingSetBytes: 167772160 } latest || latest.CpuPercent != 7 * index)
+                    throw new InvalidOperationException("最近资源观测未保留真实样本。");
+                if (tile.Resource.ToolTip is not string resourceTip || !resourceTip.StartsWith(latest.ObservedAt.ToLocalTime().ToString("HH:mm:ss"), StringComparison.Ordinal))
+                    throw new InvalidOperationException("资源提示时间未按本地时区显示。");
+                tile.State.Text = "离线合成帧（非实时视频验收）";
+            }
+            SelectMonitor("fixture:2");
+            if (!ReferenceEquals(current, ViewModel.CurrentDevice) || !ReferenceEquals(main, ViewModel.MainDevice) || !targets.SequenceEqual(ViewModel.Targets()) || !nodes.SequenceEqual(ViewModel.Nodes))
+                throw new InvalidOperationException("监看选择改变控制上下文。");
+            await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+            if (monitorTiles.Values.Any(tile => tile.Frame.ActualHeight < 1 || tile.Surface.ActualWidth > monitorScroll.ViewportWidth)) throw new InvalidOperationException("监控卡片画面为空或超出视口。");
+            if (screenshot is not null) SaveRender(Path.Combine(Path.GetDirectoryName(screenshot)!, "monitor-offline.png"));
+        }
+        finally
+        {
+            monitorTiles.Clear(); monitorWall.Children.Clear(); monitorStopping = false;
+            NavigateTo("设备墙 / 主控");
+        }
+    }
+}
+
+```
+
+## src/MatrixDevice.Desktop/Views/MonitorView.cs
+
+```csharp
+using System.Diagnostics;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
+using Path = System.IO.Path;
+using System.Windows.Threading;
+using MatrixDevice.Core;
+using MatrixDevice.Host;
+
+namespace MatrixDevice.Desktop;
+
+public partial class MainWindow
+{
+    private readonly Dictionary<string, MonitorTile> monitorTiles = new(StringComparer.Ordinal);
+    private ResourceSampler monitorResources = new();
+    private readonly DispatcherTimer monitorTimer = new() { Interval = TimeSpan.FromMilliseconds(125) };
+    private WrapPanel monitorWall = null!;
+    private ScrollViewer monitorScroll = null!;
+    private TextBlock monitorSummary = null!;
+    private TextBlock monitorHost = null!;
+    private TextBlock monitorDetail = null!;
+    private MatrixRuntime? monitorRuntime;
+    private Task monitorReconcile = Task.CompletedTask;
+    private Task monitorSampling = Task.CompletedTask;
+    private DateTimeOffset monitorLastReconcile;
+    private DateTimeOffset monitorLastSample;
+    private string? monitorSelected;
+    private bool monitorPaused;
+    private bool monitorStopping;
+    private bool monitorWasActive;
+    private long monitorEpoch;
+    private int monitorHostValidSamples;
+    private HostResourceSample? monitorLatestHost;
+    private bool monitorCompact;
+    private bool monitorConnectedOnly = true;
+    private string monitorNotice = "";
+    private ToggleButton monitorPauseChoice = null!;
+    private ToggleButton monitorWallChoice = null!;
+    private ToggleButton monitorListChoice = null!;
+    private ComboBox monitorScopeChoice = null!;
+
+    private bool MonitorActive => !closing && !monitorStopping && !monitorPaused && Equals((tabs.SelectedItem as TabItem)?.Tag, "实时监控");
+
+    private FrameworkElement BuildMonitorPage()
+    {
+        var page = Page();
+        var header = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
+        var pause = WallToggle("\uE769", "暂停监控"); pause.Content = ShellGlyph("\uE769"); pause.Width = 34; pause.MinWidth = 0; pause.Padding = new Thickness(0);
+        monitorPauseChoice = pause;
+        pause.Checked += (_, _) => { monitorPaused = true; monitorEpoch++; pause.ToolTip = "恢复监控"; pause.Content = ShellGlyph("\uE768"); monitorLastReconcile = default; MonitorTick(); };
+        pause.Unchecked += (_, _) => { monitorPaused = false; monitorEpoch++; pause.ToolTip = "暂停监控"; pause.Content = ShellGlyph("\uE769"); monitorLastReconcile = default; monitorTimer.Start(); MonitorTick(); };
+        DockPanel.SetDock(pause, Dock.Right); header.Children.Add(pause);
+        var modes = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
+        var wall = WallToggle("\uE8A9", "画面墙"); var list = WallToggle("\uE9D5", "资源列表"); wall.IsChecked = true;
+        monitorWallChoice = wall; monitorListChoice = list;
+        wall.Click += (_, _) => { wall.IsChecked = true; list.IsChecked = false; SetMonitorMode(false); };
+        list.Click += (_, _) => { wall.IsChecked = false; list.IsChecked = true; SetMonitorMode(true); };
+        modes.Children.Add(wall); modes.Children.Add(list);
+        var scope = new ComboBox { Width = 118, Height = 34, Margin = new Thickness(0, 0, 8, 0), ItemsSource = new[] { "已连接设备", "全部目录" }, SelectedIndex = 0 };
+        monitorScopeChoice = scope;
+        scope.SelectionChanged += (_, _) => { monitorConnectedOnly = scope.SelectedIndex == 0; monitorEpoch++; monitorLastReconcile = default; MonitorTick(); };
+        modes.Children.Add(scope); DockPanel.SetDock(modes, Dock.Right); header.Children.Add(modes);
+        var heading = new StackPanel();
+        heading.Children.Add(new TextBlock { Text = "实时监控", FontSize = 20, FontWeight = FontWeights.SemiBold });
+        monitorHost = new TextBlock { Text = "主机资源：待采样", Foreground = WallMuted, FontSize = 12, Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap };
+        heading.Children.Add(monitorHost); header.Children.Add(heading);
+        DockPanel.SetDock(header, Dock.Top); page.Children.Add(header);
+        monitorSummary = new TextBlock { Foreground = WallMuted, Margin = new Thickness(0, 0, 0, 8), TextWrapping = TextWrapping.Wrap, ToolTip = "视频到帧率不等于应用帧率；静止画面可能不产生新帧。" };
+        DockPanel.SetDock(monitorSummary, Dock.Top); page.Children.Add(monitorSummary);
+        monitorDetail = new TextBlock { Foreground = WallMuted, TextWrapping = TextWrapping.Wrap, MinHeight = 24, Margin = new Thickness(0, 8, 0, 0), Text = "未选中监看设备" };
+        DockPanel.SetDock(monitorDetail, Dock.Bottom); page.Children.Add(monitorDetail);
+        monitorWall = new WrapPanel { Orientation = Orientation.Horizontal };
+        monitorScroll = new ScrollViewer { Content = monitorWall, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, CanContentScroll = false };
+        monitorScroll.ScrollChanged += (_, _) => { monitorEpoch++; monitorLastReconcile = default; };
+        page.Children.Add(monitorScroll);
+        monitorTimer.Tick += (_, _) => MonitorTick();
+        ViewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(WorkspaceViewModel.Search) or nameof(WorkspaceViewModel.GroupFilter) or nameof(WorkspaceViewModel.Counts)) { monitorEpoch++; monitorLastReconcile = default; }
+        };
+        return page;
+    }
+
+    private void MonitorNavigationChanged()
+    {
+        if (monitorWall is null) return;
+        monitorEpoch++;
+        var active = Equals((tabs.SelectedItem as TabItem)?.Tag, "实时监控");
+        if (active || monitorWasActive) { monitorLastReconcile = default; monitorTimer.Start(); MonitorTick(); }
+        monitorWasActive = active;
+    }
+
+    private void MonitorTick()
+    {
+        if (monitorWall is null || monitorStopping) return;
+        var now = DateTimeOffset.UtcNow;
+        if (monitorRuntime is not null && !ReferenceEquals(monitorRuntime, ViewModel.Runtime))
+            foreach (var tile in monitorTiles.Values) { tile.Eligible = false; tile.ClearUntrustedFrame(); tile.State.Text = "连接上下文已变化"; }
+        foreach (var tile in monitorTiles.Values) { tile.ApplyLayout(monitorCompact, monitorScroll.ViewportWidth); tile.Present(now, MonitorActive && !monitorCompact && tile.VisibleIn(monitorScroll)); }
+        LogMonitorFailures();
+        if (monitorSelected is { } selected && monitorTiles.TryGetValue(selected, out var current))
+            monitorDetail.Text = string.IsNullOrEmpty(monitorNotice) ? current.Detail : monitorNotice;
+        var playing = monitorTiles.Values.Count(tile => tile.Session is { IsRunning: true } && tile.LastFrameAt is not null);
+        monitorSummary.Text = monitorPaused ? "监控已暂停" : !MonitorActive ? "监控已停止" : $"可见 {monitorTiles.Values.Count(tile => tile.VisibleIn(monitorScroll))} 台 · 视频 {playing} 路";
+        if (monitorReconcile.IsCompleted && now - monitorLastReconcile >= TimeSpan.FromSeconds(1))
+        {
+            monitorLastReconcile = now;
+            monitorReconcile = ReconcileMonitorAsync();
+        }
+        if (MonitorActive && monitorSampling.IsCompleted && now - monitorLastSample >= TimeSpan.FromSeconds(2))
+        {
+            monitorLastSample = now;
+            monitorSampling = SampleMonitorAsync();
+        }
+        if (!MonitorActive && monitorReconcile.IsCompleted && monitorTiles.Values.All(tile => tile.Session is null)) monitorTimer.Stop();
+    }
+
+    private async Task ReconcileMonitorAsync()
+    {
+        try
+        {
+            var runtime = ViewModel.Runtime;
+            var epoch = monitorEpoch;
+            bool Current() => epoch == monitorEpoch && ReferenceEquals(runtime, ViewModel.Runtime) && MonitorActive && !ldBusy;
+            if (!ReferenceEquals(monitorRuntime, runtime))
+            {
+                await Task.WhenAll(monitorTiles.Values.Select(tile => tile.StopAsync()).ToArray());
+                monitorTiles.Clear(); monitorWall.Children.Clear(); monitorSelected = null; monitorDetail.Text = "未选中监看设备";
+                monitorRuntime = runtime; monitorResources = new ResourceSampler();
+            }
+            if (!MonitorActive || ldBusy)
+            {
+                await Task.WhenAll(monitorTiles.Values.Select(tile => tile.StopAsync()).ToArray());
+                monitorResources = new ResourceSampler();
+                return;
+            }
+            var expected = new HashSet<string>();
+            foreach (var row in unifiedDeviceView.Cast<UnifiedDeviceRow>().Where(row => !monitorConnectedOnly || row.Connected).ToArray())
+            {
+                if (!Current()) return;
+                expected.Add(row.Key);
+                if (!monitorTiles.TryGetValue(row.Key, out var tile))
+                {
+                    tile = new MonitorTile(row.Key, () => SelectMonitor(row.Key), () => OpenMonitorWindowAsync(row.Key), () => RetryMonitorAsync(row.Key));
+                    monitorTiles.Add(row.Key, tile); monitorWall.Children.Add(tile.Surface);
+                }
+                var instance = runtime.LdPlayer?.Instances.FirstOrDefault(instance => instance.Index == row.Index);
+                var signature = $"{row.Serial}/{row.Device?.Info.Generation}/{instance?.Generation}/{instance?.ProcessId}/{instance?.VBoxProcessId}";
+                if (tile.Signature != signature)
+                {
+                    tile.Eligible = false; tile.ClearUntrustedFrame(); tile.Resource.Text = "CPU 待采样 · 工作集 未知"; tile.State.Text = "实例身份已更新";
+                    await tile.StopAsync();
+                    if (!Current()) return;
+                    tile.Reset(signature, instance, row.Device);
+                }
+                tile.Name.Text = row.Name;
+                tile.Subtitle.Text = instance is null ? row.Serial : $"实例 {instance.Index} · {row.Serial}";
+                var eligible = row.Connected && row.Device?.Info.Online == true && instance is { Index: > 0 and < 99999, AndroidStarted: true }
+                    && runtime.Settings.AdbAllowedSerials.Contains(row.Serial, StringComparer.Ordinal) && LdInstanceConnected(instance.Index);
+                tile.Eligible = eligible;
+                tile.Open.IsEnabled = eligible;
+                if (!eligible || monitorCompact || !tile.VisibleIn(monitorScroll))
+                {
+                    if (!eligible) { tile.ClearUntrustedFrame(); tile.Resource.Text = "CPU 未知 · 工作集 未知"; if (!tile.Failed) tile.State.Text = "未连接/未授权"; }
+                    await tile.StopAsync();
+                    if (!Current()) return;
+                    if (!eligible) tile.ClearUntrustedFrame();
+                    if (!tile.Failed) tile.State.Text = eligible ? monitorCompact ? "资源监控 · 视频已暂停" : "画面已暂停 · 不在可视区域" : instance?.Index == 0 ? "受保护 · 未监控" : !row.Connected ? "未连接" : "未授权视频";
+                    continue;
+                }
+                if (tile.Session is not null || tile.Failed || ViewModel.Demo) continue;
+                await tile.StopCompletion;
+                if (!Current() || tile.Session is not null || tile.Failed) return;
+                if (!tile.VisibleIn(monitorScroll) || !unifiedDeviceView.Cast<UnifiedDeviceRow>().Contains(row) || !LdInstanceConnected(instance!.Index)) continue;
+                if (runtime.Backend is not AdbDeviceBackend backend) { tile.Fail("当前后端不支持实时视频"); continue; }
+                var ffmpeg = ResolveMonitorFfmpeg(runtime.Settings.MonitorFfmpegPath);
+                if (ffmpeg is null) { tile.Fail("未配置 FFmpeg，前往环境设置"); continue; }
+                if (runtime.Settings.MonitorServerPath != runtime.FrozenConnectionSettings.MonitorServerPath) { tile.Fail("视频组件配置已修改，重启程序后生效"); continue; }
+                if (!File.Exists(runtime.Settings.MonitorServerPath)) { tile.Fail("未配置官方视频组件，前往环境设置"); continue; }
+                var width = row.Device!.Info.Width; var height = row.Device.Info.Height;
+                var scale = 320d / Math.Max(width, height);
+                var frameWidth = Math.Max(16, (int)(width * scale) / 2 * 2);
+                var frameHeight = Math.Max(16, (int)(height * scale) / 2 * 2);
+                tile.State.Text = "视频连接中";
+                var videoEpoch = tile.BeginVideo();
+                tile.Session = new ScreenVideoSession(backend, row.Serial, ffmpeg, frameWidth, frameHeight,
+                    frame => tile.AcceptFrame(videoEpoch, frame),
+                    status => tile.AcceptStatus(videoEpoch, status));
+                tile.Session.Start();
+                runtime.Log.Write("monitor-video-start", $"index={instance!.Index}; serial={row.Serial}; generation={instance.Generation}; size={frameWidth}x{frameHeight}");
+            }
+            foreach (var key in monitorTiles.Keys.Where(key => !expected.Contains(key)).ToArray())
+            {
+                await monitorTiles[key].StopAsync(); LogMonitorFailures(); monitorWall.Children.Remove(monitorTiles[key].Surface); monitorTiles.Remove(key);
+                if (monitorSelected == key) { monitorSelected = null; monitorDetail.Text = "未选中监看设备"; }
+            }
+        }
+        catch (Exception ex)
+        {
+            monitorSummary.Text = "监控更新失败：" + ViewModel.PresentError(ex);
+            ViewModel.Runtime.Log.Write("monitor-reconcile-error", ex.ToString());
+        }
+    }
+
+    private async Task SampleMonitorAsync()
+    {
+        var runtime = ViewModel.Runtime;
+        var epoch = monitorEpoch;
+        var sampler = monitorResources;
+        var targets = monitorTiles.Values.Where(tile => tile.Eligible && tile.Target is not null).Select(tile => (tile.Key, Target: tile.Target!)).ToArray();
+        try
+        {
+            var result = await Task.Run(() => (Host: sampler.SampleHost(), Rows: targets.Select(item => (item.Key, Sample: sampler.SampleInstance(item.Target))).ToArray()));
+            if (closing || epoch != monitorEpoch || !ReferenceEquals(runtime, ViewModel.Runtime) || !MonitorActive) return;
+            var host = result.Host;
+            monitorLatestHost = host;
+            if (host.CpuPercent is not null && host.TotalPhysical is > 0 && host.AvailablePhysical is not null) monitorHostValidSamples++;
+            monitorHost.Text = $"主机 CPU {Percent(host.CpuPercent, host.Error is null)} · 内存 {Memory(host.TotalPhysical is { } total && host.AvailablePhysical is { } free ? total - free : null)} / {Memory(host.TotalPhysical)} · {host.ObservedAt.ToLocalTime():HH:mm:ss}";
+            monitorHost.ToolTip = host.Error;
+            foreach (var item in result.Rows)
+            {
+                if (monitorTiles.TryGetValue(item.Key, out var tile) && tile.Target?.Generation == item.Sample.Generation && targets.Any(target => target.Key == item.Key && target.Target == tile.Target)) tile.SetResource(item.Sample);
+            }
+        }
+        catch (Exception ex) { monitorHost.Text = "主机资源未知：" + ViewModel.PresentError(ex); ViewModel.Runtime.Log.Write("monitor-resource-error", ex.ToString()); }
+    }
+
+    private static string Percent(double? value, bool pending = false) => value is { } number ? $"{number:0.0}%" : pending ? "待采样" : "未知";
+    private static string Memory(long? value) => value is { } bytes ? bytes >= 1024L * 1024 * 1024 ? $"{bytes / 1073741824d:0.00} GB" : $"{bytes / 1048576d:0} MB" : "未知";
+    private static string? ResolveMonitorFfmpeg(string configured)
+    {
+        if (!string.IsNullOrWhiteSpace(configured)) return Path.IsPathFullyQualified(configured) && File.Exists(configured) ? configured : null;
+        return (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator).Where(path => !string.IsNullOrWhiteSpace(path)).Select(path => Path.Combine(path.Trim('"'), "ffmpeg.exe")).FirstOrDefault(File.Exists);
+    }
+
+    private void SelectMonitor(string key)
+    {
+        monitorSelected = key; monitorNotice = "";
+        foreach (var tile in monitorTiles.Values) tile.Surface.BorderBrush = WorkspaceBrush(tile.Key == key ? "#3274F6" : "#DFE5EE");
+        MonitorTick();
+    }
+
+    private void SetMonitorMode(bool compact)
+    {
+        monitorCompact = compact; monitorEpoch++; monitorLastReconcile = default;
+        monitorWallChoice.IsChecked = !compact; monitorListChoice.IsChecked = compact;
+        foreach (var tile in monitorTiles.Values) tile.ApplyLayout(compact, monitorScroll.ViewportWidth);
+        MonitorTick();
+    }
+
+    private async Task RetryMonitorAsync(string key)
+    {
+        if (!monitorTiles.TryGetValue(key, out var tile)) return;
+        await tile.StopAsync(); tile.Failed = false; tile.Frame.Source = null; tile.LastFrameAt = null; tile.State.Text = "等待视频";
+        monitorTimer.Start();
+        monitorLastReconcile = default; MonitorTick();
+    }
+
+    private async Task OpenMonitorWindowAsync(string key)
+    {
+        if (!monitorTiles.TryGetValue(key, out var tile) || !tile.Eligible || tile.Instance is not { } instance || tile.Device is not { } device) return;
+        try
+        {
+            var runtime = ViewModel.Runtime;
+            var target = tile.Target ?? throw new InvalidOperationException("未取得已核验的进程身份。");
+            runtime.RequireFrozenConnectionSettings();
+            if (runtime.Backend is not AdbDeviceBackend backend) throw new InvalidOperationException("仅真实雷电实例支持打开窗口。");
+            await backend.VerifyIdentityAsync(device.Serial);
+            if (!ReferenceEquals(runtime, ViewModel.Runtime) || !LdInstanceConnected(instance.Index) || runtime.LdPlayer?.Instances.FirstOrDefault(item => item.Index == instance.Index) != instance) throw new InvalidOperationException("实例身份已变化，请重新接入。");
+            if (ldWindowVisibility?.IsHidden(instance.Index) == true) await ldWindowVisibility.ShowAsync(instance.Index);
+            if (!ReferenceEquals(runtime, ViewModel.Runtime) || !LdInstanceConnected(instance.Index) || runtime.LdPlayer?.Instances.FirstOrDefault(item => item.Index == instance.Index) != instance) throw new InvalidOperationException("窗口恢复期间实例身份已变化。");
+            var foreground = LdRunningWindow.Show(instance, Path.GetDirectoryName(runtime.Settings.LdConsolePath)!, target.PlayerBirth);
+            monitorDetail.Text = monitorNotice = foreground ? $"已请求显示 {tile.Name.Text} 的模拟器窗口" : "已请求显示窗口，Windows 未允许切换前台";
+        }
+        catch (Exception ex) { monitorDetail.Text = monitorNotice = "打开窗口失败：" + ViewModel.PresentError(ex); ViewModel.Runtime.Log.Write("monitor-window-error", ex.ToString()); }
+    }
+
+    private async Task StopMonitorAsync()
+    {
+        monitorStopping = true; monitorEpoch++; monitorTimer.Stop();
+        await monitorReconcile;
+        await Task.WhenAll(monitorTiles.Values.Select(tile => tile.StopAsync()).ToArray());
+        LogMonitorFailures();
+        await monitorSampling;
+        monitorResources = new ResourceSampler();
+        monitorStopping = false;
+    }
+    internal Task StopMonitorAfterFailureAsync() => StopMonitorAsync();
+
+    private void LogMonitorFailures()
+    {
+        foreach (var tile in monitorTiles.Values.Where(tile => tile.Failed && !tile.FailureLogged))
+        {
+            ViewModel.Runtime.Log.Write("monitor-video-error", $"key={tile.Key}; serial={tile.Device?.Serial}; {tile.FailureReason}");
+            tile.FailureLogged = true;
+        }
+    }
+
+    private sealed class MonitorTile
+    {
+        internal readonly string Key;
+        internal readonly Border Surface;
+        internal readonly Image Frame = new() { Stretch = Stretch.Uniform };
+        internal readonly TextBlock Name = new() { FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis };
+        internal readonly TextBlock Subtitle = new() { FontSize = 11, Foreground = WallMuted, TextTrimming = TextTrimming.CharacterEllipsis };
+        internal readonly TextBlock State = new() { Text = "等待视频", FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis };
+        internal readonly TextBlock Resource = new() { Text = "CPU 待采样 · 工作集 未知", FontSize = 11, Foreground = WallMuted };
+        internal readonly Button Open;
+        private readonly Border videoSurface;
+        private readonly Polyline cpuLine = new() { Stroke = WorkspaceBrush("#3274F6"), StrokeThickness = 1.5 };
+        private readonly Polyline memoryLine = new() { Stroke = WorkspaceBrush("#159878"), StrokeThickness = 1.5 };
+        private readonly List<MonitorResourceSample> history = [];
+        private WriteableBitmap? bitmap;
+        internal string Signature = "";
+        internal LdPlayerInstance? Instance;
+        internal DeviceRow? Device;
+        internal MonitorProcessTarget? Target;
+        internal ScreenVideoSession? Session;
+        private sealed record PendingVideo(long Epoch, ScreenVideoFrame Frame);
+        private PendingVideo? pendingFrame;
+        private readonly object frameGate = new();
+        private string? pendingStatus;
+        private long videoEpoch;
+        internal Task StopCompletion = Task.CompletedTask;
+        internal DateTimeOffset? LastFrameAt;
+        internal bool Eligible;
+        internal bool Failed;
+        internal string? FailureReason;
+        internal bool FailureLogged;
+        internal long Received;
+        internal long Presented;
+        internal int ValidResourceSamples;
+        internal MonitorResourceSample? LatestResource;
+        private long previousCount;
+        private DateTimeOffset previousRateAt;
+        private double? arrivalRate;
+        internal string Detail => $"{Name.Text} · {Subtitle.Text} · {State.Text} · {Resource.Text} · 最近 {history.Count} 个资源样本";
+
+        internal MonitorTile(string key, Action select, Func<Task> open, Func<Task> retry)
+        {
+            Key = key;
+            Surface = new Border { Width = 330, Height = 306, Margin = new Thickness(0, 0, 12, 12), Padding = new Thickness(9), BorderThickness = new Thickness(1), BorderBrush = WorkspaceBrush("#DFE5EE"), CornerRadius = new CornerRadius(6), Background = Brushes.White };
+            var stack = new StackPanel(); Surface.Child = stack;
+            var title = new DockPanel();
+            Open = MonitorIcon("\uE8A7", "打开模拟器窗口", open);
+            DockPanel.SetDock(Open, Dock.Right); title.Children.Add(Open);
+            var again = MonitorIcon("\uE72C", "重试视频", retry); DockPanel.SetDock(again, Dock.Right); title.Children.Add(again);
+            var names = new StackPanel(); names.Children.Add(Name); names.Children.Add(Subtitle); title.Children.Add(names); stack.Children.Add(title);
+            videoSurface = new Border { Height = 180, Background = WorkspaceBrush("#161B23"), Margin = new Thickness(0, 7, 0, 6), Child = Frame }; stack.Children.Add(videoSurface);
+            stack.Children.Add(State); stack.Children.Add(Resource);
+            var chart = new Canvas { Height = 24, Width = 308, ClipToBounds = true, ToolTip = "最近15分钟：蓝色 CPU；绿色进程工作集（独立比例）", Margin = new Thickness(0, 5, 0, 0) };
+            chart.Children.Add(cpuLine); chart.Children.Add(memoryLine); stack.Children.Add(chart);
+            Surface.MouseLeftButtonDown += async (_, args) =>
+            {
+                if (args.OriginalSource is DependencyObject source && FindButton(source) is not null) return;
+                select();
+                if (args.ClickCount == 2) await open();
+            };
+        }
+
+        internal void ApplyLayout(bool compact, double viewportWidth)
+        {
+            Surface.Width = compact && double.IsFinite(viewportWidth) ? Math.Max(330, viewportWidth - 14) : 330;
+            Surface.Height = compact ? 122 : 306;
+            videoSurface.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        private static Button? FindButton(DependencyObject source)
+        {
+            for (var current = source; current is not null; current = VisualTreeHelper.GetParent(current)) if (current is Button button) return button;
+            return null;
+        }
+        private static Button MonitorIcon(string glyph, string tooltip, Func<Task> action)
+        {
+            var button = new Button { Content = ShellGlyph(glyph, 14), Width = 29, Height = 28, MinWidth = 0, ToolTip = tooltip, Padding = new Thickness(0) };
+            button.SetResourceReference(StyleProperty, "IconButton");
+            button.Click += async (_, _) => { button.IsEnabled = false; try { await action(); } finally { button.IsEnabled = true; } };
+            return button;
+        }
+        internal bool VisibleIn(ScrollViewer viewport)
+        {
+            if (!Surface.IsVisible || !Surface.IsLoaded || viewport.ActualHeight <= 0) return false;
+            try { return Surface.TransformToAncestor(viewport).TransformBounds(new Rect(Surface.RenderSize)).IntersectsWith(new Rect(0, 0, viewport.ActualWidth, viewport.ViewportHeight)); }
+            catch (InvalidOperationException) { return false; }
+        }
+        internal void Reset(string signature, LdPlayerInstance? instance, DeviceRow? device)
+        {
+            Signature = signature; Instance = instance; Device = device; Failed = false; FailureReason = null; FailureLogged = false; history.Clear(); cpuLine.Points.Clear(); memoryLine.Points.Clear(); ClearUntrustedFrame(); Received = Presented = previousCount = 0; ValidResourceSamples = 0; LatestResource = null; previousRateAt = default; arrivalRate = null;
+            Resource.Text = "CPU 待采样 · 工作集 未知";
+            Target = null;
+            if (instance is { ProcessId: > 0 })
+            {
+                try { Target = new(instance.Index, instance.Generation, instance.ProcessId, Birth(instance.ProcessId), instance.VBoxProcessId, Birth(instance.VBoxProcessId)); }
+                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { Resource.ToolTip = ex.Message; }
+            }
+        }
+        private static long Birth(int pid) { if (pid <= 0) return 0; using var process = Process.GetProcessById(pid); return process.StartTime.ToUniversalTime().Ticks; }
+        internal long BeginVideo()
+        {
+            lock (frameGate) { videoEpoch++; pendingFrame = null; pendingStatus = null; previousRateAt = default; previousCount = Received = 0; arrivalRate = null; return videoEpoch; }
+        }
+        internal void AcceptFrame(long epoch, ScreenVideoFrame frame)
+        {
+            lock (frameGate) { if (videoEpoch == epoch) pendingFrame = new(epoch, frame); }
+        }
+        internal void AcceptStatus(long epoch, string status)
+        {
+            lock (frameGate) { if (videoEpoch == epoch) pendingStatus = status; }
+        }
+        internal void ClearUntrustedFrame()
+        {
+            lock (frameGate) { videoEpoch++; pendingFrame = null; pendingStatus = null; }
+            Frame.Source = null; bitmap = null; LastFrameAt = null;
+        }
+        internal void Present(DateTimeOffset now, bool active)
+        {
+            PendingVideo? pending;
+            string? status;
+            lock (frameGate) { pending = pendingFrame; pendingFrame = null; status = pendingStatus; }
+            if (pending is { } packet && packet.Epoch == videoEpoch && active && Eligible)
+            {
+                var frame = packet.Frame;
+                if (bitmap is null || bitmap.PixelWidth != frame.Width || bitmap.PixelHeight != frame.Height)
+                    bitmap = new WriteableBitmap(frame.Width, frame.Height, 96, 96, PixelFormats.Bgra32, null);
+                bitmap.WritePixels(new Int32Rect(0, 0, frame.Width, frame.Height), frame.Bgra, frame.Width * 4, 0);
+                Frame.Source = bitmap; LastFrameAt = frame.ReceivedAt; Received = frame.Sequence; Presented++;
+            }
+            if (now - previousRateAt >= TimeSpan.FromSeconds(2))
+            {
+                if (previousRateAt != default) arrivalRate = (Received - previousCount) / (now - previousRateAt).TotalSeconds;
+                previousRateAt = now; previousCount = Received;
+            }
+            if (Session is { Completion.IsCompleted: true, LastError: { } error } && !Failed) Fail(error);
+            if (Failed) return;
+            if (!Eligible) return;
+            if (!active) { if (LastFrameAt is not null) State.Text = "画面已暂停 · 历史帧"; return; }
+            if (LastFrameAt is { } received)
+                State.Text = now - received > TimeSpan.FromSeconds(5) ? $"等待新帧 · 上次 {received.ToLocalTime():HH:mm:ss}" : $"视频 · 到帧 {arrivalRate?.ToString("0.0") ?? "--"} 帧/秒 · {received.ToLocalTime():HH:mm:ss}";
+            else if (Session is not null) { State.Text = status ?? "视频连接中"; State.ToolTip = status; }
+        }
+        internal void Fail(string reason) { Failed = true; if (FailureReason != reason) FailureLogged = false; FailureReason = reason; State.Text = "视频不可用：" + reason; State.ToolTip = reason; }
+        internal void SetResource(MonitorResourceSample sample)
+        {
+            LatestResource = sample;
+            if (sample.CpuPercent is not null && sample.WorkingSetBytes is > 0) ValidResourceSamples++;
+            history.Add(sample); history.RemoveAll(item => sample.ObservedAt - item.ObservedAt > TimeSpan.FromMinutes(15));
+            if (history.Count > 451) history.RemoveRange(0, history.Count - 451);
+            Resource.Text = $"CPU {Percent(sample.CpuPercent, sample.Error is null)} · 工作集 {Memory(sample.WorkingSetBytes)}";
+            Resource.ToolTip = $"{sample.ObservedAt.ToLocalTime():HH:mm:ss} · Player+VBox工作集含共享页，非安卓内存\n{sample.Error}";
+            var memoryMax = Math.Max(1, history.Max(item => item.WorkingSetBytes ?? 0));
+            cpuLine.Points.Clear(); memoryLine.Points.Clear();
+            var cpuStart = history.FindLastIndex(item => item.CpuPercent is null) + 1;
+            var memoryStart = history.FindLastIndex(item => item.WorkingSetBytes is null) + 1;
+            for (var i = 0; i < history.Count; i++)
+            {
+                var x = i * 308d / Math.Max(1, history.Count - 1);
+                if (i >= cpuStart && history[i].CpuPercent is { } cpu) cpuLine.Points.Add(new Point(x, 23 - Math.Clamp(cpu, 0, 100) * .22));
+                if (i >= memoryStart && history[i].WorkingSetBytes is { } bytes) memoryLine.Points.Add(new Point(x, 23 - bytes * 22d / memoryMax));
+            }
+        }
+        internal Task StopAsync()
+        {
+            var session = Session;
+            if (session is null) return StopCompletion;
+            Session = null;
+            lock (frameGate) { videoEpoch++; pendingFrame = null; pendingStatus = null; }
+            return StopCompletion = StopCoreAsync(session);
+        }
+        private async Task StopCoreAsync(ScreenVideoSession session)
+        {
+            try { await session.DisposeAsync(); }
+            catch (Exception ex) { Fail("视频清理失败：" + ex.Message); }
+            if (session.LastError is { } error) Fail(error);
+        }
+    }
+}
+
+```
+
 ## src/MatrixDevice.Desktop/Views/NativeView.cs
 
 ```csharp
@@ -7272,6 +8586,8 @@ public partial class MainWindow
         left.Children.Add(PathField("ADB 路径", "Settings.AdbPath"));
         left.Children.Add(Field("授权设备串号 JSON", BoundInput("Settings.AdbSerialsJson", multiline: true)));
         left.Children.Add(PathField("scrcpy 路径", "Settings.ScrcpyPath"));
+        left.Children.Add(PathField("监控视频组件", "Settings.MonitorServerPath"));
+        left.Children.Add(PathField("监控 FFmpeg", "Settings.MonitorFfmpegPath"));
         left.Children.Add(PathField("雷电命令行路径", "Settings.LdConsolePath"));
         var bindings = BoundInput("Settings.LdBindingsJson", multiline: true); bindings.Height = 85; bindings.ToolTip = "例如：{\"0\":\"实际发现的设备序列号\"}；仅保存显式绑定配置，不表示已核验";
         left.Children.Add(Field("实例绑定（JSON）", bindings));
@@ -7315,10 +8631,12 @@ public partial class MainWindow
     {
         var row = new DockPanel(); var browse = Button("\uE8B7", "浏览", () =>
         {
-            var dialog = new OpenFileDialog { Filter = "程序|*.exe|所有文件|*.*" };
+            var dialog = new OpenFileDialog { Filter = binding.EndsWith("MonitorServerPath", StringComparison.Ordinal) ? "官方视频组件|scrcpy-server*|所有文件|*.*" : "程序|*.exe|所有文件|*.*" };
             if (dialog.ShowDialog(this) != true) return;
             if (binding.EndsWith("AdbPath", StringComparison.Ordinal)) { ViewModel.Settings.AdbPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.AdbPath)); }
             else if (binding.EndsWith("LdConsolePath", StringComparison.Ordinal)) { ViewModel.Settings.LdConsolePath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.LdConsolePath)); }
+            else if (binding.EndsWith("MonitorServerPath", StringComparison.Ordinal)) { ViewModel.Settings.MonitorServerPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.MonitorServerPath)); }
+            else if (binding.EndsWith("MonitorFfmpegPath", StringComparison.Ordinal)) { ViewModel.Settings.MonitorFfmpegPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.MonitorFfmpegPath)); }
             else { ViewModel.Settings.ScrcpyPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.ScrcpyPath)); }
         }); DockPanel.SetDock(browse, Dock.Right); row.Children.Add(browse); row.Children.Add(BoundInput(binding)); return Field(label, row);
     }
@@ -7720,7 +9038,7 @@ public partial class MainWindow
     {
         unifiedDeviceView = CollectionViewSource.GetDefaultView(unifiedDevices);
         unifiedDeviceView.Filter = item => item is UnifiedDeviceRow row
-            && (string.IsNullOrWhiteSpace(ViewModel.Search) || row.Name.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) || row.Serial.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) || row.Number.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase))
+            && (string.IsNullOrWhiteSpace(ViewModel.Search) || row.Name.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) || row.Instance?.Name.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) == true || row.Serial.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) || row.Number.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase))
             && (ViewModel.GroupFilter == "全部分组" || row.Group == ViewModel.GroupFilter)
             && (ViewModel.StatusFilter == "全部状态" || row.Device?.Info.State == ViewModel.StatusFilter);
         ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts) or nameof(WorkspaceViewModel.Search) or nameof(WorkspaceViewModel.GroupFilter) or nameof(WorkspaceViewModel.StatusFilter)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
@@ -7860,6 +9178,7 @@ public partial class MainWindow
         if (ViewModel.Demo) throw new DeviceException("演示模式不会操作真实模拟器。", 409, 1003);
         ViewModel.Runtime.RequireFrozenConnectionSettings();
         ldBusy = true; ViewModel.SetExternalBusy(true); RefreshLdButtons();
+        await StopMonitorAsync();
         using var cancellation = new CancellationTokenSource(); ldOperationCancellation = cancellation;
         coldLaunched.Clear(); backgroundHides.Clear(); backgroundHideError = null; operationBackgroundLaunch = backgroundLaunch; RefreshLaunchCommands();
         var complete = false;
@@ -7888,6 +9207,7 @@ public partial class MainWindow
             }
             ldOperationCancellation = null; ldBusy = false; ViewModel.SetExternalBusy(false);
             UpdateLdPlayerRows(); UpdateUnifiedDirectory(); RefreshLdButtons();
+            MonitorNavigationChanged();
         }
     }
 
@@ -7987,14 +9307,77 @@ public partial class MainWindow
         return birth;
     }
 
-    private static Task EnsureLaunchResourcesAsync(CancellationToken ct)
+    private async Task EnsureLaunchResourcesAsync(LdPlayerInstance instance, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        var configuration = LdLaunchMemory.ReadConfiguration(ViewModel.Runtime.FrozenConnectionSettings.LdConsolePath, instance.Index);
         var memory = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
-        if (!GlobalMemoryStatusEx(ref memory)) throw new DeviceException("无法读取系统内存，未启动新实例。", 503, 2000);
-        if (memory.AvailablePhysical < 11UL * 1024 * 1024 * 1024 || memory.MemoryLoad >= 80)
-            throw new DeviceException($"资源不足：可用内存 {memory.AvailablePhysical / 1073741824d:0.0} GiB，负载 {memory.MemoryLoad}%；至少需要11 GiB可用内存且负载低于80%。已运行实例保持不变。", 409, 1003);
-        return Task.CompletedTask;
+        var host = GlobalMemoryStatusEx(ref memory)
+            ? new LdHostMemory(memory.AvailablePhysical, memory.AvailablePageFile, memory.MemoryLoad) : null;
+        var assessment = LdLaunchMemory.Assess(configuration, host);
+        var proceed = await ConfirmLaunchMemoryAsync(instance.Index, instance.Name, assessment, ct);
+        if (!proceed) ldOperationCancellation?.Cancel();
+        ct.ThrowIfCancellationRequested();
+        if (!proceed) throw new OperationCanceledException("用户取消了资源风险启动。", ct);
+    }
+
+    private async Task<bool> ConfirmLaunchMemoryAsync(int index, string name, LdLaunchMemoryAssessment assessment, CancellationToken ct)
+    {
+        return await Dispatcher.InvokeAsync(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+            SetLaunchFeedback($"实例 {index}：{assessment.Message}");
+            ViewModel.Runtime.Log.Write("ld-launch-memory-assessment", $"index={index}; confirmation={assessment.RequiresConfirmation}; {assessment.Message}");
+            if (!assessment.RequiresConfirmation) return true;
+            var accepted = ViewModel.Confirm("启动资源风险", $"实例 {index}：{name}\n\n{assessment.Message}\n\n以上为检查时快照，配置和资源可能继续变化。这不是雷电官方的启动限制。继续可能导致卡顿或启动失败。\n确定：仍然启动本实例；取消：停止本批次后续启动，不关闭已运行实例。");
+            ct.ThrowIfCancellationRequested();
+            ViewModel.Runtime.Log.Write(accepted ? "ld-launch-memory-accepted" : "ld-launch-memory-declined", $"index={index}");
+            return accepted;
+        });
+    }
+
+    private async Task VerifyLaunchMemoryUiAsync()
+    {
+        if (!ViewModel.Demo) throw new InvalidOperationException("内存提示离线验收仅限演示模式。");
+        var originalConfirm = ViewModel.Confirm;
+        var confirmations = 0; var accept = true;
+        CancellationTokenSource? cancelDuringConfirmation = null;
+        ViewModel.Confirm = (title, message) =>
+        {
+            if (!Dispatcher.CheckAccess() || title != "启动资源风险" || !message.Contains("实例 2：离线内存测试", StringComparison.Ordinal) || !message.Contains("不是雷电官方", StringComparison.Ordinal))
+                throw new InvalidOperationException("资源风险提示线程或目标范围错误。");
+            confirmations++; cancelDuringConfirmation?.Cancel(); return accept;
+        };
+        try
+        {
+            var good = LdLaunchMemory.Assess(new(6144), new((ulong)(7.8 * 1073741824), 16UL * 1073741824, 75));
+            if (!await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", good, CancellationToken.None)) || confirmations != 0)
+                throw new InvalidOperationException("7.8 GiB/75%的6 GiB实例被拦截或出现普通启动确认。");
+            var risk = LdLaunchMemory.Assess(new(8192), new((ulong)(7.8 * 1073741824), 16UL * 1073741824, 75));
+            if (!await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", risk, CancellationToken.None)) || confirmations != 1)
+                throw new InvalidOperationException("用户无法确认继续风险启动。");
+            accept = false;
+            if (await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", risk, CancellationToken.None)) || confirmations != 2)
+                throw new InvalidOperationException("用户取消资源风险提示仍被接受。");
+            using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+            try
+            {
+                await ConfirmLaunchMemoryAsync(2, "离线内存测试", risk, cancellation.Token);
+                throw new InvalidOperationException("已取消的资源检查仍可继续。");
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+            if (confirmations != 2) throw new InvalidOperationException("已取消的资源检查仍弹出提示。");
+            using var duringConfirmation = new CancellationTokenSource();
+            accept = true; cancelDuringConfirmation = duringConfirmation;
+            try
+            {
+                await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", risk, duringConfirmation.Token));
+                throw new InvalidOperationException("提示期间取消后仍然接受启动。");
+            }
+            catch (OperationCanceledException) when (duringConfirmation.IsCancellationRequested) { }
+            if (confirmations != 3) throw new InvalidOperationException("提示期间取消验收未覆盖确认回调。");
+        }
+        finally { ViewModel.Confirm = originalConfirm; }
     }
 
     private async Task EditLdInstanceAsync(bool create)
@@ -8537,6 +9920,7 @@ public partial class MainWindow
     private static readonly (string Tag, string Label, string Icon)[] WorkspacePages =
     [
         ("设备墙 / 主控", "设备管理", "\uE8EA"), ("雷电实例", "雷电实例", "\uE7F4"),
+        ("实时监控", "实时监控", "\uE9D9"),
         ("节点", "节点调试", "\uE8A5"), ("截图 / 取色", "截图取色", "\uE722"),
         ("Shell", "命令终端", "\uE756"), ("应用", "应用管理", "\uE71D"),
         ("文件", "文件传输", "\uE8B7"), ("文本", "文本输入", "\uE8D2"),
@@ -9434,7 +10818,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         var settings = Settings.ToSettings() with { WallColumns = WallColumns, SyncMouse = SyncMouse, SyncKeyboard = SyncKeyboard };
         if ((runtime.Api.BasicRunning && settings.BasicApiPort != runtime.Settings.BasicApiPort) || (runtime.Api.AutomatorRunning && settings.AutomatorApiPort != runtime.Settings.AutomatorApiPort)) throw new InvalidOperationException("请先停止正在运行的 API，再修改端口");
         runtime.Settings = runtime.SettingsStore.Save(settings);
-        SettingsNotice = "设置已保存；设备调试服务、自动化服务与雷电连接配置重启后生效";
+        SettingsNotice = "设置已保存；设备调试服务、自动化服务、雷电连接与监控视频组件配置重启后生效";
         AddActivity(SettingsNotice);
         await Task.CompletedTask;
     });
@@ -9482,6 +10866,7 @@ public sealed class SettingsEditor : ObservableObject
     public SettingsEditor(AppSettings settings)
     {
         original = settings;
+        MonitorServerPath = settings.MonitorServerPath; MonitorFfmpegPath = settings.MonitorFfmpegPath;
         AdbPath = settings.AdbPath; AdbSerialsJson = JsonSerializer.Serialize(settings.AdbAllowedSerials, JsonDefaults.Options); ScrcpyPath = settings.ScrcpyPath; LdConsolePath = settings.LdConsolePath; LdBindingsJson = JsonSerializer.Serialize(settings.LdSerialBindings, JsonDefaults.Options); AgentBaseUrl = settings.AgentBaseUrl ?? ""; AgentSerial = settings.AgentSerial ?? "";
         BasicApiPort = settings.BasicApiPort; AutomatorApiPort = settings.AutomatorApiPort; AutoConnect = settings.AutoConnect; AutoStartApi = settings.AutoStartApi;
         Language = "zh-CN"; MainMaxSize = settings.MainMaxSize; MiniMaxSize = settings.MiniMaxSize; MainMaxFps = settings.MainMaxFps; MiniMaxFps = settings.MiniMaxFps;
@@ -9491,6 +10876,8 @@ public sealed class SettingsEditor : ObservableObject
     public string AdbPath { get; set; }
     public string AdbSerialsJson { get; set; }
     public string ScrcpyPath { get; set; }
+    public string MonitorServerPath { get; set; }
+    public string MonitorFfmpegPath { get; set; }
     public string LdConsolePath { get; set; }
     public string LdBindingsJson { get; set; }
     public string AgentBaseUrl { get; set; }
@@ -9527,7 +10914,7 @@ public sealed class SettingsEditor : ObservableObject
         if (bindings.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count() != bindings.Count) throw new InvalidOperationException("不同雷电实例不能绑定相同设备序列号");
         if (!string.IsNullOrWhiteSpace(AgentBaseUrl) && string.IsNullOrWhiteSpace(AgentSerial)) throw new InvalidOperationException("配置 Agent 地址时必须同时指定唯一设备 serial");
         if (!string.IsNullOrWhiteSpace(AgentBaseUrl) && !adbSerials.Contains(AgentSerial.Trim(), StringComparer.Ordinal)) throw new InvalidOperationException("Agent串号必须位于ADB授权串号数组中");
-        return original with { AdbPath = AdbPath.Trim(), AdbAllowedSerials = adbSerials, ScrcpyPath = ScrcpyPath.Trim(), LdConsolePath = LdConsolePath.Trim(), LdSerialBindings = bindings, AgentBaseUrl = string.IsNullOrWhiteSpace(AgentBaseUrl) ? null : AgentBaseUrl.Trim(), AgentSerial = string.IsNullOrWhiteSpace(AgentSerial) ? null : AgentSerial.Trim(), BasicApiPort = BasicApiPort, AutomatorApiPort = AutomatorApiPort, AutoConnect = AutoConnect, AutoStartApi = AutoStartApi, Language = "zh-CN", MainMaxSize = MainMaxSize, MiniMaxSize = MiniMaxSize, MainMaxFps = MainMaxFps, MiniMaxFps = MiniMaxFps, MainBitRate = MainBitRate, MiniBitRate = MiniBitRate, ForceHardwareDecode = ForceHardwareDecode, ShowFps = ShowFps, WindowWidth = WindowWidth, WindowHeight = WindowHeight, FileRoot = FileRoot.Trim(), CommandTimeoutSeconds = CommandTimeoutSeconds };
+        return original with { AdbPath = AdbPath.Trim(), AdbAllowedSerials = adbSerials, ScrcpyPath = ScrcpyPath.Trim(), MonitorServerPath = MonitorServerPath.Trim(), MonitorFfmpegPath = MonitorFfmpegPath.Trim(), LdConsolePath = LdConsolePath.Trim(), LdSerialBindings = bindings, AgentBaseUrl = string.IsNullOrWhiteSpace(AgentBaseUrl) ? null : AgentBaseUrl.Trim(), AgentSerial = string.IsNullOrWhiteSpace(AgentSerial) ? null : AgentSerial.Trim(), BasicApiPort = BasicApiPort, AutomatorApiPort = AutomatorApiPort, AutoConnect = AutoConnect, AutoStartApi = AutoStartApi, Language = "zh-CN", MainMaxSize = MainMaxSize, MiniMaxSize = MiniMaxSize, MainMaxFps = MainMaxFps, MiniMaxFps = MiniMaxFps, MainBitRate = MainBitRate, MiniBitRate = MiniBitRate, ForceHardwareDecode = ForceHardwareDecode, ShowFps = ShowFps, WindowWidth = WindowWidth, WindowHeight = WindowHeight, FileRoot = FileRoot.Trim(), CommandTimeoutSeconds = CommandTimeoutSeconds };
     }
 }
 
@@ -11626,6 +13013,89 @@ public static class LdConnectionAdmission
 
 ```
 
+## src/MatrixDevice.Host/LdPlayer/LdLaunchMemory.cs
+
+```csharp
+using System.Globalization;
+using System.Text.Json;
+
+namespace MatrixDevice.Host;
+
+public sealed record LdMemoryConfiguration(int? MemoryMb, string? Warning = null);
+public sealed record LdHostMemory(ulong AvailablePhysicalBytes, ulong AvailableCommitBytes, uint LoadPercent);
+public sealed record LdLaunchMemoryAssessment(bool RequiresConfirmation, ulong? RecommendedPhysicalBytes, string Message);
+
+public static class LdLaunchMemory
+{
+    private const ulong Mib = 1024 * 1024;
+    private const int MaximumConfigurationBytes = 1024 * 1024;
+
+    public static LdMemoryConfiguration ReadConfiguration(string consolePath, int index)
+    {
+        if (index is <= 0 or >= 99999) return new(null, "实例编号无效，内存配置未知。");
+        try
+        {
+            if (string.IsNullOrWhiteSpace(consolePath) || !Path.IsPathFullyQualified(consolePath) || !File.Exists(consolePath))
+                return new(null, "模拟器命令行路径无效，内存配置未知。");
+            var directory = Path.GetDirectoryName(Path.GetFullPath(consolePath))!;
+            var path = Path.Combine(directory, "vms", "config", "leidian" + index.ToString(CultureInfo.InvariantCulture) + ".config");
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (file.Length > MaximumConfigurationBytes) return new(null, "实例配置文件过大，内存配置未知。");
+            using var document = JsonDocument.Parse(file, new JsonDocumentOptions { MaxDepth = 32 });
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return new(null, "实例配置格式无效，内存配置未知。");
+            JsonElement? ram = null;
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (!property.NameEquals("advancedSettings.memorySize")) continue;
+                if (ram is not null) return new(null, "实例内存配置字段重复，内存配置未知。");
+                ram = property.Value;
+            }
+            if (ram is not { ValueKind: JsonValueKind.Number } value || !value.TryGetInt32(out var memoryMb) || !ValidRam(memoryMb))
+                return new(null, "实例内存字段缺失或无效，请在模拟器设置中确认 RAM。");
+            return new(memoryMb);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or JsonException or System.Security.SecurityException)
+        {
+            return new(null, "无法读取实例内存配置，请在模拟器设置中确认 RAM。");
+        }
+    }
+
+    public static LdLaunchMemoryAssessment Assess(LdMemoryConfiguration configuration, LdHostMemory? host)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        var warnings = new List<string>();
+        if (!string.IsNullOrWhiteSpace(configuration.Warning)) warnings.Add(configuration.Warning.TrimEnd('。'));
+        ulong? recommended = null;
+        ulong? commit = null;
+        if (configuration.MemoryMb is { } memoryMb && ValidRam(memoryMb))
+        {
+            commit = checked(((ulong)memoryMb + 512) * Mib);
+            recommended = checked(commit.Value + 1024 * Mib);
+        }
+        else warnings.Add("实例 RAM 未知，无法计算本次启动的建议预算");
+        var hostKnown = host is not null && host.LoadPercent <= 100;
+        if (!hostKnown) warnings.Add("主机内存状态未知");
+        else
+        {
+            if (recommended is { } physical && host!.AvailablePhysicalBytes < physical) warnings.Add("可用物理内存低于本实例 RAM、512 MiB 进程开销及 1024 MiB 系统预留的建议预算");
+            if (commit is { } requiredCommit && host!.AvailableCommitBytes < requiredCommit) warnings.Add("可用提交内存低于本实例 RAM 与 512 MiB 进程开销的建议预算");
+            if (host!.LoadPercent >= 90) warnings.Add("主机内存负载已达到 90% 或更高");
+        }
+        var ram = recommended is not null ? configuration.MemoryMb!.Value.ToString(CultureInfo.InvariantCulture) + " MiB" : "未知";
+        var load = hostKnown ? host!.LoadPercent.ToString(CultureInfo.InvariantCulture) + "%" : "未知";
+        var summary = $"配置 RAM {ram}；可用物理 {GiB(hostKnown ? host!.AvailablePhysicalBytes : null)}；可用提交 {GiB(hostKnown ? host!.AvailableCommitBytes : null)}；负载 {load}；物理建议预算 {GiB(recommended)}";
+        if (recommended is not null) summary += "（RAM + 512 MiB 进程开销 + 1024 MiB 系统预留）";
+        return warnings.Count == 0
+            ? new(false, recommended, summary + "。当前内存满足建议预算；该预算按采样时刻估算，非官方最低要求，也不代表已预留资源。")
+            : new(true, recommended, summary + "。" + string.Join("；", warnings) + "。建议预算按采样时刻估算，非官方最低要求，也不代表已预留资源；确认风险后仍可继续。");
+    }
+
+    private static bool ValidRam(int memoryMb) => memoryMb is >= 256 and <= 65536;
+    private static string GiB(ulong? bytes) => bytes is { } value ? (value / (double)(1024 * Mib)).ToString("0.0", CultureInfo.InvariantCulture) + " GiB" : "未知";
+}
+
+```
+
 ## src/MatrixDevice.Host/MatrixDevice.Host.csproj
 
 ```xml
@@ -11894,6 +13364,520 @@ public sealed class MatrixRuntime : IAsyncDisposable
         try { Metadata.Dispose(); } catch (Exception e) { errors.Add(e); }
         await Try(() => Log.DisposeAsync().AsTask());
         if (errors.Count > 0) throw new AggregateException("Runtime cleanup errors", errors);
+    }
+}
+
+```
+
+## src/MatrixDevice.Host/Monitoring/LdRunningWindow.cs
+
+```csharp
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+using MatrixDevice.Core;
+using Microsoft.Win32.SafeHandles;
+
+namespace MatrixDevice.Host;
+
+public static class LdRunningWindow
+{
+    // True means foreground activation was accepted; restoration itself is asynchronous.
+    public static bool Show(LdPlayerInstance instance, string expectedInstallDirectory, long expectedPlayerBirth)
+        => Show(instance, expectedInstallDirectory, expectedPlayerBirth, SetForegroundWindow);
+
+    internal static bool Show(LdPlayerInstance instance, string expectedInstallDirectory, long expectedPlayerBirth, Func<IntPtr, bool> requestForeground)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        ArgumentNullException.ThrowIfNull(requestForeground);
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Showing an existing instance window requires Windows.");
+        if (instance.Index <= 0 || instance.Index >= 99999 || instance.Generation <= 0 || instance.ProcessId <= 0 || instance.TopWindow <= 0 || expectedPlayerBirth <= 0)
+            throw new ArgumentException($"Invalid running window target: index {instance.Index}, generation {instance.Generation}, PID {instance.ProcessId}, window {instance.TopWindow}, birth {expectedPlayerBirth}.");
+        if (string.IsNullOrWhiteSpace(expectedInstallDirectory) || !Path.IsPathFullyQualified(expectedInstallDirectory) || !Directory.Exists(expectedInstallDirectory))
+            throw new ArgumentException($"The expected installation directory must exist and be absolute: {expectedInstallDirectory}.", nameof(expectedInstallDirectory));
+        var install = Path.TrimEndingDirectorySeparator(Path.GetFullPath(expectedInstallDirectory));
+        var window = new IntPtr(instance.TopWindow);
+        ValidateWindow(window, instance.ProcessId);
+        using var process = OpenProcess(0x1000 | 0x100000, false, instance.ProcessId);
+        if (process.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot open player process {instance.ProcessId}.");
+        RequireRunning(process, instance.ProcessId);
+        if (!GetProcessTimes(process, out var created, out _, out _, out _))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot read player process {instance.ProcessId} birth.");
+        var birth = DateTime.FromFileTimeUtc(created).Ticks;
+        if (birth != expectedPlayerBirth)
+            throw new InvalidOperationException($"Player process {instance.ProcessId} birth mismatch: expected {expectedPlayerBirth}, actual {birth}.");
+        var executable = new StringBuilder(32768); var size = (uint)executable.Capacity;
+        if (!QueryFullProcessImageName(process, 0, executable, ref size))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot read player process {instance.ProcessId} executable path.");
+        var executableDirectory = Path.GetDirectoryName(Path.GetFullPath(executable.ToString()));
+        if (executableDirectory is null || !Path.TrimEndingDirectorySeparator(executableDirectory).Equals(install, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Player process {instance.ProcessId} executable directory {executableDirectory} does not match {install}.");
+        RequireRunning(process, instance.ProcessId);
+        ValidateWindow(window, instance.ProcessId);
+        if (!ShowWindowAsync(window, 9)) throw new InvalidOperationException($"Restore request was rejected for instance {instance.Index}, window {instance.TopWindow}.");
+        RequireRunning(process, instance.ProcessId);
+        ValidateWindow(window, instance.ProcessId);
+        return requestForeground(window);
+    }
+
+    private static void ValidateWindow(IntPtr window, int expectedPid)
+    {
+        if (!IsWindow(window) || GetAncestor(window, 2) != window)
+            throw new InvalidOperationException($"Window {window} is not an existing top-level window.");
+        if (GetWindowThreadProcessId(window, out var pid) == 0 || pid != expectedPid)
+            throw new InvalidOperationException($"Window {window} owner mismatch: expected PID {expectedPid}, actual {pid}.");
+    }
+
+    private static void RequireRunning(SafeProcessHandle process, int pid)
+    {
+        var state = WaitForSingleObject(process, 0);
+        if (state == 258) return;
+        if (state == uint.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot check player process {pid} liveness.");
+        throw new InvalidOperationException($"Player process {pid} is not running (wait state {state}).");
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, int pid);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetProcessTimes(SafeProcessHandle process, out long created, out long exited, out long kernel, out long user);
+    [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool QueryFullProcessImageName(SafeProcessHandle process, uint flags, StringBuilder path, ref uint size);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window, uint flags);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out int pid);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool ShowWindowAsync(IntPtr window, int command);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetForegroundWindow(IntPtr window);
+}
+
+```
+
+## src/MatrixDevice.Host/Monitoring/ResourceSampler.cs
+
+```csharp
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+[assembly: InternalsVisibleTo("MatrixDevice.Tests")]
+
+namespace MatrixDevice.Host;
+
+public sealed record MonitorProcessTarget(int Index, long Generation, int PlayerPid, long PlayerBirth, int VBoxPid, long VBoxBirth);
+public sealed record MonitorResourceSample(int Index, long Generation, DateTimeOffset ObservedAt, double? CpuPercent, long? WorkingSetBytes, string? Error);
+public sealed record HostResourceSample(DateTimeOffset ObservedAt, double? CpuPercent, long? TotalPhysical, long? AvailablePhysical, string? Error);
+
+public sealed class ResourceSampler
+{
+    private readonly object gate = new();
+    private readonly Func<HostCounters> readHost;
+    private readonly Func<int, long, ProcessCounters> readProcess;
+    private readonly Func<int> readProcessorCount;
+    private readonly TimeProvider clock;
+    private readonly Dictionary<int, InstanceBaseline> instances = [];
+    private HostCounters? previousHost;
+
+    public ResourceSampler() : this(ReadHost, ReadProcess, ReadProcessorCount, TimeProvider.System) { }
+
+    internal ResourceSampler(Func<HostCounters> readHost, Func<int, long, ProcessCounters> readProcess, Func<int> readProcessorCount, TimeProvider clock)
+    {
+        this.readHost = readHost ?? throw new ArgumentNullException(nameof(readHost));
+        this.readProcess = readProcess ?? throw new ArgumentNullException(nameof(readProcess));
+        this.readProcessorCount = readProcessorCount ?? throw new ArgumentNullException(nameof(readProcessorCount));
+        this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
+    }
+
+    public HostResourceSample SampleHost()
+    {
+        lock (gate)
+        {
+            var observedAt = clock.GetUtcNow();
+            try
+            {
+                var current = readHost();
+                if (current.TotalPhysical <= 0 || current.AvailablePhysical < 0 || current.AvailablePhysical > current.TotalPhysical)
+                    throw new InvalidOperationException($"Invalid physical memory: total {current.TotalPhysical}, available {current.AvailablePhysical}.");
+                double? cpu = null;
+                if (previousHost is { } previous)
+                {
+                    if (current.Idle < previous.Idle || current.Kernel < previous.Kernel || current.User < previous.User)
+                        throw new InvalidOperationException("Host CPU counters moved backwards.");
+                    var total = checked(current.Kernel - previous.Kernel + current.User - previous.User);
+                    var idle = current.Idle - previous.Idle;
+                    if (total == 0 || idle > total) throw new InvalidOperationException($"Invalid host CPU interval: total {total}, idle {idle}.");
+                    cpu = (1d - (double)idle / total) * 100d;
+                }
+                previousHost = current;
+                return new(observedAt, cpu, current.TotalPhysical, current.AvailablePhysical, null);
+            }
+            catch (Exception ex) when (IsSamplingFailure(ex))
+            {
+                previousHost = null;
+                return new(observedAt, null, null, null, ex.Message);
+            }
+        }
+    }
+
+    public MonitorResourceSample SampleInstance(MonitorProcessTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        lock (gate)
+        {
+            var observedAt = clock.GetUtcNow();
+            try
+            {
+                if (target.Index <= 0 || target.Index == 99999 || target.Generation <= 0 || target.PlayerPid <= 0 || target.VBoxPid <= 0 || target.PlayerBirth <= 0 || target.VBoxBirth <= 0)
+                    throw new ArgumentException($"Invalid monitor target: index {target.Index}, generation {target.Generation}, player {target.PlayerPid}/{target.PlayerBirth}, VBox {target.VBoxPid}/{target.VBoxBirth}.");
+                if (target.PlayerPid == target.VBoxPid && target.PlayerBirth != target.VBoxBirth)
+                    throw new ArgumentException($"Process {target.PlayerPid} has conflicting expected birth times.");
+                var processorCount = readProcessorCount();
+                if (processorCount <= 0) throw new InvalidOperationException($"Invalid logical processor count: {processorCount}.");
+                var player = ReadVerifiedProcess(target.PlayerPid, target.PlayerBirth);
+                var vbox = target.VBoxPid == target.PlayerPid ? null : ReadVerifiedProcess(target.VBoxPid, target.VBoxBirth);
+                var cpuTicks = checked(player.CpuTicks + (vbox?.CpuTicks ?? 0));
+                // Working sets contain shared pages; this is not exclusive or guest memory.
+                var workingSet = checked(player.WorkingSetBytes + (vbox?.WorkingSetBytes ?? 0));
+                var timestamp = clock.GetTimestamp();
+                double? cpu = null;
+                if (instances.TryGetValue(target.Index, out var previous) && previous.Target == target)
+                {
+                    var elapsed = clock.GetElapsedTime(previous.Timestamp, timestamp).TotalSeconds;
+                    if (elapsed <= 0 || cpuTicks < previous.CpuTicks)
+                        throw new InvalidOperationException($"Invalid CPU interval for instance {target.Index}: elapsed {elapsed}, CPU ticks {previous.CpuTicks} -> {cpuTicks}.");
+                    cpu = Math.Min(100d, (cpuTicks - previous.CpuTicks) / (double)TimeSpan.TicksPerSecond / elapsed / processorCount * 100d);
+                }
+                instances[target.Index] = new(target, cpuTicks, timestamp);
+                return new(target.Index, target.Generation, observedAt, cpu, workingSet, null);
+            }
+            catch (Exception ex) when (IsSamplingFailure(ex))
+            {
+                instances.Remove(target.Index);
+                return new(target.Index, target.Generation, observedAt, null, null, $"Instance {target.Index}: {ex.Message}");
+            }
+        }
+    }
+
+    private ProcessCounters ReadVerifiedProcess(int pid, long birth)
+    {
+        var value = readProcess(pid, birth);
+        if (value.Birth != birth) throw new InvalidOperationException($"Process {pid} birth mismatch: expected {birth}, actual {value.Birth}.");
+        if (value.CpuTicks < 0 || value.WorkingSetBytes < 0)
+            throw new InvalidOperationException($"Invalid counters for process {pid}: CPU ticks {value.CpuTicks}, working set {value.WorkingSetBytes}.");
+        return value;
+    }
+
+    private static bool IsSamplingFailure(Exception ex) => ex is Win32Exception or IOException or InvalidOperationException or ArgumentException or NotSupportedException or OverflowException or DllNotFoundException or EntryPointNotFoundException;
+
+    private static HostCounters ReadHost()
+    {
+        RequireWindows();
+        var groups = GetActiveProcessorGroupCount();
+        if (groups == 0) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot read active processor groups.");
+        if (groups != 1) throw new PlatformNotSupportedException($"Host CPU sampling does not support {groups} processor groups.");
+        var memory = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
+        if (!GlobalMemoryStatusEx(ref memory)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot read physical memory.");
+        if (!GetSystemTimes(out var idle, out var kernel, out var user)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot read host CPU times.");
+        return new(idle, kernel, user, checked((long)memory.TotalPhysical), checked((long)memory.AvailablePhysical));
+    }
+
+    private static int ReadProcessorCount()
+    {
+        RequireWindows();
+        var count = GetActiveProcessorCount(ushort.MaxValue);
+        if (count == 0) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot read active logical processors.");
+        return checked((int)count);
+    }
+
+    private static ProcessCounters ReadProcess(int pid, long expectedBirth)
+    {
+        RequireWindows();
+        // Keep one handle so PID reuse cannot switch the process between identity and counters.
+        using var handle = OpenProcess(0x1000 | 0x0010 | 0x100000, false, pid);
+        if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot open process {pid} for resource sampling.");
+        RequireRunning(handle, pid);
+        if (!GetProcessTimes(handle, out var created, out _, out _, out _))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot read process {pid} identity.");
+        var birth = DateTime.FromFileTimeUtc(created).Ticks;
+        if (birth != expectedBirth) throw new InvalidOperationException($"Process {pid} birth mismatch: expected {expectedBirth}, actual {birth}.");
+        var memory = new ProcessMemory { Size = (uint)Marshal.SizeOf<ProcessMemory>() };
+        if (!K32GetProcessMemoryInfo(handle, ref memory, memory.Size))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot read process {pid} working set.");
+        if (!GetProcessTimes(handle, out _, out _, out var kernel, out var user))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot read process {pid} CPU times.");
+        RequireRunning(handle, pid);
+        return new(birth, checked(kernel + user), checked((long)memory.WorkingSet));
+    }
+
+    private static void RequireRunning(SafeProcessHandle handle, int pid)
+    {
+        var state = WaitForSingleObject(handle, 0);
+        if (state == 258) return;
+        if (state == uint.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot check process {pid} liveness.");
+        if (state == 0) throw new InvalidOperationException($"Process {pid} has exited.");
+        throw new InvalidOperationException($"Unexpected wait state {state} for process {pid}.");
+    }
+
+    private static void RequireWindows()
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Resource sampling requires Windows.");
+    }
+
+    internal sealed record HostCounters(ulong Idle, ulong Kernel, ulong User, long TotalPhysical, long AvailablePhysical);
+    internal sealed record ProcessCounters(long Birth, long CpuTicks, long WorkingSetBytes);
+    private sealed record InstanceBaseline(MonitorProcessTarget Target, long CpuTicks, long Timestamp);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MemoryStatus
+    {
+        public uint Length, Load;
+        public ulong TotalPhysical, AvailablePhysical, TotalPageFile, AvailablePageFile, TotalVirtual, AvailableVirtual, AvailableExtended;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessMemory
+    {
+        public uint Size, PageFaultCount;
+        public nuint PeakWorkingSet, WorkingSet, QuotaPeakPagedPool, QuotaPagedPool, QuotaPeakNonPagedPool, QuotaNonPagedPool, PageFile, PeakPageFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern ushort GetActiveProcessorGroupCount();
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint GetActiveProcessorCount(ushort group);
+    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetSystemTimes(out ulong idle, out ulong kernel, out ulong user);
+    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GlobalMemoryStatusEx(ref MemoryStatus memory);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, int pid);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetProcessTimes(SafeProcessHandle process, out long created, out long exited, out long kernel, out long user);
+    [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool K32GetProcessMemoryInfo(SafeProcessHandle process, ref ProcessMemory memory, uint size);
+}
+
+```
+
+## src/MatrixDevice.Host/Monitoring/ScreenVideoSession.cs
+
+```csharp
+using System.Diagnostics;
+using System.Text;
+using MatrixDevice.Core;
+
+namespace MatrixDevice.Host;
+
+public sealed record ScreenVideoFrame(int Width, int Height, byte[] Bgra, long Sequence, DateTimeOffset ReceivedAt);
+
+public sealed class ScreenVideoSession : IAsyncDisposable
+{
+    private readonly AdbDeviceBackend _backend;
+    private readonly string _serial;
+    private readonly string _ffmpegPath;
+    private readonly int _width;
+    private readonly int _height;
+    private readonly Action<ScreenVideoFrame> _frame;
+    private readonly Action<string> _status;
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly object _gate = new();
+    private Task? _completion;
+    private bool _disposed;
+    private string? _lastError;
+    private long _sequence;
+
+    public ScreenVideoSession(AdbDeviceBackend backend, string serial, string ffmpegPath, int width, int height,
+        Action<ScreenVideoFrame> frame, Action<string> status)
+    {
+        ArgumentNullException.ThrowIfNull(backend);
+        ArgumentException.ThrowIfNullOrWhiteSpace(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ffmpegPath);
+        ArgumentNullException.ThrowIfNull(frame);
+        ArgumentNullException.ThrowIfNull(status);
+        if (width is < 16 or > 1920 || height is < 16 or > 1920 || width % 2 != 0 || height % 2 != 0 || (long)width * height > 2073600)
+            throw new ArgumentOutOfRangeException(nameof(width), $"Invalid video dimensions: {width}x{height}.");
+        _backend = backend;
+        _serial = serial;
+        _ffmpegPath = Path.GetFullPath(ffmpegPath);
+        _width = width;
+        _height = height;
+        _frame = frame;
+        _status = status;
+    }
+
+    public Task Completion { get { lock (_gate) return _completion ?? Task.CompletedTask; } }
+    public bool IsRunning { get { lock (_gate) return _completion is { IsCompleted: false }; } }
+    public string? LastError => Volatile.Read(ref _lastError);
+
+    public void Start()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_completion is not null) throw new InvalidOperationException("A video session can only be started once.");
+            _completion = Task.Run(() => RunAsync(_shutdown.Token));
+        }
+    }
+
+    private async Task RunAsync(CancellationToken ct)
+    {
+        try
+        {
+            _status("正在启动 H.264 视频流");
+            await RunSegmentAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ct.IsCancellationRequested && ex is OperationCanceledException or IOException or ObjectDisposedException && !HasUnconfirmedCleanup(ex))
+        {
+            _status("视频流已停止");
+        }
+        catch (Exception ex)
+        {
+            Volatile.Write(ref _lastError, ex.Message);
+            _status("视频已停止：" + ex.Message);
+        }
+    }
+
+    private async Task RunSegmentAsync(CancellationToken ct)
+    {
+        if (!File.Exists(_ffmpegPath)) throw new FileNotFoundException("找不到视频解码组件。", _ffmpegPath);
+        using var process = new Process { StartInfo = CreateStartInfo(_ffmpegPath, _width, _height) };
+        if (!process.Start()) throw new IOException("无法启动视频解码组件。");
+        using var segment = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var cancellation = segment.Token.Register(() => StopDecoder(process));
+        var errors = new StringBuilder();
+        var stderr = CaptureErrorsAsync(process.StandardError, errors);
+        var stream = PumpAsync(process.StandardInput.BaseStream, segment.Token);
+        var frames = ReadFramesAsync(process.StandardOutput.BaseStream, segment.Token);
+        var exit = process.WaitForExitAsync();
+        try
+        {
+            var completed = await Task.WhenAny(stream, frames, exit).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            if (completed == exit)
+            {
+                await exit.ConfigureAwait(false);
+                if (!stream.IsCompleted) throw new IOException($"视频解码器提前退出（代码 {process.ExitCode}）。");
+            }
+            if (completed == frames)
+            {
+                await frames.ConfigureAwait(false);
+                if (!stream.IsCompleted) throw new IOException("视频解码器在采集结束前关闭了输出。");
+            }
+            await stream.ConfigureAwait(false);
+            await Task.WhenAll(frames, exit).WaitAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+            await stderr.ConfigureAwait(false);
+            if (process.ExitCode != 0) throw new IOException($"视频解码失败（代码 {process.ExitCode}）。");
+            throw new IOException("视频采集连接已结束。");
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            await segment.CancelAsync().ConfigureAwait(false);
+            await ObserveCleanupAsync(stderr).ConfigureAwait(false);
+            throw new IOException(ex.Message + (errors.Length == 0 ? "" : " 解码器：" + errors), ex);
+        }
+        finally
+        {
+            await segment.CancelAsync().ConfigureAwait(false);
+            await ObserveCleanupAsync(Task.WhenAll(stream, frames, exit, stderr)).ConfigureAwait(false);
+            var cleanupError = stream.Exception?.GetBaseException();
+            if (cleanupError?.Data.Contains("VideoCleanupUnconfirmed") == true)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cleanupError).Throw();
+        }
+    }
+
+    private static ProcessStartInfo CreateStartInfo(string ffmpegPath, int width, int height)
+    {
+        var info = new ProcessStartInfo(ffmpegPath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        foreach (var argument in new[] { "-hide_banner", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0",
+            "-threads", "1", "-f", "h264", "-i", "pipe:0", "-an", "-vf", FormattableString.Invariant($"scale={width}:{height}"),
+            "-threads", "1", "-pix_fmt", "bgra", "-fps_mode", "passthrough", "-flush_packets", "1", "-f", "rawvideo", "pipe:1" })
+            info.ArgumentList.Add(argument);
+        return info;
+    }
+
+    private async Task PumpAsync(Stream stdin, CancellationToken ct)
+    {
+        try { await _backend.StreamScreenVideoAsync(_serial, _width, _height, stdin, ct).ConfigureAwait(false); }
+        finally { await stdin.DisposeAsync().ConfigureAwait(false); }
+    }
+
+    private async Task ReadFramesAsync(Stream stdout, CancellationToken ct)
+    {
+        var first = true;
+        while (true)
+        {
+            var bytes = new byte[checked(_width * _height * 4)];
+            var offset = 0;
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if (first) deadline.CancelAfter(TimeSpan.FromSeconds(20));
+            try
+            {
+                while (offset < bytes.Length)
+                {
+                    var read = await stdout.ReadAsync(bytes.AsMemory(offset), deadline.Token).ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        if (offset > 0) throw new IOException($"视频帧被截断：{offset}/{bytes.Length} 字节。");
+                        if (first) throw new IOException("视频解码器未输出首帧，设备可能不支持 H.264 采集。");
+                        return;
+                    }
+                    offset += read;
+                }
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException("等待视频首帧超过 20 秒，已停止当前采集。");
+            }
+            // Deliver synchronously: the consumer replaces its latest frame; no frame or dispatcher queue is built here.
+            _frame(new(_width, _height, bytes, Interlocked.Increment(ref _sequence), DateTimeOffset.UtcNow));
+            if (first) { _status("H.264 视频流已连接"); first = false; }
+        }
+    }
+
+    private static async Task CaptureErrorsAsync(StreamReader stderr, StringBuilder errors)
+    {
+        var block = new char[1024];
+        int count;
+        while ((count = await stderr.ReadAsync(block).ConfigureAwait(false)) != 0)
+        {
+            errors.Append(block, 0, count);
+            if (errors.Length > 8192) errors.Remove(0, errors.Length - 8192);
+        }
+    }
+
+    private static void StopDecoder(Process process)
+    {
+        try { if (!process.HasExited) process.Kill(entireProcessTree: false); }
+        catch (InvalidOperationException) { }
+    }
+
+    private static async Task ObserveCleanupAsync(Task task)
+    {
+        try { await task.WaitAsync(TimeSpan.FromSeconds(15)).ConfigureAwait(false); }
+        catch (TimeoutException ex)
+        {
+            var unconfirmed = new IOException("视频会话清理超过 15 秒，退出状态未确认。", ex);
+            unconfirmed.Data["VideoCleanupUnconfirmed"] = true;
+            throw unconfirmed;
+        }
+        catch (Exception) { /* The main task retains failures; cleanup only drains already stopped owned streams. */ }
+    }
+
+    private static bool HasUnconfirmedCleanup(Exception error) => error.Data.Contains("VideoCleanupUnconfirmed") ||
+        error is AggregateException aggregate && aggregate.InnerExceptions.Any(HasUnconfirmedCleanup) ||
+        error.InnerException is { } inner && HasUnconfirmedCleanup(inner);
+
+    public async ValueTask DisposeAsync()
+    {
+        Task? completion;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            completion = _completion;
+        }
+        await _shutdown.CancelAsync().ConfigureAwait(false);
+        if (completion is not null) await completion.ConfigureAwait(false);
+        _shutdown.Dispose();
     }
 }
 
@@ -12676,6 +14660,301 @@ internal sealed class FakeAdbServer : IAsyncDisposable
 
 ```
 
+## tests/MatrixDevice.Tests/LdLaunchMemoryTests.cs
+
+```csharp
+using System.Text;
+using System.Globalization;
+using MatrixDevice.Host;
+
+internal static class LdLaunchMemoryTests
+{
+    private const ulong Mib = 1024 * 1024;
+    private const ulong Gib = 1024 * Mib;
+
+    public static void Register(Action<string, Func<Task>> test)
+    {
+        test("LD memory reads only the confirmed literal RAM key and leaves the configuration intact", ReadConfigurationAsync);
+        test("LD memory missing malformed ambiguous and unreasonable RAM remain unknown without leaking JSON", UnknownConfigurationAsync);
+        test("LD memory invalid paths indices missing files and oversized files return warnings", ConfigurationBoundsAsync);
+        test("LD memory 7.8 GiB at 75 percent accepts 2 and 6 GiB but warns for 8 GiB", TypicalCapacityAsync);
+        test("LD memory physical commit and load risk thresholds are independent and advisory", RiskThresholdsAsync);
+        test("LD memory unknown host RAM and sampling failures require confirmation without guessing zero", UnknownAssessmentAsync);
+        test("LD memory messages show sampled RAM capacity load and estimates with invariant numeric formatting", AssessmentMessageAsync);
+    }
+
+    private static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
+    private static Task ReadConfigurationAsync()
+    {
+        using var fixture = new MemoryFixture();
+        const string json = "{\"advancedSettings.memorySize\":6144,\"privateUnrelated\":\"PRIVATE_CONFIG_MUST_NOT_APPEAR\"}";
+        fixture.Write(json);
+        var configuration = LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2);
+        Assert(configuration.MemoryMb == 6144 && configuration.Warning is null, "Confirmed literal integer RAM was not read.");
+        Assert(File.ReadAllText(fixture.ConfigurationPath) == json && new FileInfo(fixture.ConsolePath).Length == 0, "ReadConfiguration mutated a fixture or used the console executable.");
+        foreach (var ram in new[] { 256, 2048, 8192, 65536 })
+        {
+            fixture.Write("{\"advancedSettings.memorySize\":" + ram + "}");
+            Assert(LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2).MemoryMb == ram, "Valid custom RAM was rejected: " + ram);
+        }
+        return Task.CompletedTask;
+    }
+
+    private static Task UnknownConfigurationAsync()
+    {
+        using var fixture = new MemoryFixture();
+        foreach (var json in new[]
+        {
+            "{}", "[]", "{\"advancedSettings\":{\"memorySize\":2048}}", "{\"performanceSettings\":{\"memorySize\":2048}}",
+            "{\"advancedSettings.memorySize\":\"2048\"}", "{\"advancedSettings.memorySize\":2048.5}", "{\"advancedSettings.memorySize\":null}",
+            "{\"advancedSettings.memorySize\":0}", "{\"advancedSettings.memorySize\":-1}", "{\"advancedSettings.memorySize\":65537}",
+            "{\"advancedSettings.memorySize\":2048,\"advancedSettings.memorySize\":8192}", "{\"PRIVATE_CONFIG_MUST_NOT_APPEAR\":broken}"
+        })
+        {
+            fixture.Write(json);
+            var configuration = LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2);
+            Assert(configuration.MemoryMb is null && !string.IsNullOrWhiteSpace(configuration.Warning), "Unknown RAM was guessed instead of warned.");
+            Assert(!configuration.Warning!.Contains("PRIVATE_CONFIG_MUST_NOT_APPEAR", StringComparison.Ordinal) && !configuration.Warning.Contains(json, StringComparison.Ordinal), "Configuration contents leaked into its warning.");
+        }
+        return Task.CompletedTask;
+    }
+
+    private static Task ConfigurationBoundsAsync()
+    {
+        using var fixture = new MemoryFixture();
+        fixture.Write("{\"advancedSettings.memorySize\":2048}");
+        foreach (var input in new[] { ("", 2), ("ldconsole.exe", 2), (fixture.ConsolePath + '\0', 2), (fixture.ConsolePath, 0), (fixture.ConsolePath, -1), (fixture.ConsolePath, 99999), (fixture.ConsolePath, 1) })
+        {
+            var configuration = LdLaunchMemory.ReadConfiguration(input.Item1, input.Item2);
+            Assert(configuration.MemoryMb is null && !string.IsNullOrWhiteSpace(configuration.Warning), "Invalid or missing configuration did not remain unknown.");
+        }
+        using (var locked = new FileStream(fixture.ConfigurationPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            Assert(LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2).MemoryMb is null, "Unreadable configuration did not remain unknown.");
+        fixture.Write(new string(' ', 1024 * 1024 + 1));
+        var oversized = LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2);
+        Assert(oversized.MemoryMb is null && !string.IsNullOrWhiteSpace(oversized.Warning), "Oversized configuration was accepted.");
+        return Task.CompletedTask;
+    }
+
+    private static Task TypicalCapacityAsync()
+    {
+        var host = new LdHostMemory(78 * Gib / 10, 16 * Gib, 75);
+        foreach (var ram in new[] { 2048, 6144 })
+        {
+            var result = LdLaunchMemory.Assess(new(ram), host);
+            Assert(!result.RequiresConfirmation && result.RecommendedPhysicalBytes == ((ulong)ram + 1536) * Mib, "Fixed 11 GiB or 80-percent gate still rejects normal RAM: " + ram);
+        }
+        var high = LdLaunchMemory.Assess(new(8192), host);
+        Assert(high.RequiresConfirmation && high.RecommendedPhysicalBytes == 9728 * Mib && !string.IsNullOrWhiteSpace(high.Message), "8 GiB instance did not receive an advisory warning.");
+        return Task.CompletedTask;
+    }
+
+    private static Task RiskThresholdsAsync()
+    {
+        var physical = 5632 * Mib; var commit = 4608 * Mib;
+        foreach (var load in new uint[] { 80, 89 })
+            Assert(!LdLaunchMemory.Assess(new(4096), new(physical, commit, load)).RequiresConfirmation, "Equal budgets or load below 90 still warn.");
+        foreach (var host in new[] { new LdHostMemory(physical - 1, commit, 0), new LdHostMemory(physical, commit - 1, 0), new LdHostMemory(physical, commit, 90) })
+        {
+            var result = LdLaunchMemory.Assess(new(4096), host);
+            Assert(result.RequiresConfirmation && result.RecommendedPhysicalBytes == physical && !string.IsNullOrWhiteSpace(result.Message), "A single capacity risk was missed.");
+        }
+        return Task.CompletedTask;
+    }
+
+    private static Task UnknownAssessmentAsync()
+    {
+        foreach (var ram in new int?[] { null, 0, -1, int.MaxValue })
+        {
+            var result = LdLaunchMemory.Assess(new(ram, "RAM 未知"), new(16 * Gib, 16 * Gib, 10));
+            Assert(result.RequiresConfirmation && result.RecommendedPhysicalBytes is null && !string.IsNullOrWhiteSpace(result.Message), "Invalid RAM became a guessed zero budget.");
+        }
+        var noHost = LdLaunchMemory.Assess(new(6144), null);
+        Assert(noHost.RequiresConfirmation && noHost.RecommendedPhysicalBytes == 7680 * Mib, "Missing host discarded known RAM or silently allowed launch.");
+        Assert(LdLaunchMemory.Assess(new(2048, "配置读取存在警告"), new(16 * Gib, 16 * Gib, 0)).RequiresConfirmation, "Known configuration warning was discarded.");
+        Assert(LdLaunchMemory.Assess(new(2048), new(16 * Gib, 16 * Gib, 101)).RequiresConfirmation, "Malformed load was accepted as valid host memory.");
+        return Task.CompletedTask;
+    }
+
+    private static Task AssessmentMessageAsync()
+    {
+        var previous = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+            var host = new LdHostMemory(78 * Gib / 10, 16 * Gib, 75);
+            var known = LdLaunchMemory.Assess(new(6144), host);
+            foreach (var text in new[] { "配置 RAM 6144 MiB", "可用物理 7.8 GiB", "可用提交 16.0 GiB", "负载 75%", "物理建议预算 7.5 GiB", "512 MiB", "1024 MiB", "非官方最低要求", "采样时刻" })
+                Assert(known.Message.Contains(text, StringComparison.Ordinal), "Known memory message omitted a reproducible value: " + text);
+            var warning = LdLaunchMemory.Assess(new(8192), host);
+            Assert(warning.Message.Contains("物理建议预算 9.5 GiB", StringComparison.Ordinal) && warning.Message.Contains("仍可继续", StringComparison.Ordinal), "Risk message hid its budget or became a hard refusal.");
+            var unknownHost = LdLaunchMemory.Assess(new(6144), null);
+            foreach (var text in new[] { "配置 RAM 6144 MiB", "可用物理 未知", "可用提交 未知", "负载 未知", "物理建议预算 7.5 GiB" })
+                Assert(unknownHost.Message.Contains(text, StringComparison.Ordinal), "Unknown host message fabricated or omitted a value: " + text);
+            var unknownRam = LdLaunchMemory.Assess(new(null), host);
+            Assert(unknownRam.Message.Contains("配置 RAM 未知", StringComparison.Ordinal) && unknownRam.Message.Contains("物理建议预算 未知", StringComparison.Ordinal), "Unknown RAM message guessed a numeric budget.");
+        }
+        finally { CultureInfo.CurrentCulture = previous; }
+        return Task.CompletedTask;
+    }
+
+    private sealed class MemoryFixture : IDisposable
+    {
+        private readonly string directory = Path.Combine(Path.GetTempPath(), "MatrixDevice.Tests", "LdLaunchMemory", Guid.NewGuid().ToString("N"));
+        public string ConsolePath => Path.Combine(directory, "ldconsole.exe");
+        public string ConfigurationPath => Path.Combine(directory, "vms", "config", "leidian2.config");
+        public MemoryFixture()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(ConfigurationPath)!);
+            File.WriteAllBytes(ConsolePath, []);
+        }
+        public void Write(string json) => File.WriteAllText(ConfigurationPath, json, new UTF8Encoding(false));
+        public void Dispose()
+        {
+            if (File.Exists(ConfigurationPath)) File.Delete(ConfigurationPath);
+            File.Delete(ConsolePath);
+            Directory.Delete(Path.GetDirectoryName(ConfigurationPath)!);
+            Directory.Delete(Path.Combine(directory, "vms"));
+            Directory.Delete(directory);
+        }
+    }
+}
+
+```
+
+## tests/MatrixDevice.Tests/LdRunningWindowTests.cs
+
+```csharp
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using MatrixDevice.Core;
+using MatrixDevice.Host;
+
+public static class LdRunningWindowTests
+{
+    public static void Register(Action<string, Func<Task>> test)
+    {
+        test("existing LD window rejects protected stale and foreign identities before showing", RejectionAsync);
+        test("existing LD window restores an owned native window and reports focus refusal", RestoreAsync);
+        test("existing LD window refuses child and destroyed handles", InvalidHandleAsync);
+    }
+
+    private static Task RejectionAsync()
+    {
+        if (!OperatingSystem.IsWindows()) return Task.CompletedTask;
+        var window = CreateOwnWindow();
+        using var process = Process.GetCurrentProcess();
+        var birth = process.StartTime.ToUniversalTime().Ticks;
+        var install = Path.GetDirectoryName(process.MainModule!.FileName)!;
+        var instance = OwnInstance(window);
+        var calls = 0;
+        bool Focus(IntPtr _) { calls++; return true; }
+        try
+        {
+            foreach (var invalid in new[] { instance with { Index = 0 }, instance with { Index = -1 }, instance with { Index = 99999 }, instance with { Index = 100000 }, instance with { Generation = 0 }, instance with { ProcessId = int.MaxValue } })
+                ExpectRefusal(() => LdRunningWindow.Show(invalid, install, birth, Focus));
+            ExpectRefusal(() => LdRunningWindow.Show(instance, install, birth + 1, Focus));
+            ExpectRefusal(() => LdRunningWindow.Show(instance, Path.GetTempPath(), birth, Focus));
+            ExpectRefusal(() => LdRunningWindow.Show(instance, "relative-install", birth, Focus));
+            Assert(calls == 0 && !IsWindowVisible(window), "Rejected identity reached activation or showed the window.");
+        }
+        finally { DestroyWindow(window); }
+        return Task.CompletedTask;
+    }
+
+    private static Task RestoreAsync()
+    {
+        if (!OperatingSystem.IsWindows()) return Task.CompletedTask;
+        var window = CreateOwnWindow();
+        using var process = Process.GetCurrentProcess();
+        var birth = process.StartTime.ToUniversalTime().Ticks;
+        var install = Path.GetDirectoryName(process.MainModule!.FileName)!;
+        var instance = OwnInstance(window);
+        var calls = 0;
+        try
+        {
+            var foreground = LdRunningWindow.Show(instance, install, birth, handle => { calls++; Assert(handle == window, "Activation changed target."); return false; });
+            PumpMessages();
+            Assert(!foreground && calls == 1 && IsWindowVisible(window), "Foreground refusal was treated as failure to request restoration or reported as success.");
+            Assert(GetParent(window) == IntPtr.Zero, "Restoration reparented the window.");
+            LdRunningWindow.Show(instance, install, birth);
+            PumpMessages();
+            Assert(IsWindowVisible(window), "Native foreground request hid the existing window.");
+        }
+        finally { DestroyWindow(window); }
+        return Task.CompletedTask;
+    }
+
+    private static Task InvalidHandleAsync()
+    {
+        if (!OperatingSystem.IsWindows()) return Task.CompletedTask;
+        var parent = CreateOwnWindow(); var child = CreateOwnWindow(parent);
+        using var process = Process.GetCurrentProcess();
+        var birth = process.StartTime.ToUniversalTime().Ticks;
+        var install = Path.GetDirectoryName(process.MainModule!.FileName)!;
+        try
+        {
+            ExpectRefusal(() => LdRunningWindow.Show(OwnInstance(child), install, birth));
+            Assert(!IsWindowVisible(parent), "Child-window rejection changed its parent.");
+            DestroyWindow(child); child = IntPtr.Zero;
+            var destroyed = parent; DestroyWindow(parent); parent = IntPtr.Zero;
+            ExpectRefusal(() => LdRunningWindow.Show(OwnInstance(destroyed), install, birth));
+        }
+        finally { if (child != IntPtr.Zero) DestroyWindow(child); if (parent != IntPtr.Zero) DestroyWindow(parent); }
+        return Task.CompletedTask;
+    }
+
+    private static LdPlayerInstance OwnInstance(IntPtr window) => new(1, "Owned native test window", window.ToInt64(), 0, false, Environment.ProcessId, -1);
+
+    private static IntPtr CreateOwnWindow(IntPtr parent = default)
+    {
+        var window = CreateWindowEx(0x08000080, "STATIC", "Owned monitoring window test", parent == IntPtr.Zero ? 0x00CF0000u : 0x40000000u,
+            -20000, -20000, 120, 80, parent, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+        if (window == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot create the owned native test window.");
+        return window;
+    }
+
+    private static void PumpMessages()
+    {
+        while (PeekMessage(out var message, IntPtr.Zero, 0, 0, 1))
+        {
+            TranslateMessage(ref message); DispatchMessage(ref message);
+        }
+    }
+
+    private static void ExpectRefusal(Action action)
+    {
+        try { action(); }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception) { return; }
+        throw new InvalidOperationException("Invalid existing-window target was accepted.");
+    }
+
+    private static void Assert(bool valid, string message) { if (!valid) throw new InvalidOperationException(message); }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowMessage
+    {
+        public IntPtr Window;
+        public uint Message;
+        public nuint WParam;
+        public IntPtr LParam;
+        public uint Time;
+        public int X, Y;
+        public uint Private;
+    }
+
+    [DllImport("user32.dll", EntryPoint = "CreateWindowExW", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr CreateWindowEx(uint exStyle, string className, string title, uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr parameter);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool DestroyWindow(IntPtr window);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern IntPtr GetParent(IntPtr window);
+    [DllImport("user32.dll", EntryPoint = "PeekMessageW")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool PeekMessage(out WindowMessage message, IntPtr window, uint minimum, uint maximum, uint remove);
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool TranslateMessage(ref WindowMessage message);
+    [DllImport("user32.dll", EntryPoint = "DispatchMessageW")] private static extern IntPtr DispatchMessage(ref WindowMessage message);
+}
+
+```
+
 ## tests/MatrixDevice.Tests/LdWorkspaceTests.cs
 
 ```csharp
@@ -12694,6 +14973,7 @@ public static class LdWorkspaceTests
         test("LD workspace launch timeout never retries or starts later instances", LaunchTimeoutAsync);
         test("LD workspace launch cancellation leaves launched instances alone", LaunchCancellationAsync);
         test("LD workspace launch resource rejection stops the remaining batch", ResourceRejectionAsync);
+        test("LD workspace launch resource cancellation stops the remaining batch without closing guests", ResourceCancellationAsync);
         test("LD workspace launch rejects changed generations after the resource callback", ResourceGenerationAsync);
         test("LD workspace launch rejects changed instance identity while waiting", LaunchIdentityAsync);
         test("LD workspace coordinator serializes overlapping batches", OverlappingBatchesAsync);
@@ -12726,9 +15006,17 @@ public static class LdWorkspaceTests
             if (index == 2) Assert(runner.Instances.Single(item => item.Index == 1).Flag == 1, "Second instance started before the first was ready.");
         };
         await using var service = new LdPlayerService(runner);
-        var resources = 0; var progress = new RecordingProgress();
-        var result = await Coordinator(service).StartAsync([1, 2], _ => { resources++; return Task.CompletedTask; }, progress);
+        var resources = 0; var checkedIndices = new List<int>(); var progress = new RecordingProgress();
+        var result = await Coordinator(service).StartAsync([1, 2], (instance, ct) =>
+        {
+            ct.ThrowIfCancellationRequested();
+            checkedIndices.Add(instance.Index); resources++;
+            Assert(instance.ProcessId <= 0 && instance.VBoxProcessId <= 0, "Resource check did not receive the stopped target snapshot.");
+            Assert(instance.Index == 1 || runner.Instances.Single(item => item.Index == 1).Flag == 1, "Next resource check ran before the previous instance was ready.");
+            return Task.CompletedTask;
+        }, progress);
         Assert(resources == 2 && runner.Count("launch") == 2, "Launch or resource checks were skipped or repeated.");
+        Assert(checkedIndices.SequenceEqual([1, 2]), "Resource estimates were not associated with each target instance.");
         Assert(result.Select(item => item.Index).SequenceEqual([1, 2]) && result.All(item => item.State == "ready"), "Sequential results were incomplete.");
         Assert(progress.Items.Any(item => item.State == "waiting") && result.All(item => item.Message.Contains("ADB", StringComparison.Ordinal)), "Progress incorrectly claimed guest readiness.");
         Assert(!runner.Calls.Any(call => call.Contains("0") || call[0] is "adb" or "quit" or "quitall"), "Batch touched protected or global operations.");
@@ -12782,7 +15070,7 @@ public static class LdWorkspaceTests
         runner.Instances[0] = new(1, "A", 1, 101, 201);
         runner.Instances.Add(new(2, "B", 2, 102, -1) { BootReads = 3 });
         await using var service = new LdPlayerService(runner);
-        var result = await Coordinator(service).StartAsync([1, 2], _ => throw new InvalidOperationException("Existing processes must not reserve another launch."));
+        var result = await Coordinator(service).StartAsync([1, 2], (instance, ct) => throw new InvalidOperationException("Existing processes must not reserve another launch."));
         Assert(result[0].State == "skipped" && result[1].State == "ready" && runner.Count("launch") == 0, "Existing processes were relaunched or marked ready too early.");
         var zeroPid = new FakeConsole(); zeroPid.Instances[0] = new(1, "A", 2) { BootReads = 3 };
         await using var zeroPidService = new LdPlayerService(zeroPid);
@@ -12819,6 +15107,28 @@ public static class LdWorkspaceTests
         var resources = 0;
         await Expect(503, () => Coordinator(service).StartAsync([1, 2], _ => ++resources == 1 ? Task.CompletedTask : throw new DeviceException("reserve rejected", 503, 2000)));
         Assert(resources == 2 && runner.Count("launch") == 1 && runner.Count("quit") == 0, "Resource rejection did not stop after the first ready instance.");
+    }
+
+    private static async Task ResourceCancellationAsync()
+    {
+        var runner = new FakeConsole(); runner.Instances.Add(new(2, "B")); runner.Instances.Add(new(3, "C"));
+        await using var service = new LdPlayerService(runner);
+        using var cancellation = new CancellationTokenSource();
+        var checkedIndices = new List<int>();
+        try
+        {
+            await Coordinator(service).StartAsync([1, 2, 3], (instance, ct) =>
+            {
+                checkedIndices.Add(instance.Index);
+                if (instance.Index == 2) cancellation.Cancel();
+                ct.ThrowIfCancellationRequested();
+                return Task.CompletedTask;
+            }, ct: cancellation.Token);
+            throw new InvalidOperationException("Resource warning cancellation was ignored.");
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        Assert(checkedIndices.SequenceEqual([1, 2]) && runner.Count("launch") == 1 && runner.Count("quit") == 0,
+            "Declined resource warning started the declined or later instance, or closed an already started instance.");
     }
 
     private static async Task LaunchIdentityAsync()
@@ -13428,6 +15738,217 @@ internal static class LiveAcceptance
 
 ```
 
+## tests/MatrixDevice.Tests/MonitorResourceTests.cs
+
+```csharp
+using System.ComponentModel;
+using System.Diagnostics;
+using MatrixDevice.Host;
+
+public static class MonitorResourceTests
+{
+    public static void Register(Action<string, Func<Task>> test)
+    {
+        test("monitor host CPU requires two valid samples and measures busy time", HostCpuAsync);
+        test("monitor instance CPU uses elapsed time and whole-machine normalization", InstanceCpuAsync);
+        test("monitor process identity failure clears CPU history and never changes targets", IdentityAsync);
+        test("monitor restart and counter regression reset the baseline", RestartAsync);
+        test("monitor invalid targets never reach process sampling", InvalidTargetsAsync);
+        test("monitor sampling failures are unknown instead of zero and recover cold", FailuresAsync);
+        test("monitor concurrent calls serialize sampling and baseline updates", ConcurrentAsync);
+        test("monitor native sampling reads only the owned current process", OwnedProcessAsync);
+        test("monitor native sampling rejects an exited owned process by its retained handle", ExitedOwnedProcessAsync);
+    }
+
+    private static Task HostCpuAsync()
+    {
+        var current = new ResourceSampler.HostCounters(50, 100, 100, 16000, 8000);
+        var sampler = Create(() => current);
+        var first = sampler.SampleHost();
+        Assert(first.CpuPercent is null && first.Error is null && first.TotalPhysical == 16000 && first.AvailablePhysical == 8000, "First host sample lost memory or invented CPU.");
+        current = current with { Idle = 90, Kernel = 200, User = 200 };
+        Near(sampler.SampleHost().CpuPercent, 80);
+        current = current with { Idle = 190, Kernel = 300 };
+        var idle = sampler.SampleHost();
+        Near(idle.CpuPercent, 0); Assert(idle.Error is null, "Valid zero CPU was treated as missing.");
+        return Task.CompletedTask;
+    }
+
+    private static Task InstanceCpuAsync()
+    {
+        var clock = new ManualClock(); long cpu = 0;
+        var reads = new List<int>();
+        var sampler = Create(readProcess: (pid, birth) => { reads.Add(pid); return new(birth, cpu, pid == 11 ? 100 : 200); }, clock: clock, processors: 8);
+        var target = Target;
+        var first = sampler.SampleInstance(target);
+        Assert(first.CpuPercent is null && first.WorkingSetBytes == 300 && first.Error is null, "First instance sample invented CPU or lost working set.");
+        cpu = TimeSpan.TicksPerSecond; clock.Advance(TimeSpan.FromSeconds(2)); clock.UtcNow = clock.UtcNow.AddHours(-1);
+        var second = sampler.SampleInstance(target);
+        Near(second.CpuPercent, 12.5);
+        Assert(second.ObservedAt < first.ObservedAt && reads.SequenceEqual([11, 22, 11, 22]), "CPU used wall-clock time or sampled an unrelated process.");
+        var sameProcess = target with { Index = 2, VBoxPid = target.PlayerPid, VBoxBirth = target.PlayerBirth };
+        reads.Clear();
+        Assert(sampler.SampleInstance(sameProcess).WorkingSetBytes == 100 && reads.SequenceEqual([11]), "Shared PID was sampled or counted twice.");
+        return Task.CompletedTask;
+    }
+
+    private static Task IdentityAsync()
+    {
+        var clock = new ManualClock(); long cpu = 0; var wrongPid = 0; var reads = new List<int>();
+        var sampler = Create(readProcess: (pid, birth) => { reads.Add(pid); return new(pid == wrongPid ? birth + 1 : birth, cpu, 10); }, clock: clock);
+        sampler.SampleInstance(Target);
+        wrongPid = 11; reads.Clear(); clock.Advance(TimeSpan.FromSeconds(1));
+        var wrong = sampler.SampleInstance(Target);
+        Assert(wrong.Error?.Contains("11", StringComparison.Ordinal) == true && wrong.CpuPercent is null && wrong.WorkingSetBytes is null && reads.SequenceEqual([11]), "Identity mismatch published counters or continued into another target.");
+        wrongPid = 22; reads.Clear(); clock.Advance(TimeSpan.FromSeconds(1));
+        var wrongVBox = sampler.SampleInstance(Target);
+        Assert(wrongVBox.Error?.Contains("22", StringComparison.Ordinal) == true && wrongVBox.CpuPercent is null && wrongVBox.WorkingSetBytes is null && reads.SequenceEqual([11, 22]), "VBox identity mismatch published partial counters.");
+        wrongPid = 0; cpu = 100; clock.Advance(TimeSpan.FromSeconds(1));
+        Assert(sampler.SampleInstance(Target).CpuPercent is null, "Recovery reused the rejected CPU interval.");
+        clock.Advance(TimeSpan.FromSeconds(1)); cpu += TimeSpan.TicksPerSecond;
+        Near(sampler.SampleInstance(Target).CpuPercent, 50);
+        return Task.CompletedTask;
+    }
+
+    private static Task RestartAsync()
+    {
+        var clock = new ManualClock(); long cpu = TimeSpan.TicksPerSecond;
+        var sampler = Create(readProcess: (_, birth) => new(birth, cpu, 10), clock: clock);
+        sampler.SampleInstance(Target);
+        clock.Advance(TimeSpan.FromSeconds(1)); cpu += TimeSpan.TicksPerSecond;
+        Near(sampler.SampleInstance(Target).CpuPercent, 50);
+        var restarted = Target with { Generation = 2, PlayerBirth = 1111, VBoxBirth = 2222 };
+        clock.Advance(TimeSpan.FromSeconds(1)); cpu = 0;
+        var first = sampler.SampleInstance(restarted);
+        Assert(first.CpuPercent is null && first.Generation == 2 && first.Error is null, "Restart retained old CPU counters.");
+        clock.Advance(TimeSpan.FromSeconds(1)); cpu = TimeSpan.TicksPerSecond;
+        Near(sampler.SampleInstance(restarted).CpuPercent, 50);
+        clock.Advance(TimeSpan.FromSeconds(1)); cpu = 1;
+        var regression = sampler.SampleInstance(restarted);
+        Assert(regression.CpuPercent is null && regression.Error is not null, "CPU counter regression became zero or a negative percentage.");
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert(sampler.SampleInstance(restarted).CpuPercent is null, "Counter regression retained the baseline.");
+        return Task.CompletedTask;
+    }
+
+    private static Task InvalidTargetsAsync()
+    {
+        var reads = 0;
+        var sampler = Create(readProcess: (_, birth) => { reads++; return new(birth, 0, 10); });
+        foreach (var target in new[] { Target with { Index = 0 }, Target with { Index = 99999 }, Target with { Generation = 0 }, Target with { PlayerPid = 0 }, Target with { VBoxBirth = 0 }, Target with { VBoxPid = 11, VBoxBirth = 999 } })
+        {
+            var sample = sampler.SampleInstance(target);
+            Assert(sample.Error is not null && sample.CpuPercent is null && sample.WorkingSetBytes is null, "Invalid target produced a resource value.");
+        }
+        Assert(reads == 0, "Invalid or protected target reached the process reader.");
+        return Task.CompletedTask;
+    }
+
+    private static Task FailuresAsync()
+    {
+        var clock = new ManualClock(); var fail = false;
+        var current = new ResourceSampler.HostCounters(10, 100, 100, 16000, 8000);
+        var sampler = Create(() => fail ? throw new Win32Exception(5, "Denied test host") : current,
+            (_, birth) => fail ? throw new Win32Exception(5, "Denied test process") : new(birth, 0, 10), clock);
+        sampler.SampleHost(); sampler.SampleInstance(Target);
+        fail = true; clock.Advance(TimeSpan.FromSeconds(1));
+        var hostFailure = sampler.SampleHost(); var processFailure = sampler.SampleInstance(Target);
+        Assert(hostFailure.CpuPercent is null && hostFailure.TotalPhysical is null && hostFailure.Error?.Contains("Denied", StringComparison.Ordinal) == true, "Host failure became fake zero.");
+        Assert(processFailure.CpuPercent is null && processFailure.WorkingSetBytes is null && processFailure.Error?.Contains("Denied", StringComparison.Ordinal) == true, "Process failure became fake zero.");
+        fail = false; clock.Advance(TimeSpan.FromSeconds(1));
+        Assert(sampler.SampleHost().CpuPercent is null && sampler.SampleInstance(Target).CpuPercent is null, "Recovery did not reset CPU baselines.");
+        var noAdvance = sampler.SampleHost();
+        Assert(noAdvance.CpuPercent is null && noAdvance.Error is not null, "Non-advancing host counters invented zero.");
+        Assert(sampler.SampleInstance(Target).Error is not null, "Non-advancing monotonic time was accepted.");
+        current = current with { AvailablePhysical = 17000 };
+        Assert(sampler.SampleHost().Error is not null, "Impossible physical memory was accepted.");
+        var zeroProcessors = Create(processors: 0).SampleInstance(Target);
+        Assert(zeroProcessors.Error is not null && zeroProcessors.CpuPercent is null, "Invalid processor count produced a percentage.");
+        return Task.CompletedTask;
+    }
+
+    private static async Task ConcurrentAsync()
+    {
+        var clock = new ManualClock(); long cpu = 0;
+        var sampler = Create(readProcess: (_, birth) => { clock.Advance(TimeSpan.FromSeconds(1)); cpu += TimeSpan.TicksPerSecond; return new(birth, cpu, 10); }, clock: clock);
+        var target = Target with { VBoxPid = 11, VBoxBirth = 111 };
+        var samples = await Task.WhenAll(Enumerable.Range(0, 64).Select(_ => Task.Run(() => sampler.SampleInstance(target))));
+        Assert(samples.Count(sample => sample.CpuPercent is null) == 1 && samples.All(sample => sample.Error is null), "Concurrent sampling lost or raced its baseline.");
+        foreach (var sample in samples.Where(sample => sample.CpuPercent.HasValue)) Near(sample.CpuPercent, 25);
+    }
+
+    private static Task OwnedProcessAsync()
+    {
+        var sampler = new ResourceSampler();
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert(sampler.SampleHost().Error is not null, "Unsupported host platform appeared successful.");
+            Assert(sampler.SampleInstance(Target).Error is not null, "Unsupported process platform appeared successful.");
+            return Task.CompletedTask;
+        }
+        using var owned = Process.GetCurrentProcess();
+        var host = sampler.SampleHost();
+        if (host.Error?.Contains("processor groups", StringComparison.Ordinal) == true)
+            Assert(host.CpuPercent is null && host.TotalPhysical is null, "Unsupported processor groups published incomplete host counters.");
+        else
+            Assert(host.Error is null && host.CpuPercent is null && host.TotalPhysical > 0 && host.AvailablePhysical >= 0 && host.AvailablePhysical <= host.TotalPhysical, "Native first host sample failed: " + host.Error);
+        var target = new MonitorProcessTarget(1, 1, owned.Id, owned.StartTime.ToUniversalTime().Ticks, owned.Id, owned.StartTime.ToUniversalTime().Ticks);
+        var first = sampler.SampleInstance(target);
+        Assert(first.Error is null && first.CpuPercent is null && first.WorkingSetBytes > 0, "Native first sample failed on the owned process: " + first.Error);
+        var wrong = sampler.SampleInstance(target with { PlayerBirth = target.PlayerBirth + 1, VBoxBirth = target.VBoxBirth + 1 });
+        Assert(wrong.Error?.Contains("birth mismatch", StringComparison.Ordinal) == true && wrong.CpuPercent is null && wrong.WorkingSetBytes is null, "Native reader accepted the wrong process birth.");
+        Assert(sampler.SampleInstance(target).CpuPercent is null, "Native birth failure retained the old baseline.");
+        return Task.CompletedTask;
+    }
+
+    private static async Task ExitedOwnedProcessAsync()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var executable = Environment.ProcessPath ?? throw new InvalidOperationException("Test process executable is unavailable.");
+        var start = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
+        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            start.ArgumentList.Add(typeof(MonitorResourceTests).Assembly.Location);
+        start.ArgumentList.Add("--ldconsole-test-child"); start.ArgumentList.Add("sleep");
+        using var child = Process.Start(start) ?? throw new InvalidOperationException("Cannot start the owned test child.");
+        try
+        {
+            var birth = child.StartTime.ToUniversalTime().Ticks;
+            _ = child.Handle;
+            child.Kill();
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert(child.WaitForExit(5000) && child.Id != Environment.ProcessId, "Owned child termination did not complete.");
+            var target = new MonitorProcessTarget(1, 1, child.Id, birth, child.Id, birth);
+            var sample = new ResourceSampler().SampleInstance(target);
+            Assert(sample.Error?.Contains("has exited", StringComparison.Ordinal) == true && sample.CpuPercent is null && sample.WorkingSetBytes is null,
+                $"Exited owned process was not rejected by handle liveness: child {child.Id}, exited {child.HasExited}, code {child.ExitCode}, sample {sample}.");
+        }
+        finally
+        {
+            if (!child.HasExited) { child.Kill(); await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
+        }
+    }
+
+    private static MonitorProcessTarget Target => new(1, 1, 11, 111, 22, 222);
+
+    private static ResourceSampler Create(Func<ResourceSampler.HostCounters>? readHost = null, Func<int, long, ResourceSampler.ProcessCounters>? readProcess = null, ManualClock? clock = null, int processors = 4)
+        => new(readHost ?? (() => new(10, 100, 100, 16000, 8000)), readProcess ?? ((_, birth) => new(birth, 0, 10)), () => processors, clock ?? new());
+
+    private static void Near(double? actual, double expected) => Assert(actual.HasValue && Math.Abs(actual.Value - expected) < .000001, $"Expected CPU {expected}, actual {actual}.");
+    private static void Assert(bool valid, string message) { if (!valid) throw new InvalidOperationException(message); }
+
+    private sealed class ManualClock : TimeProvider
+    {
+        private long timestamp;
+        public DateTimeOffset UtcNow { get; set; } = new(2026, 10, 15, 0, 0, 0, TimeSpan.Zero);
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override DateTimeOffset GetUtcNow() => UtcNow;
+        public override long GetTimestamp() => timestamp;
+        public void Advance(TimeSpan elapsed) { timestamp += elapsed.Ticks; UtcNow += elapsed; }
+    }
+}
+
+```
+
 ## tests/MatrixDevice.Tests/MultiInstanceAcceptance.cs
 
 ```csharp
@@ -14015,7 +16536,11 @@ if (args.Length > 0 && args[0] == "--ldconsole-test-child")
 var tests = new List<(string Name, Func<Task> Run)>();
 void Test(string name, Func<Task> run) => tests.Add((name, run));
 ExistingAdbTests.Register(Test);
+ScreenVideoTests.Register(Test);
 LdWorkspaceTests.Register(Test);
+LdLaunchMemoryTests.Register(Test);
+MonitorResourceTests.Register(Test);
+LdRunningWindowTests.Register(Test);
 Test("LD admission applies only unique explicit local proofs and never mutates old authorization", async () =>
 {
     var original = new AppSettings { AdbAllowedSerials = ["emulator-5556"], LdSerialBindings = new() { [1] = "emulator-5556" } };
@@ -14774,6 +17299,573 @@ sealed class KeyGateBackend : IDeviceBackend
 
 ```
 
+## tests/MatrixDevice.Tests/ScreenVideoTests.cs
+
+```csharp
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
+using System.Text;
+using System.Text.RegularExpressions;
+using MatrixDevice.Core;
+using MatrixDevice.Host;
+
+internal static class ScreenVideoTests
+{
+    public static void Register(Action<string, Func<Task>> test)
+    {
+        test("video requires allowlist identity guard transport and bounded even dimensions before guest access", AdmissionAsync);
+        test("video rejects an untrusted server digest before uploading or launching it", ServerDigestAsync);
+        test("video decoder publishes complete timestamped frames and rejects truncation without synthetic FPS", FramesAsync);
+        test("video decoder process arguments force H264 BGRA passthrough with no shell", DecoderArgumentsAsync);
+        test("video decoder preserves cleanup failures through wrapped cancellation errors", CleanupClassificationAsync);
+        test("video local cancellation returns cancellation when normal server exit wins before copy", CompletionCancellationAsync);
+        test("video completion keeps identity cleanup and abnormal exit failures during local cancellation", CompletionFailuresAsync);
+        if (FindServer() is null)
+        {
+            Console.WriteLine("SKIP video component integration fixtures: set MATRIX_TEST_SCRCPY_SERVER to official scrcpy-server 3.3.4.");
+            return;
+        }
+        test("video streams beyond screenshot limit without occupying the serial command lane", StreamingAsync);
+        test("video duplicate lease is rejected and cancellation releases only its owned socket", CancellationAsync);
+        test("video periodically rejects changed transport and bound identity", IdentityAsync);
+        test("video rejects unsupported raw H264 with explicit diagnostics and never substitutes screenshots", UnsupportedAsync);
+        test("video backend disposal drains owned video streams", DisposalAsync);
+        test("video stalled cleanup signals only the session PID after birth verification", OwnedCleanupAsync);
+        test("video mismatched cleanup proof blocks another stream on the same serial", CleanupRefusalAsync);
+        test("video cleanup confirms process disappearance during snapshot signal and exit recheck", CleanupDisappearanceAsync);
+        test("video cleanup preserves permission failures when the owned PID still exists", CleanupReadFailureAsync);
+        test("video cancellation during startup OKAY handshake blocks unproven retry and preserves its artifact", StartupCancellationAsync);
+        test("video disconnect after startup OKAY never releases an unproven session for retry", StartupDisconnectAsync);
+        if (FindFfmpeg() is not null) test("video local official components decode H264 frames and dispose the owned decoder", DecoderIntegrationAsync);
+    }
+
+    private static string? FindServer()
+    {
+        var configured = Environment.GetEnvironmentVariable("MATRIX_TEST_SCRCPY_SERVER");
+        if (!string.IsNullOrWhiteSpace(configured)) return configured;
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            var path = Path.Combine(directory.FullName, ".tools", "scrcpy-server-3.3.4", "scrcpy-server-v3.3.4");
+            if (File.Exists(path)) return path;
+        }
+        return null;
+    }
+    private static string? FindFfmpeg()
+    {
+        var path = Environment.GetEnvironmentVariable("MATRIX_TEST_FFMPEG") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WinGet", "Links", "ffmpeg.exe");
+        return File.Exists(path) ? path : null;
+    }
+    private static AdbDeviceBackend Backend(FakeScreenVideoServer server) => new(new AppSettings { AdbAllowedSerials = ["allowed"], CommandTimeoutSeconds = 2, MonitorServerPath = FindServer() ?? "" }, server.Endpoint);
+    private static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
+    private static async Task Expect(int status, Func<Task> action)
+    {
+        try { await action(); throw new Exception("Expected video rejection."); }
+        catch (DeviceException ex) { Assert(ex.Status == status, $"Expected {status}, actual {ex.Status}: {ex.Message}"); }
+    }
+    private static async Task Canceled(Task task)
+    {
+        try { await task.WaitAsync(TimeSpan.FromSeconds(5)); throw new Exception("Video cancellation was ignored."); }
+        catch (OperationCanceledException) { }
+    }
+
+    private static async Task AdmissionAsync()
+    {
+        await using var server = new FakeScreenVideoServer();
+        await using var backend = Backend(server);
+        await Expect(403, () => backend.StreamScreenVideoAsync("private", 32, 32, Stream.Null));
+        await Expect(403, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null));
+        backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+        await Expect(503, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null));
+        foreach (var size in new[] { (0, 32), (31, 32), (32, 33), (1922, 32), (1920, 1920) })
+            await Expect(400, () => backend.StreamScreenVideoAsync("allowed", size.Item1, size.Item2, Stream.Null));
+        Assert(server.Requests.IsEmpty, "Invalid video admission reached ADB.");
+    }
+
+    private static async Task CompletionCancellationAsync()
+    {
+        using var stop = new CancellationTokenSource();
+        stop.Cancel();
+        var pendingCopy = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await Canceled(ExistingAdbTransport.AwaitVideoCompletionAsync(pendingCopy.Task, Task.FromResult(0), "allowed", () => "normal exit", stop.Token));
+        Assert(!pendingCopy.Task.IsCompleted, "The regression must force server exit to win before the copy completes.");
+        var pendingServer = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await Canceled(ExistingAdbTransport.AwaitVideoCompletionAsync(Task.CompletedTask, pendingServer.Task, "allowed", () => "EOF", stop.Token));
+    }
+
+    private static async Task CompletionFailuresAsync()
+    {
+        using var stop = new CancellationTokenSource(); stop.Cancel();
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await Expect(503, () => ExistingAdbTransport.AwaitVideoCompletionAsync(pending.Task, Task.FromResult(0), "allowed", () => "unexpected exit", CancellationToken.None));
+        await Expect(503, () => ExistingAdbTransport.AwaitVideoCompletionAsync(pending.Task, Task.FromResult(7), "allowed", () => "encoder failed", stop.Token));
+        var identity = new DeviceException("Bound device identity changed.", 409, 1003);
+        var cleanup = new DeviceException("Owned video process exit unconfirmed.", 409, 1003); cleanup.Data["VideoCleanupUnconfirmed"] = true;
+        foreach (var failure in new Exception[] { identity, cleanup, new IOException("Wrapped cleanup failure.", cleanup) })
+        {
+            foreach (var serverWins in new[] { true, false })
+            {
+                var copy = serverWins ? pending.Task : Task.FromException(failure);
+                var server = serverWins ? Task.FromException<int>(failure) : new TaskCompletionSource<int>().Task;
+                try { await ExistingAdbTransport.AwaitVideoCompletionAsync(copy, server, "allowed", () => "fault", stop.Token); throw new Exception("Video completion swallowed a fault."); }
+                catch (Exception actual) when (ReferenceEquals(actual, failure)) { }
+            }
+        }
+    }
+
+    private static async Task StreamingAsync()
+    {
+        await using var server = new FakeScreenVideoServer { Flood = true };
+        await using var backend = Backend(server);
+        backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+        await backend.DiscoverAsync();
+        using var stop = new CancellationTokenSource();
+        using var output = new CountingVideoStream(AdbDeviceBackend.MaximumStdoutBytes + 65536L);
+        var video = backend.StreamScreenVideoAsync("allowed", 32, 32, output, stop.Token);
+        await output.Reached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var query = await backend.ShellAsync("allowed", "wm size").WaitAsync(TimeSpan.FromSeconds(2));
+        Assert(query.Contains("32x32", StringComparison.Ordinal), "Long video occupied the serial command queue.");
+        stop.Cancel(); await Canceled(video);
+        Assert(output.Count > AdbDeviceBackend.MaximumStdoutBytes, "Video still used the screenshot aggregation limit.");
+        Assert(!server.Requests.Any(request => request.Contains("screencap", StringComparison.Ordinal) || request.Contains("kill", StringComparison.Ordinal)), "Video used PNG or global process cleanup.");
+    }
+
+    private static async Task CancellationAsync()
+    {
+        await using var server = new FakeScreenVideoServer();
+        await using var backend = Backend(server);
+        backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+        await backend.DiscoverAsync();
+        using var stop = new CancellationTokenSource();
+        var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null, stop.Token);
+        await server.VideoEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await Expect(409, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null));
+        stop.Cancel(); await Canceled(video);
+        await server.VideoClosed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        server.EndImmediately = true;
+        await Expect(503, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null).WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert((await backend.ShellAsync("allowed", "wm size")).Contains("32x32", StringComparison.Ordinal), "Video cancellation broke unrelated requests.");
+    }
+
+    private static async Task IdentityAsync()
+    {
+        foreach (var changeTransport in new[] { true, false })
+        {
+            await using var server = new FakeScreenVideoServer();
+            await using var backend = Backend(server);
+            var changed = false;
+            backend.RegisterIdentityGuard("allowed", _ => changed ? throw new DeviceException("Bound instance replaced.", 409, 1003) : Task.CompletedTask);
+            await backend.DiscoverAsync();
+            var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null);
+            await server.VideoEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            if (changeTransport) server.TransportId = 2; else changed = true;
+            await Expect(409, () => video.WaitAsync(TimeSpan.FromSeconds(5)));
+            await server.VideoClosed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert(server.Requests.Count(request => request.Contains("com.genymobile.scrcpy.Server", StringComparison.Ordinal)) == 1, "Identity rejection silently reopened capture.");
+        }
+    }
+
+    private static async Task UnsupportedAsync()
+    {
+        await using var server = new FakeScreenVideoServer { Unsupported = true };
+        await using var backend = Backend(server);
+        backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+        await backend.DiscoverAsync();
+        using var output = new MemoryStream();
+        await Expect(501, () => backend.StreamScreenVideoAsync("allowed", 32, 32, output));
+        Assert(output.Length == 0, "Non-H264 error bytes were forwarded to the decoder.");
+        Assert(server.Requests.All(request => !request.Contains("screencap", StringComparison.Ordinal)), "Unsupported video fell back to PNG.");
+    }
+
+    private static async Task DisposalAsync()
+    {
+        await using var server = new FakeScreenVideoServer();
+        var backend = Backend(server);
+        backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+        await backend.DiscoverAsync();
+        var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null);
+        await server.VideoEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await backend.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await Canceled(video);
+        await server.VideoClosed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    private static async Task ServerDigestAsync()
+    {
+        await using var server = new FakeScreenVideoServer();
+        var artifact = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllBytesAsync(artifact, [1, 2, 3]);
+            await using var backend = new AdbDeviceBackend(new() { AdbAllowedSerials = ["allowed"], MonitorServerPath = artifact }, server.Endpoint);
+            backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+            await backend.DiscoverAsync();
+            await Expect(403, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null));
+            Assert(!server.Requests.Any(request => request == "sync:" || request.Contains("app_process", StringComparison.Ordinal)), "Untrusted artifact reached guest.");
+        }
+        finally { File.Delete(artifact); }
+    }
+
+    private static async Task DecoderIntegrationAsync()
+    {
+        var ffmpeg = FindFfmpeg()!;
+        var info = new System.Diagnostics.ProcessStartInfo(ffmpeg) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var value in new[] { "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=32x32:rate=5", "-frames:v", "8", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-tune", "zerolatency", "-f", "h264", "pipe:1" }) info.ArgumentList.Add(value);
+        using var generator = System.Diagnostics.Process.Start(info)!;
+        using var fixture = new MemoryStream();
+        var copy = generator.StandardOutput.BaseStream.CopyToAsync(fixture); var errors = generator.StandardError.ReadToEndAsync();
+        await Task.WhenAll(copy, generator.WaitForExitAsync()).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert(generator.ExitCode == 0, "H264 fixture generation failed: " + await errors);
+        for (var iteration = 0; iteration < 5; iteration++)
+        {
+        var unconfirmed = iteration == 4;
+        await using var server = new FakeScreenVideoServer { VideoBytes = fixture.ToArray(), StallAfterDisconnect = unconfirmed, ChangedProcessBirth = unconfirmed };
+        await using var backend = Backend(server);
+        backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+        await backend.DiscoverAsync();
+        var frames = new ConcurrentQueue<ScreenVideoFrame>();
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var session = new ScreenVideoSession(backend, "allowed", ffmpeg, 32, 32,
+            frame => { frames.Enqueue(frame); if (frames.Count >= 3) ready.TrySetResult(); }, _ => { });
+        session.Start();
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await session.DisposeAsync();
+        var count = frames.Count;
+        Assert((unconfirmed ? session.LastError?.Contains("清理未确认", StringComparison.Ordinal) == true : session.LastError is null) && !session.IsRunning && count is >= 3 and <= 8, "Real decoder misclassified shutdown or fabricated frames: " + session.LastError);
+        Assert(frames.All(frame => frame.Bgra.Length == 32 * 32 * 4) && frames.First().Bgra.Distinct().Count() > 10, "FFmpeg did not decode actual image pixels.");
+        Assert(frames.Count == count, "Frame callbacks continued after disposal.");
+        }
+    }
+
+    private static Task CleanupClassificationAsync()
+    {
+        var method = typeof(ScreenVideoSession).GetMethod("HasUnconfirmedCleanup", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var cleanup = new DeviceException("Owned process exit unconfirmed."); cleanup.Data["VideoCleanupUnconfirmed"] = true;
+        foreach (var error in new Exception[] { cleanup, new IOException("Decoder cancelled.", cleanup), new AggregateException(new OperationCanceledException(), cleanup) })
+            Assert((bool)method.Invoke(null, [error])!, "Wrapped cleanup failure could be suppressed as normal cancellation.");
+        Assert(!(bool)method.Invoke(null, [new IOException("Decoder stopped after cancellation.")])!, "Expected decoder cancellation was classified as unconfirmed cleanup.");
+        return Task.CompletedTask;
+    }
+
+    private static async Task OwnedCleanupAsync()
+    {
+        await using var server = new FakeScreenVideoServer { StallAfterDisconnect = true };
+        await using var backend = Backend(server);
+        backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+        await backend.DiscoverAsync();
+        using var stop = new CancellationTokenSource();
+        var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null, stop.Token);
+        await server.VideoEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        stop.Cancel(); await Canceled(video);
+        var signals = server.Requests.Where(request => request.Contains("kill -TERM", StringComparison.Ordinal)).ToArray();
+        Assert(signals.Length == 1 && signals[0].Contains("kill -TERM 12345", StringComparison.Ordinal) && signals[0].Contains("789", StringComparison.Ordinal), "Cleanup did not freeze a single owned PID and birth.");
+        Assert(server.Requests.All(request => !request.Contains("pkill", StringComparison.Ordinal) && !request.Contains("killall", StringComparison.Ordinal)), "Cleanup used a process name sweep.");
+    }
+
+    private static async Task CleanupRefusalAsync()
+    {
+        await using var server = new FakeScreenVideoServer { StallAfterDisconnect = true, ChangedProcessBirth = true };
+        await using var backend = Backend(server);
+        backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+        await backend.DiscoverAsync();
+        using var stop = new CancellationTokenSource();
+        var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null, stop.Token);
+        await server.VideoEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        stop.Cancel(); await Expect(409, () => video.WaitAsync(TimeSpan.FromSeconds(6)));
+        var count = server.Requests.Count;
+        await Expect(409, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null));
+        Assert(server.Requests.Count == count && server.Requests.All(request => !request.Contains("kill -TERM", StringComparison.Ordinal)), "Unproven cleanup killed a replacement or permitted overlapping retry.");
+    }
+
+    private static async Task StartupCancellationAsync()
+    {
+        await using var server = new FakeScreenVideoServer { HoldServerOkay = true };
+        await using var backend = Backend(server);
+        backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+        await backend.DiscoverAsync();
+        using var stop = new CancellationTokenSource();
+        var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null, stop.Token);
+        await server.ServerRequestEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        stop.Cancel();
+        await AssertUnprovenStartupAsync(server, backend, video);
+    }
+
+    private static async Task CleanupDisappearanceAsync()
+    {
+        foreach (var stage in new[] { "snapshot", "signal", "recheck" })
+        {
+            await using var server = new FakeScreenVideoServer { StallAfterDisconnect = true, ProcessDisappearsAt = stage };
+            await using var backend = Backend(server);
+            backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+            await backend.DiscoverAsync();
+            using var stop = new CancellationTokenSource();
+            var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null, stop.Token);
+            await server.VideoEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            stop.Cancel(); await Canceled(video);
+            Assert(server.Requests.Any(request => request.Contains("MATRIX_VIDEO_PID_12345_ABSENT", StringComparison.Ordinal)), "Disappeared process was accepted without an explicit second absence check: " + stage);
+            Assert(server.Requests.Any(request => request.StartsWith("shell,v2,raw:rm -f", StringComparison.Ordinal)), "Confirmed exited process retained its owned artifact: " + stage);
+            server.EndImmediately = true;
+            await Expect(503, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null).WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+    }
+
+    private static async Task CleanupReadFailureAsync()
+    {
+        foreach (var stage in new[] { "snapshot", "signal", "recheck" })
+        {
+            await using var server = new FakeScreenVideoServer { StallAfterDisconnect = true, ProcessReadFailsAt = stage };
+            await using var backend = Backend(server);
+            backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+            await backend.DiscoverAsync();
+            using var stop = new CancellationTokenSource();
+            var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null, stop.Token);
+            await server.VideoEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            stop.Cancel(); await Expect(409, () => video.WaitAsync(TimeSpan.FromSeconds(6)));
+            var count = server.Requests.Count;
+            await Expect(409, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null));
+            Assert(server.Requests.Count == count && server.Requests.All(request => !request.StartsWith("shell,v2,raw:rm -f", StringComparison.Ordinal)), "Still-existing process read failure was treated as a successful exit: " + stage);
+        }
+    }
+
+    private static async Task StartupDisconnectAsync()
+    {
+        await using var server = new FakeScreenVideoServer { DisconnectAfterServerOkay = true };
+        await using var backend = Backend(server);
+        backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+        await backend.DiscoverAsync();
+        var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null);
+        await AssertUnprovenStartupAsync(server, backend, video);
+    }
+
+    private static async Task AssertUnprovenStartupAsync(FakeScreenVideoServer server, AdbDeviceBackend backend, Task video)
+    {
+        await Expect(409, () => video.WaitAsync(TimeSpan.FromSeconds(6)));
+        var count = server.Requests.Count;
+        await Expect(409, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null));
+        Assert(server.Requests.Count == count, "Unproven startup permitted another guest request.");
+        Assert(server.Requests.All(request => !request.Contains("kill -TERM", StringComparison.Ordinal) && !request.StartsWith("shell,v2,raw:rm -f", StringComparison.Ordinal)), "Unproven startup signalled a PID or removed its evidence artifact.");
+    }
+
+    private static async Task FramesAsync()
+    {
+        await using var backend = new AdbDeviceBackend(new());
+        var received = new List<ScreenVideoFrame>();
+        await using var session = new ScreenVideoSession(backend, "allowed", "unused.exe", 16, 16, received.Add, _ => { });
+        var method = typeof(ScreenVideoSession).GetMethod("ReadFramesAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var bytes = Enumerable.Range(0, 16 * 16 * 4 * 3).Select(index => (byte)(index % 251)).ToArray();
+        using var input = new FragmentedVideoStream(bytes);
+        var before = DateTimeOffset.UtcNow;
+        await (Task)method.Invoke(session, [input, CancellationToken.None])!;
+        Assert(received.Count == 3 && received.Select(frame => frame.Sequence).SequenceEqual(new long[] { 1, 2, 3 }), "Decoder lost, repeated or reordered complete frames.");
+        Assert(received.All(frame => frame.Width == 16 && frame.Height == 16 && frame.ReceivedAt >= before), "Frame geometry or receive clock missing.");
+        Assert(received.SelectMany(frame => frame.Bgra).SequenceEqual(bytes), "Fragmented output corrupted BGRA frames.");
+        using var truncated = new FragmentedVideoStream(new byte[100]);
+        try { await (Task)method.Invoke(session, [truncated, CancellationToken.None])!; throw new Exception("Truncated frame published."); }
+        catch (IOException) { }
+        Assert(received.Count == 3, "Partial frame was published.");
+    }
+
+    private static Task DecoderArgumentsAsync()
+    {
+        var method = typeof(ScreenVideoSession).GetMethod("CreateStartInfo", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var info = (System.Diagnostics.ProcessStartInfo)method.Invoke(null, ["C:\\trusted path\\ffmpeg.exe", 320, 240])!;
+        var arguments = info.ArgumentList.ToArray();
+        Assert(!info.UseShellExecute && info.CreateNoWindow && info.RedirectStandardInput && info.RedirectStandardOutput && info.RedirectStandardError, "Decoder process isolation missing.");
+        Assert(info.FileName == "C:\\trusted path\\ffmpeg.exe" && arguments.Contains("h264") && arguments.Contains("bgra") && arguments.Contains("scale=320:240") && arguments.Contains("passthrough"), "Fixed video decode contract missing.");
+        Assert(!arguments.Contains("-r") && !arguments.Any(argument => argument.Contains("fps=", StringComparison.Ordinal)), "Decoder fabricated repeated frames.");
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class CountingVideoStream(long target) : Stream
+{
+    public long Count { get; private set; }
+    public TaskCompletionSource Reached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested(); Count += buffer.Length;
+        if (Count >= target) Reached.TrySetResult();
+        return ValueTask.CompletedTask;
+    }
+    public override bool CanRead => false; public override bool CanSeek => false; public override bool CanWrite => true;
+    public override long Length => Count; public override long Position { get => Count; set => throw new NotSupportedException(); }
+    public override void Flush() { }
+    public override void Write(byte[] buffer, int offset, int count) => WriteAsync(buffer.AsMemory(offset, count)).GetAwaiter().GetResult();
+    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+}
+
+internal sealed class FragmentedVideoStream(byte[] bytes) : MemoryStream(bytes)
+{
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) => base.ReadAsync(buffer[..Math.Min(buffer.Length, 37)], ct);
+}
+
+internal sealed class FakeScreenVideoServer : IAsyncDisposable
+{
+    private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+    private readonly CancellationTokenSource _stop = new();
+    private readonly ConcurrentBag<Task> _clients = [];
+    private readonly Task _accepting;
+    public IPEndPoint Endpoint => (IPEndPoint)_listener.LocalEndpoint;
+    public ConcurrentQueue<string> Requests { get; } = [];
+    public TaskCompletionSource VideoEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource VideoClosed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public uint TransportId { get; set; } = 1;
+    public bool Flood { get; set; }
+    public bool Unsupported { get; set; }
+    public bool EndImmediately { get; set; }
+    public byte[]? VideoBytes { get; set; }
+    public bool StallAfterDisconnect { get; set; }
+    public bool ChangedProcessBirth { get; set; }
+    public bool HoldServerOkay { get; set; }
+    public bool DisconnectAfterServerOkay { get; set; }
+    public string? ProcessDisappearsAt { get; set; }
+    public string? ProcessReadFailsAt { get; set; }
+    public TaskCompletionSource ServerRequestEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private bool _processAlive = true;
+    private string _processCommandLine = "";
+    private static string Stat(bool changed = false) => "12345 (matrix (test)) S " + string.Join(' ', Enumerable.Repeat("0", 18)) + (changed ? " 999 0\n" : " 789 0\n");
+    private TaskCompletionSource? _activeServer;
+
+    public FakeScreenVideoServer() { _listener.Start(); _accepting = AcceptAsync(); }
+    private async Task AcceptAsync()
+    {
+        try
+        {
+            while (!_stop.IsCancellationRequested) _clients.Add(HandleAsync(await _listener.AcceptTcpClientAsync(_stop.Token)));
+        }
+        catch (OperationCanceledException) { }
+    }
+    private async Task HandleAsync(TcpClient client)
+    {
+        using (client)
+        {
+            try
+            {
+                var stream = client.GetStream();
+                while (!_stop.IsCancellationRequested)
+                {
+                    var prefix = new byte[4]; await stream.ReadExactlyAsync(prefix, _stop.Token);
+                    var body = new byte[int.Parse(Encoding.ASCII.GetString(prefix), NumberStyles.HexNumber, CultureInfo.InvariantCulture)];
+                    await stream.ReadExactlyAsync(body, _stop.Token);
+                    var request = Encoding.UTF8.GetString(body); Requests.Enqueue(request);
+                    if (request == "host:version") { await HostAsync(stream, "0029"); return; }
+                    if (request == "host:devices-l") { await HostAsync(stream, $"allowed\tdevice model:Fixture transport_id:{TransportId}\n"); return; }
+                    var startsServer = request.Contains("com.genymobile.scrcpy.Server", StringComparison.Ordinal);
+                    if (startsServer)
+                    {
+                        ServerRequestEntered.TrySetResult();
+                        if (HoldServerOkay) await Task.Delay(Timeout.Infinite, _stop.Token);
+                    }
+                    await stream.WriteAsync("OKAY"u8.ToArray(), _stop.Token);
+                    if (startsServer && DisconnectAfterServerOkay) return;
+                    if (request.StartsWith("host:transport-id:", StringComparison.Ordinal)) continue;
+                    if (request == "sync:") { await SyncAsync(stream); return; }
+                    if (request.StartsWith("localabstract:scrcpy_", StringComparison.Ordinal))
+                    {
+                        var active = _activeServer;
+                        if (Unsupported)
+                        {
+                            try { await stream.WriteAsync("not h264"u8.ToArray(), _stop.Token); var closed = await stream.ReadAsync(new byte[1], _stop.Token); if (closed != 0) throw new IOException("Unexpected video input."); }
+                            finally { active?.TrySetResult(); }
+                            return;
+                        }
+                        await stream.WriteAsync(VideoBytes ?? [0, 0, 0, 1, 0x67, 0x42, 0, 0x1f], _stop.Token);
+                        VideoEntered.TrySetResult();
+                        try
+                        {
+                            if (EndImmediately) return;
+                            if (Flood)
+                            {
+                                var block = new byte[65536];
+                                while (!_stop.IsCancellationRequested) await stream.WriteAsync(block, _stop.Token);
+                            }
+                            else { var closed = await stream.ReadAsync(new byte[1], _stop.Token); if (closed != 0) throw new IOException("Unexpected client video bytes."); }
+                        }
+                        finally { if (!StallAfterDisconnect) active?.TrySetResult(); VideoClosed.TrySetResult(); }
+                        return;
+                    }
+                    if (!request.StartsWith("shell,v2,raw:", StringComparison.Ordinal)) throw new IOException("Unexpected video fixture request: " + request);
+                    await stream.ReadExactlyAsync(new byte[5], _stop.Token);
+                    if (request.Contains("com.genymobile.scrcpy.Server", StringComparison.Ordinal))
+                    {
+                        var active = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                        _activeServer = active;
+                        _processAlive = true;
+                        var marker = Regex.Match(request, @"MATRIX_VIDEO_[0-9a-f]{32}:").Value;
+                        var nonce = Regex.Match(request, @"matrix\.video\.session=([0-9a-f]{32})").Groups[1].Value;
+                        var scid = Regex.Match(request, @"scid=([0-9a-f]{8})").Groups[1].Value;
+                        _processCommandLine = "app_process\0-Dmatrix.video.session=" + nonce + "\0/\0com.genymobile.scrcpy.Server\0" + "3.3.4\0scid=" + scid + "\0";
+                        await PacketAsync(stream, 1, Encoding.UTF8.GetBytes(marker + "12345\n" + Stat()));
+                        await active.Task.WaitAsync(_stop.Token);
+                        await PacketAsync(stream, 3, [0]); return;
+                    }
+                    var command = request[13..];
+                    string text;
+                    var stage = command.Contains("kill -TERM 12345", StringComparison.Ordinal) ? "signal" : command.Contains("cmdline", StringComparison.Ordinal) ? "snapshot" : command == "cat /proc/12345/stat" ? "recheck" : null;
+                    if (stage is not null && (ProcessDisappearsAt == stage || ProcessReadFailsAt == stage))
+                    {
+                        var disappeared = ProcessDisappearsAt == stage;
+                        if (disappeared) { _processAlive = false; _activeServer?.TrySetResult(); }
+                        await PacketAsync(stream, 2, Encoding.UTF8.GetBytes(disappeared ? "cat: /proc/12345/stat: No such file or directory" : "cat: /proc/12345/stat: Permission denied"));
+                        await PacketAsync(stream, 3, [1]); return;
+                    }
+                    if (command.Contains("MATRIX_VIDEO_PID_12345_ABSENT", StringComparison.Ordinal)) text = _processAlive ? "" : "MATRIX_VIDEO_PID_12345_ABSENT";
+                    else if (command.Contains("kill -TERM 12345", StringComparison.Ordinal))
+                    {
+                        _processAlive = ProcessDisappearsAt == "recheck" || ProcessReadFailsAt == "recheck";
+                        if (!_processAlive) _activeServer?.TrySetResult();
+                        text = "";
+                    }
+                    else if (command.Contains("/proc/12345/stat", StringComparison.Ordinal))
+                    {
+                        if (!_processAlive) { await PacketAsync(stream, 2, "cat: /proc/12345/stat: No such file or directory"u8.ToArray()); await PacketAsync(stream, 3, [1]); return; }
+                        text = Stat(ChangedProcessBirth) + (command.Contains("cmdline", StringComparison.Ordinal) ? "\n" + _processCommandLine : "");
+                    }
+                    else text = command switch { "getprop" => "[ro.product.model]: [Fixture]\n", "wm size" => "Physical size: 32x32\n", "dumpsys input" => "SurfaceOrientation: 0\n", _ => "fixture\n" };
+                    await PacketAsync(stream, 1, Encoding.UTF8.GetBytes(text));
+                    await PacketAsync(stream, 3, [0]); return;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or SocketException or OperationCanceledException) { }
+        }
+    }
+    private async Task SyncAsync(Stream stream)
+    {
+        var header = new byte[8];
+        while (true)
+        {
+            await stream.ReadExactlyAsync(header, _stop.Token);
+            var name = Encoding.ASCII.GetString(header, 0, 4); var length = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(4));
+            if (name == "QUIT") return;
+            if (name == "DONE") { await stream.WriteAsync(new byte[] { 0x4f, 0x4b, 0x41, 0x59, 0, 0, 0, 0 }, _stop.Token); continue; }
+            if (length < 0 || length > 1024 * 1024) throw new IOException("Invalid sync fixture length.");
+            await stream.ReadExactlyAsync(new byte[length], _stop.Token);
+        }
+    }
+    private async Task HostAsync(Stream stream, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        await stream.WriteAsync(Encoding.ASCII.GetBytes("OKAY" + bytes.Length.ToString("X4", CultureInfo.InvariantCulture)), _stop.Token);
+        await stream.WriteAsync(bytes, _stop.Token);
+    }
+    private async Task PacketAsync(Stream stream, byte channel, byte[] bytes)
+    {
+        var header = new byte[5]; header[0] = channel; BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(1), bytes.Length);
+        await stream.WriteAsync(header, _stop.Token); await stream.WriteAsync(bytes, _stop.Token);
+    }
+    public async ValueTask DisposeAsync()
+    {
+        _stop.Cancel(); _listener.Stop(); await _accepting; await Task.WhenAll(_clients); _stop.Dispose();
+    }
+}
+
+```
+
 ## tools/Build.ps1
 
 ```powershell
@@ -15146,7 +18238,7 @@ try {
 ## tools/Start-Desktop.ps1
 
 ```powershell
-param([switch] $Demo, [string] $LdConsole = '', [string] $DataDirectory = '')
+param([switch] $Demo, [string] $LdConsole = '', [string] $DataDirectory = '', [switch] $Monitor)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $portable = Join-Path (Split-Path -Parent $root) '.tools\dotnet\dotnet.exe'
@@ -15155,6 +18247,7 @@ $assembly = Join-Path $root 'src\MatrixDevice.Desktop\bin\Release\net10.0-window
 if (-not (Test-Path -LiteralPath $assembly -PathType Leaf)) { throw '请先运行 tools/Build.ps1 构建桌面程序。' }
 $arguments = @($assembly)
 if ($Demo) { $arguments += '--demo' }
+if ($Monitor) { $arguments += '--open-monitor' }
 if ($DataDirectory) {
     if (-not [IO.Path]::IsPathFullyQualified($DataDirectory)) { throw '配置目录必须是绝对路径。' }
     $arguments += @('--data-dir', $DataDirectory)
@@ -15218,7 +18311,7 @@ if errorlevel 1 pause
 ## tools/Start-MultiVerifiedDesktop.ps1
 
 ```powershell
-param()
+param([switch] $Monitor)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $directory = Join-Path $root 'data\multi-verified'
@@ -15233,7 +18326,7 @@ foreach ($binding in $bindings) {
     if (-not [int]::TryParse($binding.Name, [ref] $index) -or $index -le 0 -or $index -ge 99999 -or $binding.Name -ne $index.ToString([Globalization.CultureInfo]::InvariantCulture) -or $binding.Value -notin $serials) { throw '该启动入口只允许规范索引的非零独立测试实例，不允许桌面哨兵或重复索引别名。' }
 }
 if (@($bindings.Value | Select-Object -Unique).Count -ne $serials.Count) { throw '多个索引不能绑定同一串号。' }
-& (Join-Path $PSScriptRoot 'Start-Desktop.ps1') -DataDirectory $directory
+& (Join-Path $PSScriptRoot 'Start-Desktop.ps1') -DataDirectory $directory -Monitor:$Monitor
 
 ```
 

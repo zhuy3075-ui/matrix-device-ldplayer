@@ -21,6 +21,7 @@ public partial class MainWindow
     private static readonly (string Tag, string Label, string Icon)[] WorkspacePages =
     [
         ("设备墙 / 主控", "设备管理", "\uE8EA"), ("雷电实例", "雷电实例", "\uE7F4"),
+        ("实时监控", "实时监控", "\uE9D9"),
         ("节点", "节点调试", "\uE8A5"), ("截图 / 取色", "截图取色", "\uE722"),
         ("Shell", "命令终端", "\uE756"), ("应用", "应用管理", "\uE71D"),
         ("文件", "文件传输", "\uE8B7"), ("文本", "文本输入", "\uE8D2"),

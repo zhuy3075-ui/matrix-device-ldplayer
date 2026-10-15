@@ -693,7 +693,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         var settings = Settings.ToSettings() with { WallColumns = WallColumns, SyncMouse = SyncMouse, SyncKeyboard = SyncKeyboard };
         if ((runtime.Api.BasicRunning && settings.BasicApiPort != runtime.Settings.BasicApiPort) || (runtime.Api.AutomatorRunning && settings.AutomatorApiPort != runtime.Settings.AutomatorApiPort)) throw new InvalidOperationException("请先停止正在运行的 API，再修改端口");
         runtime.Settings = runtime.SettingsStore.Save(settings);
-        SettingsNotice = "设置已保存；设备调试服务、自动化服务与雷电连接配置重启后生效";
+        SettingsNotice = "设置已保存；设备调试服务、自动化服务、雷电连接与监控视频组件配置重启后生效";
         AddActivity(SettingsNotice);
         await Task.CompletedTask;
     });
@@ -741,6 +741,7 @@ public sealed class SettingsEditor : ObservableObject
     public SettingsEditor(AppSettings settings)
     {
         original = settings;
+        MonitorServerPath = settings.MonitorServerPath; MonitorFfmpegPath = settings.MonitorFfmpegPath;
         AdbPath = settings.AdbPath; AdbSerialsJson = JsonSerializer.Serialize(settings.AdbAllowedSerials, JsonDefaults.Options); ScrcpyPath = settings.ScrcpyPath; LdConsolePath = settings.LdConsolePath; LdBindingsJson = JsonSerializer.Serialize(settings.LdSerialBindings, JsonDefaults.Options); AgentBaseUrl = settings.AgentBaseUrl ?? ""; AgentSerial = settings.AgentSerial ?? "";
         BasicApiPort = settings.BasicApiPort; AutomatorApiPort = settings.AutomatorApiPort; AutoConnect = settings.AutoConnect; AutoStartApi = settings.AutoStartApi;
         Language = "zh-CN"; MainMaxSize = settings.MainMaxSize; MiniMaxSize = settings.MiniMaxSize; MainMaxFps = settings.MainMaxFps; MiniMaxFps = settings.MiniMaxFps;
@@ -750,6 +751,8 @@ public sealed class SettingsEditor : ObservableObject
     public string AdbPath { get; set; }
     public string AdbSerialsJson { get; set; }
     public string ScrcpyPath { get; set; }
+    public string MonitorServerPath { get; set; }
+    public string MonitorFfmpegPath { get; set; }
     public string LdConsolePath { get; set; }
     public string LdBindingsJson { get; set; }
     public string AgentBaseUrl { get; set; }
@@ -786,6 +789,6 @@ public sealed class SettingsEditor : ObservableObject
         if (bindings.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count() != bindings.Count) throw new InvalidOperationException("不同雷电实例不能绑定相同设备序列号");
         if (!string.IsNullOrWhiteSpace(AgentBaseUrl) && string.IsNullOrWhiteSpace(AgentSerial)) throw new InvalidOperationException("配置 Agent 地址时必须同时指定唯一设备 serial");
         if (!string.IsNullOrWhiteSpace(AgentBaseUrl) && !adbSerials.Contains(AgentSerial.Trim(), StringComparer.Ordinal)) throw new InvalidOperationException("Agent串号必须位于ADB授权串号数组中");
-        return original with { AdbPath = AdbPath.Trim(), AdbAllowedSerials = adbSerials, ScrcpyPath = ScrcpyPath.Trim(), LdConsolePath = LdConsolePath.Trim(), LdSerialBindings = bindings, AgentBaseUrl = string.IsNullOrWhiteSpace(AgentBaseUrl) ? null : AgentBaseUrl.Trim(), AgentSerial = string.IsNullOrWhiteSpace(AgentSerial) ? null : AgentSerial.Trim(), BasicApiPort = BasicApiPort, AutomatorApiPort = AutomatorApiPort, AutoConnect = AutoConnect, AutoStartApi = AutoStartApi, Language = "zh-CN", MainMaxSize = MainMaxSize, MiniMaxSize = MiniMaxSize, MainMaxFps = MainMaxFps, MiniMaxFps = MiniMaxFps, MainBitRate = MainBitRate, MiniBitRate = MiniBitRate, ForceHardwareDecode = ForceHardwareDecode, ShowFps = ShowFps, WindowWidth = WindowWidth, WindowHeight = WindowHeight, FileRoot = FileRoot.Trim(), CommandTimeoutSeconds = CommandTimeoutSeconds };
+        return original with { AdbPath = AdbPath.Trim(), AdbAllowedSerials = adbSerials, ScrcpyPath = ScrcpyPath.Trim(), MonitorServerPath = MonitorServerPath.Trim(), MonitorFfmpegPath = MonitorFfmpegPath.Trim(), LdConsolePath = LdConsolePath.Trim(), LdSerialBindings = bindings, AgentBaseUrl = string.IsNullOrWhiteSpace(AgentBaseUrl) ? null : AgentBaseUrl.Trim(), AgentSerial = string.IsNullOrWhiteSpace(AgentSerial) ? null : AgentSerial.Trim(), BasicApiPort = BasicApiPort, AutomatorApiPort = AutomatorApiPort, AutoConnect = AutoConnect, AutoStartApi = AutoStartApi, Language = "zh-CN", MainMaxSize = MainMaxSize, MiniMaxSize = MiniMaxSize, MainMaxFps = MainMaxFps, MiniMaxFps = MiniMaxFps, MainBitRate = MainBitRate, MiniBitRate = MiniBitRate, ForceHardwareDecode = ForceHardwareDecode, ShowFps = ShowFps, WindowWidth = WindowWidth, WindowHeight = WindowHeight, FileRoot = FileRoot.Trim(), CommandTimeoutSeconds = CommandTimeoutSeconds };
     }
 }

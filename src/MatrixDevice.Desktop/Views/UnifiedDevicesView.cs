@@ -51,7 +51,7 @@ public partial class MainWindow
     {
         unifiedDeviceView = CollectionViewSource.GetDefaultView(unifiedDevices);
         unifiedDeviceView.Filter = item => item is UnifiedDeviceRow row
-            && (string.IsNullOrWhiteSpace(ViewModel.Search) || row.Name.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) || row.Serial.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) || row.Number.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase))
+            && (string.IsNullOrWhiteSpace(ViewModel.Search) || row.Name.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) || row.Instance?.Name.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) == true || row.Serial.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) || row.Number.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase))
             && (ViewModel.GroupFilter == "全部分组" || row.Group == ViewModel.GroupFilter)
             && (ViewModel.StatusFilter == "全部状态" || row.Device?.Info.State == ViewModel.StatusFilter);
         ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts) or nameof(WorkspaceViewModel.Search) or nameof(WorkspaceViewModel.GroupFilter) or nameof(WorkspaceViewModel.StatusFilter)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
@@ -191,6 +191,7 @@ public partial class MainWindow
         if (ViewModel.Demo) throw new DeviceException("演示模式不会操作真实模拟器。", 409, 1003);
         ViewModel.Runtime.RequireFrozenConnectionSettings();
         ldBusy = true; ViewModel.SetExternalBusy(true); RefreshLdButtons();
+        await StopMonitorAsync();
         using var cancellation = new CancellationTokenSource(); ldOperationCancellation = cancellation;
         coldLaunched.Clear(); backgroundHides.Clear(); backgroundHideError = null; operationBackgroundLaunch = backgroundLaunch; RefreshLaunchCommands();
         var complete = false;
@@ -219,6 +220,7 @@ public partial class MainWindow
             }
             ldOperationCancellation = null; ldBusy = false; ViewModel.SetExternalBusy(false);
             UpdateLdPlayerRows(); UpdateUnifiedDirectory(); RefreshLdButtons();
+            MonitorNavigationChanged();
         }
     }
 
@@ -318,14 +320,77 @@ public partial class MainWindow
         return birth;
     }
 
-    private static Task EnsureLaunchResourcesAsync(CancellationToken ct)
+    private async Task EnsureLaunchResourcesAsync(LdPlayerInstance instance, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        var configuration = LdLaunchMemory.ReadConfiguration(ViewModel.Runtime.FrozenConnectionSettings.LdConsolePath, instance.Index);
         var memory = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
-        if (!GlobalMemoryStatusEx(ref memory)) throw new DeviceException("无法读取系统内存，未启动新实例。", 503, 2000);
-        if (memory.AvailablePhysical < 11UL * 1024 * 1024 * 1024 || memory.MemoryLoad >= 80)
-            throw new DeviceException($"资源不足：可用内存 {memory.AvailablePhysical / 1073741824d:0.0} GiB，负载 {memory.MemoryLoad}%；至少需要11 GiB可用内存且负载低于80%。已运行实例保持不变。", 409, 1003);
-        return Task.CompletedTask;
+        var host = GlobalMemoryStatusEx(ref memory)
+            ? new LdHostMemory(memory.AvailablePhysical, memory.AvailablePageFile, memory.MemoryLoad) : null;
+        var assessment = LdLaunchMemory.Assess(configuration, host);
+        var proceed = await ConfirmLaunchMemoryAsync(instance.Index, instance.Name, assessment, ct);
+        if (!proceed) ldOperationCancellation?.Cancel();
+        ct.ThrowIfCancellationRequested();
+        if (!proceed) throw new OperationCanceledException("用户取消了资源风险启动。", ct);
+    }
+
+    private async Task<bool> ConfirmLaunchMemoryAsync(int index, string name, LdLaunchMemoryAssessment assessment, CancellationToken ct)
+    {
+        return await Dispatcher.InvokeAsync(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+            SetLaunchFeedback($"实例 {index}：{assessment.Message}");
+            ViewModel.Runtime.Log.Write("ld-launch-memory-assessment", $"index={index}; confirmation={assessment.RequiresConfirmation}; {assessment.Message}");
+            if (!assessment.RequiresConfirmation) return true;
+            var accepted = ViewModel.Confirm("启动资源风险", $"实例 {index}：{name}\n\n{assessment.Message}\n\n以上为检查时快照，配置和资源可能继续变化。这不是雷电官方的启动限制。继续可能导致卡顿或启动失败。\n确定：仍然启动本实例；取消：停止本批次后续启动，不关闭已运行实例。");
+            ct.ThrowIfCancellationRequested();
+            ViewModel.Runtime.Log.Write(accepted ? "ld-launch-memory-accepted" : "ld-launch-memory-declined", $"index={index}");
+            return accepted;
+        });
+    }
+
+    private async Task VerifyLaunchMemoryUiAsync()
+    {
+        if (!ViewModel.Demo) throw new InvalidOperationException("内存提示离线验收仅限演示模式。");
+        var originalConfirm = ViewModel.Confirm;
+        var confirmations = 0; var accept = true;
+        CancellationTokenSource? cancelDuringConfirmation = null;
+        ViewModel.Confirm = (title, message) =>
+        {
+            if (!Dispatcher.CheckAccess() || title != "启动资源风险" || !message.Contains("实例 2：离线内存测试", StringComparison.Ordinal) || !message.Contains("不是雷电官方", StringComparison.Ordinal))
+                throw new InvalidOperationException("资源风险提示线程或目标范围错误。");
+            confirmations++; cancelDuringConfirmation?.Cancel(); return accept;
+        };
+        try
+        {
+            var good = LdLaunchMemory.Assess(new(6144), new((ulong)(7.8 * 1073741824), 16UL * 1073741824, 75));
+            if (!await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", good, CancellationToken.None)) || confirmations != 0)
+                throw new InvalidOperationException("7.8 GiB/75%的6 GiB实例被拦截或出现普通启动确认。");
+            var risk = LdLaunchMemory.Assess(new(8192), new((ulong)(7.8 * 1073741824), 16UL * 1073741824, 75));
+            if (!await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", risk, CancellationToken.None)) || confirmations != 1)
+                throw new InvalidOperationException("用户无法确认继续风险启动。");
+            accept = false;
+            if (await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", risk, CancellationToken.None)) || confirmations != 2)
+                throw new InvalidOperationException("用户取消资源风险提示仍被接受。");
+            using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+            try
+            {
+                await ConfirmLaunchMemoryAsync(2, "离线内存测试", risk, cancellation.Token);
+                throw new InvalidOperationException("已取消的资源检查仍可继续。");
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+            if (confirmations != 2) throw new InvalidOperationException("已取消的资源检查仍弹出提示。");
+            using var duringConfirmation = new CancellationTokenSource();
+            accept = true; cancelDuringConfirmation = duringConfirmation;
+            try
+            {
+                await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", risk, duringConfirmation.Token));
+                throw new InvalidOperationException("提示期间取消后仍然接受启动。");
+            }
+            catch (OperationCanceledException) when (duringConfirmation.IsCancellationRequested) { }
+            if (confirmations != 3) throw new InvalidOperationException("提示期间取消验收未覆盖确认回调。");
+        }
+        finally { ViewModel.Confirm = originalConfirm; }
     }
 
     private async Task EditLdInstanceAsync(bool create)

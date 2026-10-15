@@ -49,6 +49,8 @@ public partial class MainWindow : Window
     private Task? captureOperation;
     private int captureCursor;
     private bool autoCapture = true;
+    private bool debugAutoLoading;
+    private bool debugAutoPending;
     public WorkspaceViewModel ViewModel { get; }
 
     public MainWindow(WorkspaceViewModel viewModel)
@@ -62,7 +64,7 @@ public partial class MainWindow : Window
         Width = viewModel.Runtime.Settings.WindowWidth;
         Height = viewModel.Runtime.Settings.WindowHeight;
         Title = viewModel.Demo ? "矩阵设备 · 演示模式" : "矩阵设备";
-        viewModel.DeviceChanged = RefreshScreens;
+        viewModel.DeviceChanged = () => { RefreshScreens(); _ = EnsureDebugLoadedAsync(); };
         viewModel.NodesChanged = RebuildNodes;
         viewModel.NodeSelectionChanged = HighlightNode;
         viewModel.WallChanged = RefreshWall;
@@ -79,7 +81,11 @@ public partial class MainWindow : Window
             try { await ViewModel.Runtime.Input.ReleaseAsync(); }
             catch (Exception ex) { await ViewModel.ExecuteAsync("释放输入", () => Task.FromException(ex)); }
         };
-        viewModel.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(WorkspaceViewModel.DebugImage)) RefreshScreens(); };
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(WorkspaceViewModel.DebugImage)) RefreshScreens();
+            if (args.PropertyName == nameof(WorkspaceViewModel.Busy) && !ViewModel.Busy && debugAutoPending) _ = EnsureDebugLoadedAsync();
+        };
     }
 
     private void BuildShell()
@@ -99,7 +105,8 @@ public partial class MainWindow : Window
         AddTab("API", BuildApiPage());
         AddTab("扩展", BuildExtensionsPage());
         AddTab("设置", BuildSettingsPage());
-        tabs.SelectionChanged += (_, args) => { if (ReferenceEquals(args.Source, tabs)) { UpdateNavigation(); RebuildNodes(); } };
+        AddTab("实时监控", BuildMonitorPage());
+        tabs.SelectionChanged += (_, args) => { if (ReferenceEquals(args.Source, tabs)) { UpdateNavigation(); RebuildNodes(); MonitorNavigationChanged(); _ = EnsureDebugLoadedAsync(); } };
         AttachWorkspacePages();
         NavigateTo("设备墙 / 主控");
     }
@@ -213,6 +220,21 @@ public partial class MainWindow : Window
         finally { captureInProgress = false; }
     }
 
+    private async Task EnsureDebugLoadedAsync()
+    {
+        if (ViewModel.Demo || closing || ViewModel.HasActiveOperations || tabs?.SelectedIndex != 2 || ViewModel.CurrentDevice?.Info.Online != true || ViewModel.Nodes.Count != 0) return;
+        if (debugAutoLoading || ViewModel.Busy) { debugAutoPending = true; return; }
+        var requested = ViewModel.CurrentDevice;
+        debugAutoPending = false;
+        debugAutoLoading = true;
+        try { await ViewModel.LoadNodesAsync(); }
+        finally
+        {
+            debugAutoLoading = false;
+            if (debugAutoPending || !ReferenceEquals(requested, ViewModel.CurrentDevice)) { debugAutoPending = false; await EnsureDebugLoadedAsync(); }
+        }
+    }
+
     private async void WindowClosing(object? sender, CancelEventArgs e)
     {
         if (closeApproved) return;
@@ -223,6 +245,7 @@ public partial class MainWindow : Window
         closing = true;
         directoryCancellation.Cancel();
         directoryTimer.Stop(); captureTimer.Stop();
+        await StopMonitorAsync();
         if (directoryOperation is not null) { try { await directoryOperation; } catch (OperationCanceledException) { } }
         if (captureOperation is not null) { try { await captureOperation; } catch (OperationCanceledException) { } }
         try
@@ -246,6 +269,7 @@ public partial class MainWindow : Window
         closing = closeApproved = true;
         captureTimer?.Stop();
         directoryTimer?.Stop(); directoryCancellation.Cancel();
+        monitorTimer.Stop();
         scanCancellation?.Cancel();
         Close();
     }
@@ -282,6 +306,7 @@ public partial class MainWindow : Window
         await ViewModel.LoadAppsAsync();
         await VerifyOperationGatesAsync();
         await VerifyOneClickProjectionAsync();
+        await VerifyLaunchMemoryUiAsync();
         await LdWindowVisibilitySmoke.VerifyAsync(System.IO.Path.Combine(ViewModel.DataDirectory, "window-visibility-smoke"));
         ViewModel.SamplePixel(10, 10);
         ViewModel.ShellInput = "wm size"; await ViewModel.ExecuteShellAsync();
@@ -326,8 +351,9 @@ public partial class MainWindow : Window
         if (hardwareField.IsEnabled) throw new InvalidOperationException("未实现的硬件解码控件必须禁用");
         await RefreshLdPlayerUiAsync();
         if (ldRows.Count != 2) throw new InvalidOperationException("演示雷电实例目录不完整");
-        if (tabs.Items.Count != 12) throw new InvalidOperationException("桌面页面数量不完整");
-        if (navigation.Count != 11 || navigation.ContainsKey("雷电实例") || deviceModes.Count != 4) throw new InvalidOperationException("设备管理统一入口不完整");
+        if (tabs.Items.Count != WorkspacePages.Length) throw new InvalidOperationException("桌面页面数量不完整");
+        if (navigation.Count != WorkspacePages.Length - 1 || navigation.ContainsKey("雷电实例") || deviceModes.Count != 4) throw new InvalidOperationException("设备管理统一入口不完整");
+        await VerifyMonitorProjectionAsync(screenshotPath);
         NavigateTo("设备墙 / 主控");
         var removedLabels = new[] { "刷新设备", "扫描设备", "刷新截图" };
         if (VisualDescendants<TextBlock>(Shell).Any(text => removedLabels.Contains(text.Text))) throw new InvalidOperationException("旧重复刷新入口仍可见");

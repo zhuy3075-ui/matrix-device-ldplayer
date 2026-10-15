@@ -1,4 +1,4 @@
-param()
+param([switch] $Monitor)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $directory = Join-Path $root 'data\multi-verified'
@@ -13,4 +13,4 @@ foreach ($binding in $bindings) {
     if (-not [int]::TryParse($binding.Name, [ref] $index) -or $index -le 0 -or $index -ge 99999 -or $binding.Name -ne $index.ToString([Globalization.CultureInfo]::InvariantCulture) -or $binding.Value -notin $serials) { throw '该启动入口只允许规范索引的非零独立测试实例，不允许桌面哨兵或重复索引别名。' }
 }
 if (@($bindings.Value | Select-Object -Unique).Count -ne $serials.Count) { throw '多个索引不能绑定同一串号。' }
-& (Join-Path $PSScriptRoot 'Start-Desktop.ps1') -DataDirectory $directory
+& (Join-Path $PSScriptRoot 'Start-Desktop.ps1') -DataDirectory $directory -Monitor:$Monitor

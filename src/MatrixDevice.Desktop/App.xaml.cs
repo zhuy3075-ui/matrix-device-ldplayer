@@ -18,7 +18,8 @@ public partial class App : Application
             var liveVerification = e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase);
             var unifiedVerification = e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase);
             var oneClickVerification = e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase);
-            if (new[] { smoke, liveVerification, unifiedVerification, oneClickVerification }.Count(enabled => enabled) > 1)
+            var monitorVerification = e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase);
+            if (new[] { smoke, liveVerification, unifiedVerification, oneClickVerification, monitorVerification }.Count(enabled => enabled) > 1)
                 throw new ArgumentException("一次只能选择一种自动验收模式。");
             string? unifiedCandidate = null;
             var demo = smoke || e.Args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
@@ -60,6 +61,10 @@ public partial class App : Application
                 unifiedCandidate = candidate;
                 settings = settings with { AutoStartApi = false, AutoConnect = false, AdbAllowedSerials = [], LdSerialBindings = new(), AgentBaseUrl = null, AgentSerial = null };
             }
+            if (monitorVerification && (demo || directoryIndex < 0 || !dataDirectory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || settings.LdSerialBindings.Count != 2 || !settings.LdSerialBindings.ContainsKey(1) || !settings.LdSerialBindings.ContainsKey(2) || settings.AdbAllowedSerials.Length != 2 || settings.LdSerialBindings.Values.Distinct(StringComparer.Ordinal).Count() != 2
+                || !settings.LdSerialBindings.Values.ToHashSet(StringComparer.Ordinal).SetEquals(settings.AdbAllowedSerials) || settings.AutoStartApi || settings.AgentBaseUrl is not null))
+                throw new ArgumentException("监控验收必须使用artifacts下仅授权专用实例1、2的配置，禁用API与Agent。");
             runtime = await MatrixRuntime.CreateAsync(settings, dataDirectory, demo);
             var window = new MainWindow(new WorkspaceViewModel(runtime, dataDirectory, demo));
             MainWindow = window;
@@ -68,6 +73,7 @@ public partial class App : Application
             await window.RecoverBackgroundWindowsAsync();
             window.UpdateUnifiedDirectory();
             if (runtime.Settings.AutoStartApi) await window.ViewModel.StartApisAsync();
+            if (e.Args.Contains("--open-monitor", StringComparer.OrdinalIgnoreCase) && !smoke && !liveVerification && !unifiedVerification && !oneClickVerification && !monitorVerification) window.NavigateTo("实时监控");
             if (smoke)
             {
                 var screenshotIndex = Array.FindIndex(e.Args, arg => arg.Equals("--screenshot", StringComparison.OrdinalIgnoreCase));
@@ -89,15 +95,19 @@ public partial class App : Application
             {
                 await window.RunOneClickStartAcceptanceAsync(Path.Combine(dataDirectory, "evidence"), unifiedCandidate!); window.Close();
             }
+            if (monitorVerification)
+            {
+                await window.RunMonitorAcceptanceAsync(Path.Combine(dataDirectory, "evidence")); window.Close();
+            }
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
+            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
             else MessageBox.Show(UiErrorPresentation.Describe(ex), "矩阵设备启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             try
             {
-                if (MainWindow is MatrixDevice.Desktop.MainWindow failedWindow) failedWindow.AbortStartup();
+                if (MainWindow is MatrixDevice.Desktop.MainWindow failedWindow) { await failedWindow.StopMonitorAfterFailureAsync(); failedWindow.AbortStartup(); }
                 if (runtime is not null) await runtime.DisposeAsync();
             }
             catch (Exception cleanupError) { Console.Error.WriteLine("启动失败后的资源清理异常：" + cleanupError); }

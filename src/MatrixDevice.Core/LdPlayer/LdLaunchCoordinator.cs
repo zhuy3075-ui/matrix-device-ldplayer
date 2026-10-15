@@ -20,8 +20,16 @@ public sealed class LdLaunchCoordinator
             throw new ArgumentOutOfRangeException(nameof(pollInterval), "轮询间隔必须大于零且不超过实例等待期限。");
     }
 
-    public async Task<IReadOnlyList<LdLaunchProgress>> StartAsync(int[] indices,
+    public Task<IReadOnlyList<LdLaunchProgress>> StartAsync(int[] indices,
         Func<CancellationToken, Task> ensureResourceReserve, IProgress<LdLaunchProgress>? progress = null,
+        CancellationToken ct = default, IReadOnlyList<LdPlayerInstance>? expectedInstances = null)
+    {
+        ArgumentNullException.ThrowIfNull(ensureResourceReserve);
+        return StartAsync(indices, (_, token) => ensureResourceReserve(token), progress, ct, expectedInstances);
+    }
+
+    public async Task<IReadOnlyList<LdLaunchProgress>> StartAsync(int[] indices,
+        Func<LdPlayerInstance, CancellationToken, Task> ensureResourceReserve, IProgress<LdLaunchProgress>? progress = null,
         CancellationToken ct = default, IReadOnlyList<LdPlayerInstance>? expectedInstances = null)
     {
         if (indices is null || indices.Length == 0 || indices.Any(index => index <= 0 || index == 99999) || indices.Distinct().Count() != indices.Length)
@@ -56,8 +64,8 @@ public sealed class LdLaunchCoordinator
                     }
                     if (IsStopped(original))
                     {
-                        progress?.Report(new(index, "checking-resources", "正在检查本次启动的资源预留，不推测未知实例内存。", original));
-                        await ensureResourceReserve(token).ConfigureAwait(false);
+                        progress?.Report(new(index, "checking-resources", "正在按当前实例内存配置评估资源；估算不是雷电官方启动限制。", original));
+                        await ensureResourceReserve(original, token).ConfigureAwait(false);
                         token.ThrowIfCancellationRequested();
                         await service.RefreshAsync(token).ConfigureAwait(false);
                         var before = RequireSameIdentity(original);

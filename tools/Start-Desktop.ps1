@@ -1,4 +1,4 @@
-param([switch] $Demo, [string] $LdConsole = '', [string] $DataDirectory = '')
+param([switch] $Demo, [string] $LdConsole = '', [string] $DataDirectory = '', [switch] $Monitor)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $portable = Join-Path (Split-Path -Parent $root) '.tools\dotnet\dotnet.exe'
@@ -7,6 +7,7 @@ $assembly = Join-Path $root 'src\MatrixDevice.Desktop\bin\Release\net10.0-window
 if (-not (Test-Path -LiteralPath $assembly -PathType Leaf)) { throw '请先运行 tools/Build.ps1 构建桌面程序。' }
 $arguments = @($assembly)
 if ($Demo) { $arguments += '--demo' }
+if ($Monitor) { $arguments += '--open-monitor' }
 if ($DataDirectory) {
     if (-not [IO.Path]::IsPathFullyQualified($DataDirectory)) { throw '配置目录必须是绝对路径。' }
     $arguments += @('--data-dir', $DataDirectory)

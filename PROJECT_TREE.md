@@ -6,6 +6,14 @@ MatrixDevice.Reconstructed/
 |-- Directory.Build.props
 |-- docs/
 |   |-- ASSUMPTIONS.md
+|   |-- codex/
+|   |   |-- launch-memory-policy/
+|   |   |   +-- REPORT.md
+|   |   +-- realtime-monitoring/
+|   |       |-- goal-prompt.md
+|   |       |-- HANDOFF.md
+|   |       |-- plan.md
+|   |       +-- requirements.md
 |   |-- COVERAGE.md
 |   |-- IMPLEMENTATION.md
 |   |-- LDPLAYER_INTEGRATION.md
@@ -36,6 +44,8 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- PLAN.md
 |   |   |   |-- REPORT.md
 |   |   |   +-- TEST_LOG.md
+|   |   |-- realtime-monitoring/
+|   |   |   +-- REPORT.md
 |   |   |-- REPORT.md
 |   |   |-- TEST_CASES.md
 |   |   |-- TEST_LOG.md
@@ -207,6 +217,9 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- LdPlayerView.cs
 |   |   |   |-- LdWindowVisibilitySmoke.cs
 |   |   |   |-- LiveUiAcceptance.cs
+|   |   |   |-- MonitorAcceptance.cs
+|   |   |   |-- MonitorSmoke.cs
+|   |   |   |-- MonitorView.cs
 |   |   |   |-- NativeView.cs
 |   |   |   |-- NetworkScannerView.cs
 |   |   |   |-- OneClickStartAcceptance.cs
@@ -250,8 +263,14 @@ MatrixDevice.Reconstructed/
 |       |-- Diagnostics/
 |       |   +-- RollingLog.cs
 |       |-- LdConnectionAdmission.cs
+|       |-- LdPlayer/
+|       |   +-- LdLaunchMemory.cs
 |       |-- MatrixDevice.Host.csproj
 |       |-- MatrixRuntime.cs
+|       |-- Monitoring/
+|       |   |-- LdRunningWindow.cs
+|       |   |-- ResourceSampler.cs
+|       |   +-- ScreenVideoSession.cs
 |       |-- packages.lock.json
 |       +-- Persistence/
 |           |-- CatalogRepository.cs
@@ -259,12 +278,16 @@ MatrixDevice.Reconstructed/
 |-- tests/
 |   +-- MatrixDevice.Tests/
 |       |-- ExistingAdbTests.cs
+|       |-- LdLaunchMemoryTests.cs
+|       |-- LdRunningWindowTests.cs
 |       |-- LdWorkspaceTests.cs
 |       |-- LiveAcceptance.cs
 |       |-- MatrixDevice.Tests.csproj
+|       |-- MonitorResourceTests.cs
 |       |-- MultiInstanceAcceptance.cs
 |       |-- packages.lock.json
-|       +-- Program.cs
+|       |-- Program.cs
+|       +-- ScreenVideoTests.cs
 +-- tools/
     |-- Build.ps1
     |-- csc-managed.cmd

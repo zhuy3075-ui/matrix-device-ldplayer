@@ -39,6 +39,8 @@ public partial class MainWindow
         left.Children.Add(PathField("ADB 路径", "Settings.AdbPath"));
         left.Children.Add(Field("授权设备串号 JSON", BoundInput("Settings.AdbSerialsJson", multiline: true)));
         left.Children.Add(PathField("scrcpy 路径", "Settings.ScrcpyPath"));
+        left.Children.Add(PathField("监控视频组件", "Settings.MonitorServerPath"));
+        left.Children.Add(PathField("监控 FFmpeg", "Settings.MonitorFfmpegPath"));
         left.Children.Add(PathField("雷电命令行路径", "Settings.LdConsolePath"));
         var bindings = BoundInput("Settings.LdBindingsJson", multiline: true); bindings.Height = 85; bindings.ToolTip = "例如：{\"0\":\"实际发现的设备序列号\"}；仅保存显式绑定配置，不表示已核验";
         left.Children.Add(Field("实例绑定（JSON）", bindings));
@@ -82,10 +84,12 @@ public partial class MainWindow
     {
         var row = new DockPanel(); var browse = Button("\uE8B7", "浏览", () =>
         {
-            var dialog = new OpenFileDialog { Filter = "程序|*.exe|所有文件|*.*" };
+            var dialog = new OpenFileDialog { Filter = binding.EndsWith("MonitorServerPath", StringComparison.Ordinal) ? "官方视频组件|scrcpy-server*|所有文件|*.*" : "程序|*.exe|所有文件|*.*" };
             if (dialog.ShowDialog(this) != true) return;
             if (binding.EndsWith("AdbPath", StringComparison.Ordinal)) { ViewModel.Settings.AdbPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.AdbPath)); }
             else if (binding.EndsWith("LdConsolePath", StringComparison.Ordinal)) { ViewModel.Settings.LdConsolePath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.LdConsolePath)); }
+            else if (binding.EndsWith("MonitorServerPath", StringComparison.Ordinal)) { ViewModel.Settings.MonitorServerPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.MonitorServerPath)); }
+            else if (binding.EndsWith("MonitorFfmpegPath", StringComparison.Ordinal)) { ViewModel.Settings.MonitorFfmpegPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.MonitorFfmpegPath)); }
             else { ViewModel.Settings.ScrcpyPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.ScrcpyPath)); }
         }); DockPanel.SetDock(browse, Dock.Right); row.Children.Add(browse); row.Children.Add(BoundInput(binding)); return Field(label, row);
     }
