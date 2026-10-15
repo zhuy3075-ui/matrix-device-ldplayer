@@ -30,6 +30,11 @@
     "Sha256": "b5d1d81f048f8b4bd3fca7577777ff880e822d6291ea8975baa1f6eb36410e7c"
   },
   {
+    "Path": "docs/codex/apple-experience/A05_DEVICE_LABELS.md",
+    "Bytes": 6784,
+    "Sha256": "83ce9e5a492eb50c26fb9648f2b8f64ccb9d2f3e173eb3d2a15270f9cc11e9ed"
+  },
+  {
     "Path": "docs/codex/apple-experience/A05_DEVICE_STATE.md",
     "Bytes": 8642,
     "Sha256": "0deb295965b6457c315ff576af743072e8c2f23f85eb9c3f93948621095de297"
@@ -46,18 +51,18 @@
   },
   {
     "Path": "docs/codex/apple-experience/DEFECTS.md",
-    "Bytes": 4596,
-    "Sha256": "13457e1d7db0b24a2e8ac033a4175cbf7e483d6670e5318584c57e3414cb2d40"
+    "Bytes": 5188,
+    "Sha256": "277003a2afdb134669d724abf1e0961b48e3c3a8c34d7ec4af8424219feed322"
   },
   {
     "Path": "docs/codex/apple-experience/HANDOFF.md",
-    "Bytes": 6837,
-    "Sha256": "831d54588fcc6c14658874a1bc8d227e6e9637688ff8c46545f1f584fd694e66"
+    "Bytes": 7897,
+    "Sha256": "0d7ba563a868e2affd22224f8d205715243b579c224dde33536841eaab364be4"
   },
   {
     "Path": "docs/codex/apple-experience/TEST_MATRIX.md",
-    "Bytes": 9618,
-    "Sha256": "3726208c0d17b01269c2bdf7ec7c7d5d021bff1d2ca9c6309a455f1baea30b72"
+    "Bytes": 10038,
+    "Sha256": "cf0bd0f51582c04c3d26f144b0633a7fddc2ea501d9d482190f5ebe8cde8079e"
   },
   {
     "Path": "docs/codex/device-action-dedup/REPORT.md",
@@ -141,8 +146,8 @@
   },
   {
     "Path": "docs/PROGRESS.md",
-    "Bytes": 9584,
-    "Sha256": "b7b09b759ce821d802027d4d0c1d5cd78cb9eabd66cdaa797df9dee270f631da"
+    "Bytes": 11710,
+    "Sha256": "9e9e1871cd6e7f3cb9d8aba830b81ce09d4b38f1aeb12146b4002aec013e8942"
   },
   {
     "Path": "docs/reference/API.md",
@@ -211,8 +216,8 @@
   },
   {
     "Path": "docs/TASKS.md",
-    "Bytes": 4167,
-    "Sha256": "a7b67e366f6a03319f5ba82722447df097c713819ddef8d13066e50380725903"
+    "Bytes": 4150,
+    "Sha256": "d981753de41eedc7891405717bb4d20a5d7eb75862a1274f09ded97740d77059"
   },
   {
     "Path": "docs/testing/API_MATRIX.md",
@@ -766,8 +771,8 @@
   },
   {
     "Path": "README.md",
-    "Bytes": 20788,
-    "Sha256": "5b00bec56327eb8d5fedd3093e9c3b206e7f734395b78bbfe4eace3682e17099"
+    "Bytes": 21035,
+    "Sha256": "d79370306345e205058fb3f4ce75ae383c4b44c03ffdea33436012a436e7cdea"
   },
   {
     "Path": "src/MatrixDevice.Cli/MatrixDevice.Cli.csproj",
@@ -936,8 +941,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/MainWindow.xaml.cs",
-    "Bytes": 44402,
-    "Sha256": "d1bd5ef94ac2059d3456d1e9e8ba58feeedfdbd9c4115181427a0d3fb4462062"
+    "Bytes": 44450,
+    "Sha256": "148c71b1acbe2d1f5392ac038903f8f7adf0412171909f6fce4e8ff17a24ca12"
   },
   {
     "Path": "src/MatrixDevice.Desktop/MatrixDevice.Desktop.csproj",
@@ -981,8 +986,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/UnifiedDeviceRow.cs",
-    "Bytes": 4919,
-    "Sha256": "de0879ebea75c10587a4e38ec7dc0937b00691c003c2e34c1f0b03aa664707c2"
+    "Bytes": 5903,
+    "Sha256": "5ff28dc153b4432b93adc1b02dbdae04673417fa63517b4024ea918e30a5250a"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/ApiView.cs",
@@ -1016,8 +1021,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/DeviceFilterSmoke.cs",
-    "Bytes": 13539,
-    "Sha256": "a9605b048a2457d5495e876e954dbcb5601f64f31b3ad14df5cf746c923164ab"
+    "Bytes": 20492,
+    "Sha256": "14e6878c85fbf76b6f8d62473ef9822da25f530c04a0ffd57e60ef32529cf4df"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/DirectoryView.cs",
@@ -1146,13 +1151,13 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UnifiedDeviceTile.cs",
-    "Bytes": 3799,
-    "Sha256": "f98c832464d9724493176414cec0f00588fdf79a547493b85321102033a73637"
+    "Bytes": 3920,
+    "Sha256": "1f103a91f1418417508e6d0bcd272ed7ee1301a08a7108c04715a7433ead66d8"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/WallView.cs",
-    "Bytes": 18074,
-    "Sha256": "e4c1b079c2869a86f928ec3d6fe6fba03f1a1633fb6d63861d00789e6c34fa56"
+    "Bytes": 18152,
+    "Sha256": "c9a50578c8cb56290906572fc9508939763b0f5da439026953625cca0f49ebc2"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/WorkspaceShell.cs",

@@ -57,8 +57,20 @@ public sealed class UnifiedDeviceRow : ObservableObject
         get => Device?.IsSelected ?? selected;
         set { if (!CanSelect) return; selected = value; if (Device is not null) Device.IsSelected = value; Changed(); }
     }
-    public string PrimaryLabel => Connected ? "调试" : Instance?.AndroidStarted == true ? "连接" : "启动";
-    public string PrimaryGlyph => Connected ? "\uE946" : "\uE768";
+    public string PrimaryLabel => Connected && Device is not null ? "调试" : Index is 0 or 99999 ? "受保护"
+        : FilterState == "已关闭" ? "启动" : Instance?.IsStarting == true ? "等待连接"
+        : FilterState == "未知" ? "接入" : Instance?.AndroidStarted == true ? "连接" : "接入";
+    private const string AdmissionDescription = "重新检查实例；明确关闭时尝试启动，过渡或信息不完整时等待，核验ADB、安卓启动与截图后连接；可能失败或超时。";
+    public string PrimaryDescription => PrimaryLabel switch
+    {
+        "调试" => "打开此设备的界面检查，不启动或重启模拟器。",
+        "受保护" => "受保护编号；此入口不自动启动或接入该实例。",
+        "启动" => "当前观察为已关闭。" + AdmissionDescription,
+        "等待连接" => "当前观察为启动中。" + AdmissionDescription,
+        "连接" => "当前观察为安卓已启动。" + AdmissionDescription,
+        _ => "当前状态尚未确认。" + AdmissionDescription
+    };
+    public string PrimaryGlyph => PrimaryLabel == "调试" ? "\uE946" : "\uE768";
     public AsyncCommand PrimaryCommand { get; }
     public AsyncCommand ShowWindowCommand { get; }
     public AsyncCommand MainCommand { get; }

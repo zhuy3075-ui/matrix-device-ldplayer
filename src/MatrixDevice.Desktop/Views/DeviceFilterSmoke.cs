@@ -3,9 +3,11 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Threading;
 using MatrixDevice.Core;
 using MatrixDevice.Host;
@@ -124,5 +126,64 @@ public partial class MainWindow
         }
         Check(ViewModel.MainDevice == main && ViewModel.CurrentDevice == current && selection.All(pair => unifiedDevices.Single(row => row.Key == pair.Key).IsSelected == pair.Value) && appSelection.SequenceEqual(applicationTargets.Select(row => (row.Serial, row.IsSelected))), "隔离验收恢复原目标/主控/选择");
         File.WriteAllText(Path.Combine(ViewModel.DataDirectory, "device-filter-isolation.json"), JsonSerializer.Serialize(new { status = "PASS-OFFLINE", scope = "actual demo directory/list filter and Monitor reconciliation; no real streams or emulators", assertions = checks.Count, checks, observations, matrixCases = matrixCount }, JsonDefaults.Options));
+    }
+
+    private async Task VerifyDeviceActionLabelsAsync()
+    {
+        var failures = new List<string>(); var observations = new List<object>(); var checks = new List<string>();
+        var originalCurrent = ViewModel.CurrentDevice; var originalMain = ViewModel.MainDevice; var originalPage = tabs.SelectedItem;
+        var originalFocus = Keyboard.FocusedElement; var originalSelection = unifiedDevices.Select(row => (row.Key, row.IsSelected)).ToArray();
+        void Check(bool condition, string message) { if (condition) checks.Add(message); else failures.Add(message); }
+        async Task Settle() { await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.ContextIdle); await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render); await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.ApplicationIdle); }
+        Check(AutomationProperties.GetName(wallSelectAll) == "选择当前筛选中可勾选的设备", "实际表头自动化名精确描述范围");
+        Check(wallSelectAll.ToolTip as string == "勾选当前筛选结果中可勾选的设备；取消勾选清除全部选择（包括被筛选隐藏的设备），不删除设备或数据。", "实际表头提示包括当前筛选/隐藏清除/不删除");
+        var row = new UnifiedDeviceRow("label-fixture", ActivateUnifiedRowAsync, CanActivateUnifiedRow, _ => Task.CompletedTask, _ => false, _ => Task.CompletedTask);
+        var command = row.PrimaryCommand;
+        var tile = new UnifiedDeviceTile { Owner = this, DataContext = row };
+        var overlay = new Border { Child = tile, Background = ThemeBrush("SurfaceBrush"), Width = Math.Min(550, Shell.ActualWidth), Height = 100, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
+        Grid.SetColumnSpan(overlay, 2); System.Windows.Controls.Panel.SetZIndex(overlay, 1000); Shell.Children.Add(overlay);
+        var stopped = new LdPlayerInstance(8, "文案夹具", 0, 0, false, -1, -1);
+        var running = stopped with { AndroidStarted = true, ProcessId = 81, VBoxProcessId = 82, TopWindow = 83, BindWindow = 84 };
+        var device = new DeviceRow(new DeviceInfo { Serial = "label-device", State = "Ready" });
+        const string admission = "重新检查实例；明确关闭时尝试启动，过渡或信息不完整时等待，核验ADB、安卓启动与截图后连接；可能失败或超时。";
+        const string debug = "打开此设备的界面检查，不启动或重启模拟器。";
+        const string protectedDescription = "受保护编号；此入口不自动启动或接入该实例。";
+        var sequence = new (string Case, LdPlayerInstance? Instance, DeviceRow? Device, bool Connected, string Phase, string Label, string Description, bool Enabled)[]
+        {
+            ("冷态", stopped, null, false, "已取消", "启动", "当前观察为已关闭。" + admission, false),
+            ("启动中", stopped with { IsStarting = true }, null, false, "已连接", "等待连接", "当前观察为启动中。" + admission, false),
+            ("未知残留", stopped with { ProcessId = 81 }, null, false, "已连接", "接入", "当前状态尚未确认。" + admission, false),
+            ("有效运行", running, null, false, "启动失败", "连接", "当前观察为安卓已启动。" + admission, false),
+            ("已核验连接", running, device, true, "已取消", "调试", debug, true),
+            ("已连接但启动标志矛盾", running with { IsStarting = true }, device, true, "", "调试", debug, true),
+            ("已连接保护编号仍走原调试分支", running with { Index = 0 }, device, true, "", "调试", debug, true),
+            ("连接标记但Device为空", running, null, true, "", "接入", "当前状态尚未确认。" + admission, true),
+            ("安卓标志但缺PID", running with { VBoxProcessId = 0 }, null, false, "", "接入", "当前状态尚未确认。" + admission, false),
+            ("未连接保护0", stopped with { Index = 0 }, null, false, "", "受保护", protectedDescription, false),
+            ("未连接保护99999", stopped with { Index = 99999 }, null, false, "", "受保护", protectedDescription, false)
+        };
+        try
+        {
+            await Settle();
+            foreach (var item in sequence)
+            {
+                row.Update(item.Instance, item.Device, item.Connected, item.Phase); await Settle();
+                var button = VisualDescendants<Button>(tile).First();
+                var caption = VisualDescendants<TextBlock>(button).Last().Text;
+                var name = AutomationProperties.GetName(button); var tooltip = button.ToolTip as string;
+                Check(caption == item.Label && row.PrimaryLabel == item.Label && name == item.Label, "实际行按钮文本/自动化名随同一row更新：" + item.Case);
+                Check(tooltip == item.Description && BindingOperations.GetBinding(button, ToolTipProperty)?.Path.Path == "PrimaryDescription", "实际行按钮描述保持动态绑定：" + item.Case);
+                Check(ReferenceEquals(row.PrimaryCommand, command) && ReferenceEquals(button.Command, command) && command.CanExecute(null) == item.Enabled && button.IsEnabled == item.Enabled, "命令对象与原Demo门禁不受文案改变：" + item.Case);
+                observations.Add(new { item.Case, expectedLabel = item.Label, actualLabel = caption, automationName = name, tooltip, expectedEnabled = item.Enabled, enabled = button.IsEnabled, canExecute = command.CanExecute(null), row.FilterState });
+            }
+        }
+        finally
+        {
+            Shell.Children.Remove(overlay); tile.Owner = null; tile.DataContext = null;
+            if (originalFocus is UIElement { IsVisible: true, IsEnabled: true } focus) focus.Focus();
+        }
+        Check(!Shell.Children.Contains(overlay) && ReferenceEquals(ViewModel.CurrentDevice, originalCurrent) && ReferenceEquals(ViewModel.MainDevice, originalMain) && ReferenceEquals(tabs.SelectedItem, originalPage) && originalSelection.SequenceEqual(unifiedDevices.Select(row => (row.Key, row.IsSelected))), "专项不改变视图/目标/选择并清理临时控件");
+        File.WriteAllText(Path.Combine(ViewModel.DataDirectory, "device-action-labels.json"), JsonSerializer.Serialize(new { status = failures.Count == 0 ? "PASS-OFFLINE" : "FAIL", scope = "actual bound row controls and immutable command identity; demo guard observations only, commands never invoked", header = new { name = AutomationProperties.GetName(wallSelectAll), tooltip = wallSelectAll.ToolTip }, assertions = checks.Count, failures, checks, observations }, JsonDefaults.Options));
+        if (failures.Count != 0) throw new InvalidOperationException("设备操作文案验收失败：" + string.Join("；", failures));
     }
 }

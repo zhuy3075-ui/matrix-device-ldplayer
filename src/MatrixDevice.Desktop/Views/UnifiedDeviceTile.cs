@@ -32,8 +32,9 @@ public sealed class UnifiedDeviceTile : Border
         var label = new TextBlock { VerticalAlignment = VerticalAlignment.Center }; label.SetBinding(TextBlock.TextProperty, new Binding(nameof(UnifiedDeviceRow.PrimaryLabel)));
         var glyph = new TextBlock { FontFamily = new FontFamily("Segoe MDL2 Assets"), Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center }; glyph.SetBinding(TextBlock.TextProperty, new Binding(nameof(UnifiedDeviceRow.PrimaryGlyph)));
         var body = new StackPanel { Orientation = Orientation.Horizontal }; body.Children.Add(glyph); body.Children.Add(label);
-        var start = new Button { Content = body, Command = row!.PrimaryCommand, Height = 32, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 6, 0), ToolTip = row.PrimaryLabel };
+        var start = new Button { Content = body, Command = row!.PrimaryCommand, Height = 32, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 6, 0) };
         start.SetBinding(System.Windows.Automation.AutomationProperties.NameProperty, new Binding(nameof(UnifiedDeviceRow.PrimaryLabel)));
+        start.SetBinding(ToolTipProperty, new Binding(nameof(UnifiedDeviceRow.PrimaryDescription))); ToolTipService.SetShowOnDisabled(start, true);
         start.SetResourceReference(StyleProperty, "SubtleButton"); actions.Children.Add(start);
         if (row.Connected && row.Device is not null)
         {

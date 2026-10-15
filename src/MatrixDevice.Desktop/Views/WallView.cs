@@ -47,8 +47,8 @@ public partial class MainWindow
         var grid = new DataGrid { ItemsSource = unifiedDeviceView, IsSynchronizedWithCurrentItem = false, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Single, HeadersVisibility = DataGridHeadersVisibility.Column, RowHeight = 48, ColumnHeaderHeight = 40, Background = Brushes.White, BorderThickness = new Thickness(0), GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, HorizontalGridLinesBrush = WallBorder, IsReadOnly = true };
         grid.SelectionChanged += (_, _) => { if (!updatingUnifiedDirectory && !refreshingUnifiedFilter && wallViewMode == "list" && grid.SelectedItem is UnifiedDeviceRow { Device: { } device }) ViewModel.CurrentDevice = device; };
         var checkbox = new FrameworkElementFactory(typeof(CheckBox)); checkbox.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center); checkbox.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(UnifiedDeviceRow.IsSelected))); checkbox.SetBinding(IsEnabledProperty, new Binding(nameof(UnifiedDeviceRow.CanSelect)));
-        wallSelectAll = new CheckBox { Name = "SelectAllDevices", IsThreeState = true, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, ToolTip = "勾选全部可操作设备；取消勾选清除所有选择，不删除设备或数据" };
-        System.Windows.Automation.AutomationProperties.SetName(wallSelectAll, "选择全部设备");
+        wallSelectAll = new CheckBox { Name = "SelectAllDevices", IsThreeState = true, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, ToolTip = "勾选当前筛选结果中可勾选的设备；取消勾选清除全部选择（包括被筛选隐藏的设备），不删除设备或数据。" };
+        System.Windows.Automation.AutomationProperties.SetName(wallSelectAll, "选择当前筛选中可勾选的设备");
         wallSelectAll.Click += (_, _) =>
         {
             var select = wallSelectAll.IsChecked == true;

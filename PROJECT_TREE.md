@@ -11,6 +11,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- A02_MAIN_TARGET.md
 |   |   |   |-- A03_APPEARANCE.md
 |   |   |   |-- A04_RESPONSIVE_SHELL.md
+|   |   |   |-- A05_DEVICE_LABELS.md
 |   |   |   |-- A05_DEVICE_STATE.md
 |   |   |   |-- AP008_DEPENDENCIES.md
 |   |   |   |-- CONTROL_CATALOG.md
