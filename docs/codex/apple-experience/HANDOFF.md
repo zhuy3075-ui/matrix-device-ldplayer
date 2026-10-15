@@ -20,9 +20,13 @@ A02主仓149/149（51.17秒）和最终1000×700界面通过；独立verifier149
 
 ## 当前状态与下一步
 
+当前 A06b1 自动首载调度已完成独立及主仓离线验收，提交以Git记录为准，详情[A06_AUTOMATIC_LOADING](A06_AUTOMATIC_LOADING.md)。基线150/16例8PASS8FAIL且16cleanup；首轮仅两生产文件修复后，独立150/三桌面每16+旧49与原完整套件/六公共shell135，9GUI首轮全exit0，无重试；汇总D3128E92ADF5EB47223454D650E817AA829792CF8C00B0373ABE696A477A38FD已root直接核。新tests/verifier/实施树均从e235657建立且全部保留，旧树不清理。
+
+主仓三冻结源码精确一致：MainWindow 2E8DC93EA0CCD4E0F08A2FC467FBD703580AEA71E1EBEE4C78125C5C4DD98D49、VM 894985B3DAB1EF02856B8AEDEBEAB78386F9BD866928F3D0EF69C64C600E029B、新fixture 8733568495117D19953A6A261ACD25E0B80933E2A4A323F915884052FBD7A6AC，旧49不改。产品patch B454AFF58F326943FFFFC73F60C15F477A37EA0A878E4EA61858A33A31B32CEF。root150/51.27s、首次1000完整16/137/16cleanup+旧49/401/191/49cleanup/9正确磁盘源、390shell135通过；新报告1329C107AB6EAACB78005A4576D9AC499BEE74F5A47A663D3D831F42BED3792D，DLL E3A9FFE48553C980B857D3C5F05C498022E553510859CA2D57827AE0C58196E2。root已实读实际报告及目视两代表图，用户profile仍E4E33A8...BB05F0，所有必需exec/GUI结束，锁空闲归root；不得复跑旧锁。AP019/020/023历史首败不因此关闭，公共shell不代表正文全尺寸或真实Android通过。
+
 A06a发布隔离本阶段已独立离线及主仓代表验收，提交以Git记录为准。四源准确冻结、完整红/夹具纠正/取消回归/独立证据见[A06_DEBUG_PUBLICATION](A06_DEBUG_PUBLICATION.md)，无需重做本阶段或执行下面旧锁。独立150/三桌面各49+原完整回归/六shell135/四设备监控代表，14进程首轮exit0；主仓150(51.65s)/1000完整49/390shell135通过，DLL55D2AC54BC89B7C9A5A8B2589A16B479215DDC20FC8EDAFAFD8B34E66C9A67B7。实际profile仍E4E33A8...BB05F0，必需exec/GUI均结束，锁空闲归root。原Hover首败AP023仍未知，辅助modal仅最后一轮截图，不称产品已修或六模态视觉齐全。
 
-下一步A06b：先受控复现EnsureDebugLoaded的HasActiveOperations/Busy调度（Demo跳过自动首载，手调不算）；再明确旧已完成Screenshot缓存换代语义、原生保存快照/未完成裁剪捕获边界，保留已完成crop跨页合同；布局仍应复用同一Image/Canvas/Tree/属性与取色控件。每个修复独立验证push，不以本次迟到发布守卫冒称所有缓存/自动路径已解决。A07..A12和真实双实例/30分钟全部保持，完整goal继续active。最新用户四项列表精简已在8303cdc且现版实际smoke再次确认，不重复实施或删分组数据。两个旧英文PNG保留不提交，全部旧worktree保留，源包AP021分类仍A12。
+下一步A06b2：节点固定star+300+270、截屏固定300右栏仍待六尺寸正文复现；复用同一Image/Canvas/Tree/属性/色表/Scale对象进行重排，不整页缩放或clone控件，不在resize时重载。full只读盘点建议按正文宽分三栏/两栏/同区展开返回；实际断点要以44px动作和画面视口验证决定，不能把建议当已实现。树↔框/属性、长文滚读、缩放取色、完成crop跨页/resize、保存产物均须真实交互；独立处理已完成截图缓存身份、同row重连、原生保存快照与未完成crop捕获候选，不混进布局。A07..A12和真实双实例/30分钟全部保持，完整goal继续active。最新用户四项列表精简已在8303cdc且现版smoke再次确认，不重复实施或删分组数据。两英文PNG保留不提交，全部旧worktree保留，源包AP021分类仍A12。
 
 ## 近期阶段过程留痕
 

@@ -58,6 +58,8 @@ public partial class MainWindow : Window
     private Task? captureOperation;
     private bool debugAutoLoading;
     private bool debugAutoPending;
+    private bool debugAutoQueued;
+    private Task debugAutoOperation = Task.CompletedTask;
     private Action<Window>? responsiveOwnedDialogFixture;
     public WorkspaceViewModel ViewModel { get; }
 
@@ -97,7 +99,7 @@ public partial class MainWindow : Window
         viewModel.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName == nameof(WorkspaceViewModel.DebugImage)) RefreshScreens();
-            if (args.PropertyName == nameof(WorkspaceViewModel.Busy) && !ViewModel.Busy && debugAutoPending) _ = EnsureDebugLoadedAsync();
+            if (args.PropertyName == nameof(WorkspaceViewModel.HasActiveOperations) && !ViewModel.HasActiveOperations && debugAutoPending) _ = QueueDebugAutoLoadAsync();
         };
     }
 
@@ -240,18 +242,41 @@ public partial class MainWindow : Window
         finally { captureInProgress = false; }
     }
 
-    private async Task EnsureDebugLoadedAsync()
+    private bool NeedsDebugAutoLoad() => !(ViewModel.Demo && !DebugAutomaticFixturePermitted) && !closing && !closeApproved && IsLoaded
+        && Equals((tabs?.SelectedItem as TabItem)?.Tag, "节点") && ViewModel.CurrentDevice?.Info.Online == true && ViewModel.Nodes.Count == 0;
+
+    private Task EnsureDebugLoadedAsync()
     {
-        if (ViewModel.Demo || closing || ViewModel.HasActiveOperations || !Equals((tabs?.SelectedItem as TabItem)?.Tag, "节点") || ViewModel.CurrentDevice?.Info.Online != true || ViewModel.Nodes.Count != 0) return;
-        if (debugAutoLoading || ViewModel.Busy) { debugAutoPending = true; return; }
-        var requested = ViewModel.CurrentDevice;
-        debugAutoPending = false;
-        debugAutoLoading = true;
-        try { await ViewModel.LoadNodesAsync(); }
+        if (!NeedsDebugAutoLoad()) { debugAutoPending = false; return Task.CompletedTask; }
+        debugAutoPending = true;
+        return QueueDebugAutoLoadAsync();
+    }
+
+    private Task QueueDebugAutoLoadAsync()
+    {
+        if (!NeedsDebugAutoLoad()) { debugAutoPending = false; return Task.CompletedTask; }
+        if (!debugAutoPending || debugAutoLoading || debugAutoQueued || ViewModel.HasActiveOperations) return debugAutoOperation;
+        return debugAutoOperation = RunDebugAutoLoadAsync();
+    }
+
+    private async Task RunDebugAutoLoadAsync()
+    {
+        debugAutoQueued = true;
+        try
+        {
+            await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+            debugAutoQueued = false;
+            if (!NeedsDebugAutoLoad()) { debugAutoPending = false; return; }
+            if (!debugAutoPending || ViewModel.HasActiveOperations) return;
+            debugAutoPending = false;
+            debugAutoLoading = true;
+            await ViewModel.LoadNodesAsync();
+        }
         finally
         {
+            debugAutoQueued = false;
             debugAutoLoading = false;
-            if (debugAutoPending || !ReferenceEquals(requested, ViewModel.CurrentDevice)) { debugAutoPending = false; await EnsureDebugLoadedAsync(); }
+            if (debugAutoPending) _ = QueueDebugAutoLoadAsync();
         }
     }
 
@@ -263,6 +288,7 @@ public partial class MainWindow : Window
         if (ldBusy || ViewModel.Busy) { MessageBox.Show(this, "当前操作尚未结束，请等待操作完成后退出。", "操作进行中", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         if (ViewModel.HasActiveOperations && !ViewModel.Confirm("退出矩阵设备", "仍有脚本或文件传输正在运行。停止这些任务并退出？\n设备与模拟器将保持运行。")) return;
         closing = true;
+        debugAutoPending = false;
         directoryCancellation.Cancel();
         directoryTimer.Stop(); captureTimer.Stop();
         await StopMonitorAsync();
@@ -287,6 +313,7 @@ public partial class MainWindow : Window
     internal void AbortStartup()
     {
         closing = closeApproved = true;
+        debugAutoPending = false;
         captureTimer?.Stop();
         directoryTimer?.Stop(); directoryCancellation.Cancel();
         monitorTimer.Stop();
@@ -309,6 +336,7 @@ public partial class MainWindow : Window
     public async Task RunSmokeAsync(string? screenshotPath = null)
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("启动验收仅允许显式演示模式");
+        await VerifyDebugAutomaticLoadingAsync();
         await DebugPublicationSmoke.VerifyAsync(System.IO.Path.Combine(ViewModel.DataDirectory, "artifacts", "desktop-smoke"));
         if (tabs.SelectedIndex != 0 || wallViewMode != "list") throw new InvalidOperationException("初始页面必须是统一设备列表。");
         await VerifyDeviceActionLabelsAsync();

@@ -147,8 +147,8 @@ public sealed class WorkspaceViewModel : ObservableObject
     public DeviceRow? MainDevice { get => mainDevice; private set { Set(ref mainDevice, value); Changed(nameof(MainContext)); WallChanged?.Invoke(); } }
     public string DeviceContext => CurrentDevice is { } row ? $"{row.Name} · {row.Serial} · {LocalizationService.Current.Get(row.State)}" : LocalizationService.Current.Get("未选择设备");
     public string MainContext => MainDevice is { } row ? $"{LocalizationService.Current.Get("主控")}: {row.Name} · {row.Serial}" : $"{LocalizationService.Current.Get("主控")}: {LocalizationService.Current.Get("未指定")}";
-    public bool Busy { get => busy || externalBusy; private set { Set(ref busy, value); SyncApiWriteGuard(); RefreshCommands(); } }
-    internal void SetExternalBusy(bool value) { externalBusy = value; Changed(nameof(Busy)); SyncApiWriteGuard(); RefreshCommands(); }
+    public bool Busy { get => busy || externalBusy; private set { Set(ref busy, value); SyncApiWriteGuard(); RefreshCommands(); Changed(nameof(HasActiveOperations)); } }
+    internal void SetExternalBusy(bool value) { externalBusy = value; Changed(nameof(Busy)); SyncApiWriteGuard(); RefreshCommands(); Changed(nameof(HasActiveOperations)); }
     private void SyncApiWriteGuard() => runtime.Api.UiWriteBusy = externalBusy || (busy && blockApiWhileBusy) || Transferring;
     public string Status { get => LocalizationService.Current.Get(status); private set => Set(ref status, value); }
     public string Error { get => error; private set => Set(ref error, value); }
@@ -160,7 +160,7 @@ public sealed class WorkspaceViewModel : ObservableObject
     public string ShellInput { get => shellInput; set { Set(ref shellInput, value); RefreshCommands(); } }
     public string TextInput { get => textInput; set { Set(ref textInput, value); RefreshCommands(); } }
     public string RemotePath { get => remotePath; set => Set(ref remotePath, value); }
-    public bool Transferring { get => transferring; private set { Set(ref transferring, value); SyncApiWriteGuard(); RefreshCommands(); } }
+    public bool Transferring { get => transferring; private set { Set(ref transferring, value); SyncApiWriteGuard(); RefreshCommands(); Changed(nameof(HasActiveOperations)); } }
     public double OverallProgress => Transfers.Count == 0 ? 0 : Transfers.Average(row => row.Progress);
     public bool ShowSystemApps { get => showSystemApps; set => Set(ref showSystemApps, value); }
     public AppInfo? SelectedApp { get => selectedApp; set { Set(ref selectedApp, value); RefreshCommands(); } }
@@ -255,6 +255,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         RefreshApiRows();
         RefreshDeviceView();
         if (demo && CurrentDevice is null) CurrentDevice = Devices.FirstOrDefault();
+        Changed(nameof(HasActiveOperations));
     }
 
     internal bool ConnectionReloadAvailable => !Transferring && !Devices.Any(row => ScriptBusy(row.Serial)) && !runtime.Api.BasicRunning && !runtime.Api.AutomatorRunning && runtime.Api.DevicePorts.Count == 0 && !runtime.Api.HasActiveRequests;
@@ -769,7 +770,7 @@ public sealed class WorkspaceViewModel : ObservableObject
 
     private void StopScripts() { foreach (var row in Targets()) runtime.Scripts.Stop(row.Serial); RefreshCommands(); }
     private void OnScriptLog(string serial, ScriptLogEntry entry) => Application.Current.Dispatcher.BeginInvoke(() => { if (CurrentDevice?.Serial == serial) { ScriptLogs.Add(FormatScriptLog(entry)); while (ScriptLogs.Count > 500) ScriptLogs.RemoveAt(0); } });
-    private void OnScriptStatus(ScriptRunStatus state) => Application.Current.Dispatcher.BeginInvoke(() => { var row = Devices.FirstOrDefault(row => row.Serial == state.Serial); if (row is not null) row.ScriptState = LocalizationService.Current.Get(state.State.ToString()); RefreshCommands(); });
+    private void OnScriptStatus(ScriptRunStatus state) => Application.Current.Dispatcher.BeginInvoke(() => { var row = Devices.FirstOrDefault(row => row.Serial == state.Serial); if (row is not null) row.ScriptState = LocalizationService.Current.Get(state.State.ToString()); RefreshCommands(); Changed(nameof(HasActiveOperations)); });
     private void LoadScriptLogs() { ScriptLogs.Clear(); if (CurrentDevice is not null) foreach (var entry in runtime.Scripts.GetLogs(CurrentDevice.Serial)) ScriptLogs.Add(FormatScriptLog(entry)); }
     private static string FormatScriptLog(ScriptLogEntry entry)
     {

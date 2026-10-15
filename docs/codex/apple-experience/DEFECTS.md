@@ -27,6 +27,7 @@
 | AP-021 | P2/源码归档范围待分类 | 旧New-SourcePackage排除artifacts/data/bin/obj与英文截图，但仍收录docs/verification历史PNG/JSON/txt验收材料；逐SHA通过不等于归档完全不含原始证据 | A12区分正式文档与原始证据并单独处理打包范围，不删除历史用户文件或改写Git历史。本轮提交只新增监控源码/正式测试/脱敏文档与清单，不新增上传这些旧材料；不得称当前ZIP为完全纯源码包 |
 | AP-022 | P1/已独立离线修复迟到发布与故障归属 | 原LoadNodes首次等待后偷换来源；ABA/行及Catalog-only代次失效仍写旧缓存，后台清B新节点，A故障错记B或host均有受控红。中间版取消回归亦实测47/2后最小修正 | [A06a报告](A06_DEBUG_PUBLICATION.md)：独立150/三桌面各49及旧完整回归/六shell135/四代表，主仓150/49/390shell通过，9磁盘来源正确；保留合法cache/原CLI/跨页crop。仅直接Demo/STA VM隔离，不代表自动首载、旧已完成缓存换代或实机已验；AP023仍开放 |
 | AP-023 | P2/测试可靠性待诊断，首次失败未确诊 | A06a主实现VM第三版150/49业务全过后，旧AppleAppearanceSmoke.Hover(TextBox)的真实IsMouseOver断言失败；原日志无实际指针/ownerActive/命中分量，不能归因用户输入或宣称产品悬停已修 | 保留首次日志且完整smoke当轮FAIL，后续旧检查未执行；仅授权Hover增加有界只读primitive时序和失败stderr，原指针调用/断言/等待不变。不得用49业务绿或后续未复现倒填该次全绿，不与AP-015/019/020擅自并根因 |
+| AP-024 | P1/已独立离线修复活动阻塞导致的漏首载 | 自动首载在HasActiveOperations返回前未登记pending，Busy/传输/脚本释放后丢请求；在途A到B到同一A旧结果被A06a拒绝后亦未补载 | [A06b1报告](A06_AUTOMATIC_LOADING.md)：基线16例8PASS/8FAIL且16cleanup，首轮只修两生产文件；独立150/三桌面每16+旧49及原完整回归/六公共shell135，主仓150/16/49/390shell通过。默认Demo/活动定义/授权与发布门禁未改，真实Android/定时器/同row重连不由此替代 |
 
 ## 修复记录规则
 
