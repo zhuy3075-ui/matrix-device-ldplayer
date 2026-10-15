@@ -140,3 +140,12 @@
 - 独立最终150/51.28s、三桌面各16/137/16cleanup及旧49/全部原套、六公共shell各135，9GUI首次exit0/0retry/owned0，18前后SHA一致；汇总D3128E92ADF5EB47223454D650E817AA829792CF8C00B0373ABE696A477A38FD已root直接核。六尺寸辅助modal本轮各自留存，不将文件留存称逐图目视全过。1920耗89.04s而另两约51s，无计时根因结论。
 - 主仓机械导入前核基线/patch/canonical后精确三raw，旧49内容及原raw不变；150/51.27s、首次1000完整及390shell exit0。新16/137/729/16cleanup报告1329C107AB6EAACB78005A4576D9AC499BEE74F5A47A663D3D831F42BED3792D，旧49/401/191/49cleanup/9正确磁盘源报告47563A50BCDAB691CF582FE478DD823C1764400D89B73C501E3BD249B057F53F，DLL E3A9FFE48553C980B857D3C5F05C498022E553510859CA2D57827AE0C58196E2。root直接读实际JSON、目视两代表图，实际用户profile仍E4E33A8...BB05F0，必需exec/GUI结束。
 - 本阶段仅三源码/正式测试、README/脱敏报告及清单，原始证据/配置/依赖/ZIP/两英文图不提交。AP019/020/023首败和AP021历史归档范围不关闭；不是生产timer、Android、同row离线重连或全部节点/截图功能通过。下一独立阶段为同控件正文响应式及缓存/保存/裁剪逐缺陷验证；A07..A12、真实双实例和30分钟稳定性范围不缩小，完整目标仍active。
+
+## 2026-10-15 / A06b2a节点正文适配
+
+- Goal/Context：延续完整目标，上一轮60a7922列表精简已push不重做；读当前源码、规格、交接及官方HIG/WPF合同，三方独立工作区。
+- Decision：仅DebugView同对象三栏/中左右分区/窄分段、原工具和树头44；实际红后修Header滚入目标与属性未消费滚动意图，不在resize重建或请求设备。
+- Evidence：独立原布局9例6FAIL/3PASS；夹具Path编译、Focus返回值前置分别纠正并保留原失败，不称产品红。首轮Header45仅显31、后续四大尺寸offset丢失均真实取证，第三生产轮局部ticket及新用户取消完成严格11例。
+- Files：DebugView、MainWindow一行Demo接线、新ResponsiveDebugSmoke，README/报告与任务/交接/问题/矩阵及三源码清单；原16/49、VM/Core/Host和目标边界不改。
+- Verification：独立150/50.80s、三桌面每11/905/319/11清理+旧16/49与原全套、六shell135；主仓150/51.02s、一次1000完整11及旧套/390shell135通过，root实读并目视。独立汇总CB18E4F0...9251B、主仓B7998537...A8342，DLL B98851E8...E0B71，配置原SHA/owned0。详见[A06b2a报告](codex/apple-experience/A06_NODE_RESPONSIVE.md)。
+- Next/Risks：本功能独立审查后push原私有分支，不合并发布；再做截屏正文/缓存/保存裁剪，A07..A12、真实双实例及30分钟稳定性仍须完成。不是物理输入/DPI/Android/全部触控，历史首败与AP021保持。
