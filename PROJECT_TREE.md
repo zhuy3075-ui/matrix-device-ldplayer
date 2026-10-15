@@ -30,6 +30,8 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- DEFECTS.md
 |   |   |   |-- HANDOFF.md
 |   |   |   +-- TEST_MATRIX.md
+|   |   |-- automation-expansion/
+|   |   |   +-- CAPTURE_RESEARCH.md
 |   |   |-- device-action-dedup/
 |   |   |   +-- REPORT.md
 |   |   |-- launch-memory-policy/
@@ -37,6 +39,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- launch-resource-confirmation/
 |   |   |   +-- REPORT.md
 |   |   |-- list-console/
+|   |   |   |-- LIVE_RECHECK_2026-10-16.md
 |   |   |   +-- REPORT.md
 |   |   |-- realtime-monitoring/
 |   |   |   |-- goal-prompt.md

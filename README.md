@@ -18,6 +18,8 @@
 
 全面验收与界面重设计正在按[当前计划](plan.md)实施；目标、技术边界、视觉/命名及依赖任务分别见[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[UI规格](docs/UI_SPEC.md)、[任务表](docs/TASKS.md)。当前测试范围见[功能矩阵](docs/codex/apple-experience/TEST_MATRIX.md)、[逐控件目录](docs/codex/apple-experience/CONTROL_CATALOG.md)和[问题清单](docs/codex/apple-experience/DEFECTS.md)，进展见[阶段记录](docs/PROGRESS.md)。已修复主控A/当前B时投屏错目标的代码路径，增加主控身份与进程所有权守卫，见[A02独立离线验收](docs/codex/apple-experience/A02_MAIN_TARGET.md)；真实外部投屏仍待验。这是进行中的工作，149项和三尺寸Demo不代表本轮全功能/实机/窄屏已通过。
 
+2026-10-16新增任务R11-R14/A13-A16已纳入上述文档：继续全功能/双实例/安装卸载/最终30分钟验收，并规划终控台RPA闭环、群控MCP接入及指定模拟器抓包。最近[真实实例复核](docs/codex/list-console/LIVE_RECHECK_2026-10-16.md)为实例1冷启动及8项限域Live通过，不是全控件通过。现有脚本为受限ZIP格式，产品尚无群控MCP server或完整抓包会话；[抓包初步调研](docs/codex/automation-expansion/CAPTURE_RESEARCH.md)已比较方案，POC未运行，不把规划当实现。
+
 ## 构建与运行
 
 需要 Windows 10/11、[.NET SDK 10.0.402](https://dotnet.microsoft.com/en-us/download/dotnet/10.0)。依赖固定于项目文件与 `packages.lock.json`，NuGet 源位于 `NuGet.Config`。本工作区已有通过官方 SHA-512 校验的便携 SDK，路径为上级 `.tools/dotnet/dotnet.exe`。

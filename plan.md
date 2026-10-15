@@ -86,6 +86,34 @@ flowchart TD
 
 ---
 
+## 新增任务与依赖
+
+2026-10-16追加，PRD R11-R14、SPEC新增边界及TASKS A13-A16共同生效，不替代原A06-A12余项。按P0全功能测试、P1终控台/RPA、P2群控MCP设计与最小接入、P3抓包调研/POC推进；四项均必交付，优先级不是删减范围的依据。
+
+先继续真实双实例同步、独立自有包经当前应用页安装卸载、完整GUI失败定位和最终双实例30分钟。最新真实实例1冷启动与8项Live检查是部分证据；150项通过不消除SQLite14/AP-033失败或代替双实例、当前应用批次及长测。详细本轮证据见docs/codex/list-console/LIVE_RECHECK_2026-10-16.md。
+
+~~~mermaid
+flowchart TD
+  Baseline[A13a 当前基线与安全契约] --> Current[A13b 全功能测试与逐缺陷修复]
+  Baseline --> Script[A14a/b 脚本契约与作业执行]
+  Baseline --> Design[A15a MCP设计]
+  Baseline --> Capture[A16a/b 抓包调研与受控POC]
+  Design --> Bridge[A15b 最小MCP客户端验证]
+  Script --> Bridge
+  Bridge --> Analysis[A14c 指定应用脚本与动态分析]
+  Capture --> Analysis
+  Current --> Regression[A13c 新增能力回归]
+  Analysis --> Regression
+  Regression --> Final[A11 最终全路径与30分钟]
+  Final --> Audit[A12 最终报告]
+~~~
+
+推荐复用现12页和现有逐设备门禁，新增受限脚本作业、stdio MCP适配及可归属采集会话。更简单路径先完成脚本/只读工具和离线包分析，但它不满足R12完整链路，不能作为最终交付。拒绝任意宿主脚本执行、自动启动全部23台、隐式改共享代理/CA/ADB或保证所有HTTPS明文；这会扩大权限与验证风险。
+
+现有ZIP脚本不等于任意RPA运行时，现有HTTP不等于MCP，代理配置不等于抓包。抓包初步推荐自有调试应用显式代理的隔离POC；HTTP Toolkit、VPN及原始包作为比较/条件备选，官方依据见docs/codex/automation-expansion/CAPTURE_RESEARCH.md。POC未实际运行，协议SDK版本、精确工具Schema及依赖摘要在对应实现任务开始前冻结，不伪造已支持能力。
+
+继续使用ai-coding-workflow执行分阶段PRD/SPEC/TASKS门禁；superpowers不可见，已调用真实subagents进行能力盘点与结构/风险独立审查，不声称运行不存在的skill。每项业务修复在隔离worktree中先红后绿、独立复验、单独提交push到原私有功能分支；文档阶段只验证范围/链接/依赖/事实，不虚报产品功能测试。依赖/权限不明时停止对应敏感动作并继续其他安全任务，不创建额外定时任务。
+
 ## 历史计划（原文保留，不作为本轮最新验收范围）
 
 # 矩阵设备全功能实测与稳定性验收计划
