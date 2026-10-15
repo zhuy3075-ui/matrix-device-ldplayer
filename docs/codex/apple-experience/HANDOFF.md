@@ -1,6 +1,6 @@
 # 当前目标交接
 
-更新：2026-10-15。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
+更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
 ## 用户目标与权限
 
@@ -20,7 +20,11 @@ A02主仓149/149（51.17秒）和最终1000×700界面通过；独立verifier149
 
 ## 当前状态与下一步
 
-最新有效状态：A06b2a节点正文已完成独立和主仓离线验收，准备本阶段交付审查/推送，完整goal继续active。最终三raw E95E45D5...7250C（DebugView）、41F0B95A...3F332（新fixture）、D85B0235...4C044（Main hook）已精确合入；原16/49及VM/Core/Host不变。独立150/50.80s、三桌面各11/905/319/11cleanup+旧16/49原全套、六shell135；主仓150/51.02s、一次1000完整新11与旧套/390shell135全部通过。独立汇总CB18E4F0077C9BF91F9CDFF2C36DB3A1A45BB4388945D1B0746F3852D6F9251B、主仓汇总B79985375CAAB5968D0110FA66410BEB350C01FE42799E7A7BC9CE7BA91A8342，root直接读核/目视；DLL B98851E884B13160B0D16710ADC08777A7E4BBCA06407245AF8562514DDE0B71。所有必需exec/GUI结束、锁归root空闲，用户配置仍E4E33A8...BB05F0，未打开普通程序或操作真实实例。
+最新阶段：[A06b2b截屏正文](A06_SCREENSHOT_RESPONSIVE.md)基于已推送29ab03feb858e87a875f4e41a82d3b79f35b4296，三新隔离树apple-screenshot-responsive、-tests、-verifier。基线六几何真实红、第一生产轮长坐标文本预算不足均保留，第二轮唯一坐标列70改100后通过。最终生产raw AB50FBBB53EB1C0641FDC9D2528F03C8387D0DC026B6F8170BB9423CF6DD361A、Main8356EF3694A3FCC403BFA31C330B66816196E84AAAB0E59C3EA1E9451F59C84D、新10例fixture59CAFC660A1C5427942EE453DE9BD6004DE13A48BA21479EB4CF4AFE84DE7762已精确合入主仓；仅BuildScreenshotPage与一行Demo接线，原11/16/49、VM/handlers/主题不变。
+
+当前执行以此更新为准：独立最终150/51.05秒/0警告错误，三桌面1000/1440/1920各新10/630/257/10清理+旧11/16/49原全套/12idle、六shell每135，均首次exit0；汇总44476DB4601B9AE07467906341080918FD6D80FF412551F7A549744B358F5946。主仓150/51.43秒/0警告错误、1000完整87.66秒同10及旧全套、390shell135通过；root直接实读/目视390分段与1440双栏，汇总artifacts/scp-root/root-summary-r2.json SHA7193658ADB2F19EEF637B026F2584B46D66E2DA9AF933777FA82AFE7C898839E，DLL4D5DE1381A5DBB6B6DD22B9FE7B7970CD71773EC6DF0EB6763E7337831ADDFF2。首汇总标量matrixCases误记1已按真实32纠正保留，未改源码/测试/首次执行结果。各阶段124源前后同、旧fixture同、配置E4E33A8...BB05F0，自有进程0/exec结束，锁归root空闲；未启动普通程序或真实实例。10文件冻结后用2539EE49...F680 helper在隔离快照打包，只回写三清单；hig实际审ZIP/Bundle/Tree与精确13路径后才提交push。新打包审查与Git结果以ignored audit和实际记录为准，不把旧b2a包作为本阶段产物。两用户PNG、运行配置和本轮原始证据不提交，AP021历史材料仍保留。完整goal继续active；下一步缓存身份/原生保存/未完成裁剪，再A07..A12、真实1/2与最终30分钟，不扩大本轮为物理点击/DPI/Android通过。
+
+上一阶段验收详情：A06b2a节点正文已完成独立和主仓离线验收及交付推送，完整goal继续active。最终三raw E95E45D5...7250C（DebugView）、41F0B95A...3F332（新fixture）、D85B0235...4C044（Main hook）已精确合入；原16/49及VM/Core/Host不变。独立150/50.80s、三桌面各11/905/319/11cleanup+旧16/49原全套、六shell135；主仓150/51.02s、一次1000完整新11与旧套/390shell135全部通过。独立汇总CB18E4F0077C9BF91F9CDFF2C36DB3A1A45BB4388945D1B0746F3852D6F9251B、主仓汇总B79985375CAAB5968D0110FA66410BEB350C01FE42799E7A7BC9CE7BA91A8342，root直接读核/目视；DLL B98851E884B13160B0D16710ADC08777A7E4BBCA06407245AF8562514DDE0B71。所有必需exec/GUI结束、锁归root空闲，用户配置仍E4E33A8...BB05F0，未打开普通程序或操作真实实例。
 
 交付只包含本阶段10个源码/正式文档加3生成清单；使用已独立静审ignored packrunner-r3（SHA0F2C1F3A15E2F8E7E22BA5F79F8DA09E390B17A1C13BBEED641A3C6801BCC134）按tracked+2明确新增生成快照并逐源/ZIP核SHA，结果以独立audit及Git记录为准。首次r2打包在只读Git预检因PowerShell的VoidTaskResult污染字节返回而停止，尚未生成快照或回写清单；r3只加[void]，不改产品/测试，不算第四轮产品修复。原r2和失败记录保留。不纳入两用户PNG或本轮原始证据，AP021历史材料仍保留；独立交付审查通过后立即push原私有功能分支。下一步截屏正文/缓存/原生保存与未完成裁剪逐缺陷验证；A07..A12及真实1/2/30分钟保持，绝不以本轮布局绿标整个目标完成。
 

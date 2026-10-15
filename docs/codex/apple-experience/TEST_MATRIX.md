@@ -1,6 +1,6 @@
 # 当前版本功能与交互验收矩阵
 
-日期：2026-10-15。基线8303cdc；当前目标的业务实测尚未开始。控件键见CONTROL_CATALOG.md。以下每个分项为独立caseId，不因同页其他操作通过而继承成功。
+日期：2026-10-16。基线8303cdc；当前目标的真实业务实测尚未开始，逐阶段离线证据分别标记。控件键见CONTROL_CATALOG.md。以下每个分项为独立caseId，不因同页其他操作通过而继承成功。
 
 ## 状态与运行方式
 
@@ -30,6 +30,7 @@
 | DEBUG-PUBLISH 界面检查/截屏及后台源缓存 | Capture/LoadNodes/Wall/Automatic四入口固定来源；正常几何刷新、合法后台缓存返回、节点导出 | 首次await切目标/ABA、行及Catalog-only身份失效、新B检查不被旧Auto清除、Busy no-op、固定源故障日志、后端/外部取消与恢复 | 独立PASS-OFFLINE-A06A：[A06a](A06_DEBUG_PUBLICATION.md)，三桌面每49case/401检查/191观察、49清理/9正确来源；独立与主仓150、主仓49/390shell及原回归通过。不是NODE-01自动首载、按钮、生产timer、真实ADB或runtime热换证明；旧Appearance首败AP023保持开放 |
 | AUTO-FIRSTLOAD 界面检查事件调度 | 真实导航Click、Current setter、Busy/External/Transfer/Script事件释放后自动读取最终目标并建立真实Tree/Canvas；已有节点返回不重读 | ABA、双阻塞不越过剩余脚本、在途切换、离页、真实Close/脚本取消、失败/取消后不循环且重新进入恢复 | 独立PASS-OFFLINE-A06B1：[报告](A06_AUTOMATIC_LOADING.md)，基线16例8失败，首轮修复后三桌面各16/137/16cleanup+旧49及原套；六公共shell135、主仓150/完整16+49/390shell通过。仅自有Demo窗口临时许可与真实事件链，不是生产timer/Android/同row离线重连、缓存换代或全部NODE-01控件证明 |
 | CAP-01 截屏 | 取色坐标/RGB/HEX、缩放、裁剪、PNG保存、颜色双击复制 | 缩放坐标、边界/零面积裁剪、目标改变丢弃旧裁剪、无图/保存失败/取消 | NOT-RUN |
+| CAP-LAYOUT 截屏正文 | 六尺寸与640±1，同图/Canvas/Scale/色表重排、44工具、100合法样本首中末三列、实际缩放/双向滚动取色 | 无图/真实Busy/安全错误恢复；完成crop种子与目标/焦点/合法滚动offset保持、零额外设备读；轨道仅实际可见中心命中 | [A06b2b](A06_SCREENSHOT_RESPONSIVE.md)独立PASS-OFFLINE：150、三桌面每10例630检查257观察10清理+旧11/16/49原全套、六shell135；主仓150/51.43秒、1000全套及390shell135通过。四档单次系统定位+合成WPF路由不是物理点击/Android；未证明轨道点击、原生保存/剪贴板、在途裁剪或全部CAP-01 |
 | SHELL-01 终端 | 目标选择→执行→输出/错误码、历史上下；输出框系统文本复制语义 | 长输出/空命令/超时/离线；不因切页发旧命令、不劫持文本编辑快捷键；专用取消/复制/清空控件不存在，记不适用 | NOT-RUN |
 | APP-01 应用 | 当前独立目标区双选→读取真实包/版本；第三方/系统应用过滤；应用行选择 | 空/离线目标、重入、别名去重、与设备群控/主控选择不互相授权 | NOT-RUN；旧LiveUiAcceptance未走当前批次UI |
 | APP-02 应用 | 自有唯一APK双目标安装→包名/签名/精确版本→启动前台→停止后不运行→卸载后包消失 | 多APK、部分失败/取消/重试、确认后identity变化；只卸载本轮新增包；不碰抖音数据 | NOT-RUN；须补当前UI到效果链 |

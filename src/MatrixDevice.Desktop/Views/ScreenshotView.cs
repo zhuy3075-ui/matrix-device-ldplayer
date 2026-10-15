@@ -23,17 +23,69 @@ public partial class MainWindow
     {
         var page = Page();
         var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE722", "刷新截图", ViewModel.ScreenshotCommand)); toolbar.Children.Add(Button("\uE74E", "保存 PNG", async () => await SaveImageAsync(false))); toolbar.Children.Add(Button("\uE7A8", "保存裁剪", async () => await SaveImageAsync(true)));
-        screenshotMode = new ComboBox { ItemsSource = new[] { "取色", "裁剪" }, ItemTemplate = CaptionChoices(), SelectedIndex = 0, Width = 115 }; toolbar.Children.Add(screenshotMode);
-        var zoom = new Slider { Minimum = .1, Maximum = 3, Value = 1, Width = 150, VerticalAlignment = VerticalAlignment.Center, ToolTip = "缩放" }; zoom.ValueChanged += (_, _) => { screenshotScale.ScaleX = zoom.Value; screenshotScale.ScaleY = zoom.Value; }; toolbar.Children.Add(zoom); toolbar.Children.Add(Button("\uE740", "原始大小", () => zoom.Value = 1));
+        screenshotMode = new ComboBox { ItemsSource = new[] { "取色", "裁剪" }, ItemTemplate = CaptionChoices(), SelectedIndex = 0, Width = 115, MinHeight = 44 }; toolbar.Children.Add(screenshotMode);
+        LocalizationService.Bind(screenshotMode, System.Windows.Automation.AutomationProperties.NameProperty, "截图操作模式");
+        LocalizationService.Bind(screenshotMode, ToolTipProperty, "截图操作模式");
+        var zoom = new Slider { Minimum = .1, Maximum = 3, Value = 1, Width = 150, MinHeight = 44, VerticalAlignment = VerticalAlignment.Center, ToolTip = "缩放" }; zoom.ValueChanged += (_, _) => { screenshotScale.ScaleX = zoom.Value; screenshotScale.ScaleY = zoom.Value; }; toolbar.Children.Add(zoom); toolbar.Children.Add(Button("\uE740", "原始大小", () => zoom.Value = 1));
+        LocalizationService.Bind(zoom, System.Windows.Automation.AutomationProperties.NameProperty, "缩放");
+        foreach (var button in toolbar.Children.OfType<Button>()) { button.MinWidth = 44; button.MinHeight = 44; }
         DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
-        var colors = new DataGrid { ItemsSource = ViewModel.Colors, IsReadOnly = true, Width = 300, Margin = new Thickness(10, 10, 0, 0) }; TextColumn(colors, "坐标", nameof(PixelSample.Position), 70); TextColumn(colors, "HEX", nameof(PixelSample.Hex), 80); TextColumn(colors, "RGB", nameof(PixelSample.Rgb), 140); colors.MouseDoubleClick += (_, _) => { if (colors.SelectedItem is PixelSample color) Clipboard.SetText($"{color.Hex} {color.Rgb}"); }; DockPanel.SetDock(colors, Dock.Right); page.Children.Add(colors);
+        var panes = new Grid { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 8, 0, 0) };
+        DockPanel.SetDock(panes, Dock.Top); page.Children.Add(panes);
+        var grid = new Grid { Margin = new Thickness(0, 10, 0, 0), ClipToBounds = true };
+        grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(310) });
+        var colors = new DataGrid { ItemsSource = ViewModel.Colors, IsReadOnly = true, Margin = new Thickness(10, 0, 0, 0) }; TextColumn(colors, "坐标", nameof(PixelSample.Position), 100); TextColumn(colors, "HEX", nameof(PixelSample.Hex), 80); TextColumn(colors, "RGB", nameof(PixelSample.Rgb), 140); colors.MouseDoubleClick += (_, _) => { if (colors.SelectedItem is PixelSample color) Clipboard.SetText($"{color.Hex} {color.Rgb}"); }; Grid.SetColumn(colors, 1); grid.Children.Add(colors);
+        foreach (var column in colors.Columns) { column.MinWidth = column.Width.Value; column.Width = DataGridLength.SizeToCells; }
         screenshotCanvas = new Canvas { Background = ThemeBrush("CanvasBrush"), LayoutTransform = screenshotScale };
         screenshotImage = new Image { Stretch = Stretch.None }; screenshotCanvas.Children.Add(screenshotImage);
         var cropColor = ((SolidColorBrush)ThemeBrush("DangerBrush")).Color;
         cropRectangle = new Rectangle { Stroke = ThemeBrush("DangerBrush"), StrokeThickness = 2, Fill = new SolidColorBrush(Color.FromArgb(35, cropColor.R, cropColor.G, cropColor.B)), Visibility = Visibility.Collapsed, IsHitTestVisible = false }; screenshotCanvas.Children.Add(cropRectangle);
         screenshotCanvas.MouseLeftButtonDown += ScreenshotDown; screenshotCanvas.MouseMove += ScreenshotMove; screenshotCanvas.MouseLeftButtonUp += ScreenshotUp;
-        screenshotScroll = new ScrollViewer { Content = screenshotCanvas, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new Thickness(0, 10, 0, 0) }; page.Children.Add(screenshotScroll);
-        return page;
+        screenshotScroll = new ScrollViewer { Content = screenshotCanvas, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }; grid.Children.Add(screenshotScroll);
+        var paneButtons = new Dictionary<string, ToggleButton>();
+        var selectedPane = "画面";
+        var narrow = false;
+        var updatingPanes = false;
+        foreach (var caption in new[] { "画面", "色值" })
+        {
+            panes.ColumnDefinitions.Add(new ColumnDefinition());
+            var button = new ToggleButton { MinWidth = 44, MinHeight = 44, Height = 44, Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(0, 0, caption == "色值" ? 0 : 4, 0), IsChecked = caption == selectedPane };
+            button.SetResourceReference(StyleProperty, "SegmentedToggle");
+            LocalizationService.Bind(button, ContentControl.ContentProperty, caption);
+            LocalizationService.Bind(button, System.Windows.Automation.AutomationProperties.NameProperty, caption);
+            LocalizationService.Bind(button, ToolTipProperty, caption);
+            button.Checked += (_, _) => { if (!updatingPanes) { selectedPane = caption; ArrangeScreenshot(); } };
+            button.Unchecked += (_, _) => { if (!updatingPanes && selectedPane == caption) ArrangeScreenshot(); };
+            Grid.SetColumn(button, paneButtons.Count); paneButtons.Add(caption, button); panes.Children.Add(button);
+        }
+        grid.SizeChanged += (_, _) => ArrangeScreenshot();
+        grid.Loaded += (_, _) => ArrangeScreenshot();
+        page.Children.Add(grid); return page;
+
+        void ArrangeScreenshot()
+        {
+            if (grid.ActualWidth <= 0) return;
+            var colorFocus = colors.IsKeyboardFocusWithin;
+            var imageFocus = screenshotScroll.IsKeyboardFocusWithin;
+            var paneFocus = panes.IsKeyboardFocusWithin;
+            var next = grid.ActualWidth < 640;
+            if (next != narrow)
+            {
+                if (next) { if (colorFocus) selectedPane = "色值"; else if (imageFocus) selectedPane = "画面"; }
+                narrow = next;
+                grid.ColumnDefinitions[1].Width = new GridLength(narrow ? 0 : 310);
+                Grid.SetColumn(colors, narrow ? 0 : 1);
+                colors.Margin = narrow ? new Thickness(0) : new Thickness(10, 0, 0, 0);
+            }
+            panes.Visibility = narrow ? Visibility.Visible : Visibility.Collapsed;
+            screenshotScroll.Visibility = !narrow || selectedPane == "画面" ? Visibility.Visible : Visibility.Collapsed;
+            colors.Visibility = !narrow || selectedPane == "色值" ? Visibility.Visible : Visibility.Collapsed;
+            updatingPanes = true;
+            try { foreach (var (caption, button) in paneButtons) button.IsChecked = caption == selectedPane; }
+            finally { updatingPanes = false; }
+            if (narrow && (colorFocus && selectedPane != "色值" || imageFocus && selectedPane != "画面")) paneButtons[selectedPane].Focus();
+            else if (!narrow && paneFocus) { if (selectedPane == "色值") colors.Focus(); else screenshotScroll.Focus(); }
+        }
     }
 
     private async Task SaveImageAsync(bool useCrop)
