@@ -112,23 +112,20 @@ public partial class MainWindow
     {
         var surface = new Border { Background = Brushes.White, BorderBrush = WorkspaceBrush("#E4E8F0"), BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(20, 10, 20, 10) };
         var row = new Grid(); surface.Child = row;
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(158) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         row.ColumnDefinitions.Add(new ColumnDefinition());
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var group = new ComboBox { ItemsSource = ViewModel.Groups, ItemTemplate = CaptionChoices(), ToolTip = "设备分组", Margin = new Thickness(0, 0, 12, 0), MinHeight = 38 };
-        group.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.GroupFilter))); row.Children.Add(group);
         var targetLabel = new TextBlock { Text = "单设备目标", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 10, 0), Foreground = WorkspaceBrush("#63718A") };
         singleTargetLabel = targetLabel;
-        Grid.SetColumn(targetLabel, 1); row.Children.Add(targetLabel);
+        row.Children.Add(targetLabel);
         var target = new ComboBox { Name = "SingleDeviceTarget", ItemsSource = new ListCollectionView(ViewModel.Devices), ItemTemplate = OperationTargetTemplate(), IsSynchronizedWithCurrentItem = false, MinHeight = 38, MaxWidth = 520, HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 0, 10, 0), ToolTip = "节点、截图、命令等单设备操作目标" };
         singleTargetChoice = target;
         target.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.CurrentDevice)));
-        System.Windows.Automation.AutomationProperties.SetName(target, "单设备目标"); Grid.SetColumn(target, 2); row.Children.Add(target);
-        var details = new Button { Content = ShellGlyph("\uE8A7"), ToolTip = "设备详情与分组", MinHeight = 38, Margin = new Thickness(0, 0, 5, 0) };
-        details.SetResourceReference(StyleProperty, "IconButton"); details.Click += (_, _) => ShowDeviceDirectory(); Grid.SetColumn(details, 3); row.Children.Add(details);
+        System.Windows.Automation.AutomationProperties.SetName(target, "单设备目标"); Grid.SetColumn(target, 1); row.Children.Add(target);
+        var details = new Button { Content = ShellGlyph("\uE8A7"), ToolTip = "设备详情", MinHeight = 38, Margin = new Thickness(0, 0, 5, 0) };
+        details.SetResourceReference(StyleProperty, "IconButton"); details.Click += (_, _) => ShowDeviceDirectory(); Grid.SetColumn(details, 2); row.Children.Add(details);
         var settings = new Button { Content = ShellGlyph("\uE713"), ToolTip = "环境设置", MinHeight = 38 };
-        settings.SetResourceReference(StyleProperty, "IconButton"); settings.Click += (_, _) => NavigateTo("设置"); Grid.SetColumn(settings, 4); row.Children.Add(settings);
+        settings.SetResourceReference(StyleProperty, "IconButton"); settings.Click += (_, _) => NavigateTo("设置"); Grid.SetColumn(settings, 3); row.Children.Add(settings);
         var advanced = new ContextMenu();
         var network = new MenuItem { Header = "网络连接（高级）" }; network.Click += (_, _) => ShowScanner(); advanced.Items.Add(network);
         var refresh = new MenuItem { Header = "立即更新目录" }; refresh.Click += async (_, _) => await UpdateDeviceDirectoryAsync(); advanced.Items.Add(refresh);
@@ -190,7 +187,7 @@ public partial class MainWindow
     {
         if (directoryWindow is null)
         {
-            directoryWindow = new Window { Owner = this, DataContext = ViewModel, Title = "设备与分组", Width = 420, Height = 640, MinWidth = 360, MinHeight = 480, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            directoryWindow = new Window { Owner = this, DataContext = ViewModel, Title = "设备详情", Width = 420, Height = 640, MinWidth = 360, MinHeight = 480, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             directoryWindow.Content = BuildDirectory();
             directoryWindow.Closing += (_, args) => { if (!closing) { args.Cancel = true; directoryWindow.Hide(); } };
         }

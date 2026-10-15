@@ -21,7 +21,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     private CancellationTokenSource? transferCancellation;
     private DeviceRow? currentDevice;
     private DeviceRow? mainDevice;
-    private string groupFilter = "全部分组";
     private string statusFilter = "全部状态";
     private bool busy;
     private bool externalBusy;
@@ -43,7 +42,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     private bool syncKeyboard;
     private int wallColumns;
     private string deviceName = "";
-    private string deviceGroup = "";
     private string settingsNotice = "";
 
     public WorkspaceViewModel(MatrixRuntime initialRuntime, string dataDirectory, bool demo)
@@ -91,7 +89,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     public string ModeLabel => LocalizationService.Current.Get(demo ? "演示设备 · 不连接真实 ADB" : "真实设备模式");
     public ObservableCollection<DeviceRow> Devices { get; } = [];
     public System.ComponentModel.ICollectionView DeviceView { get; }
-    public ObservableCollection<string> Groups { get; } = ["全部分组", "未分组"];
     public ObservableCollection<NodeRow> Nodes { get; } = [];
     public ObservableCollection<ShellEntry> ShellHistory { get; } = [];
     public ObservableCollection<PixelSample> Colors { get; } = [];
@@ -136,7 +133,6 @@ public sealed class WorkspaceViewModel : ObservableObject
         {
             if (!Set(ref currentDevice, value)) return;
             DeviceName = value?.Name ?? "";
-            DeviceGroup = value?.Info.GroupId ?? "";
             DebugImage = value?.Screenshot;
             ClearNodes();
             Apps.Clear();
@@ -150,7 +146,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     public DeviceRow? MainDevice { get => mainDevice; private set { Set(ref mainDevice, value); Changed(nameof(MainContext)); WallChanged?.Invoke(); } }
     public string DeviceContext => CurrentDevice is { } row ? $"{row.Name} · {row.Serial} · {LocalizationService.Current.Get(row.State)}" : LocalizationService.Current.Get("未选择设备");
     public string MainContext => MainDevice is { } row ? $"{LocalizationService.Current.Get("主控")}: {row.Name} · {row.Serial}" : $"{LocalizationService.Current.Get("主控")}: {LocalizationService.Current.Get("未指定")}";
-    public string GroupFilter { get => groupFilter; set { Set(ref groupFilter, value); RefreshFilter(); } }
     public string StatusFilter { get => statusFilter; set { Set(ref statusFilter, value); RefreshFilter(); } }
     public bool Busy { get => busy || externalBusy; private set { Set(ref busy, value); SyncApiWriteGuard(); RefreshCommands(); } }
     internal void SetExternalBusy(bool value) { externalBusy = value; Changed(nameof(Busy)); SyncApiWriteGuard(); RefreshCommands(); }
@@ -174,7 +169,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     public bool SyncKeyboard { get => syncKeyboard; set => Set(ref syncKeyboard, value); }
     public int WallColumns { get => wallColumns; set { Set(ref wallColumns, Math.Clamp(value, 5, 20)); WallChanged?.Invoke(); } }
     public string DeviceName { get => deviceName; set => Set(ref deviceName, value); }
-    public string DeviceGroup { get => deviceGroup; set => Set(ref deviceGroup, value); }
     public string SettingsNotice { get => settingsNotice; private set => Set(ref settingsNotice, value); }
     public string ApiSummary => $"普通接口：{(runtime.Api.RunningBasicPort is { } basic ? $"http://127.0.0.1:{basic}" : "未启动")}    自动化接口：{(runtime.Api.RunningAutomatorPort is { } automator ? $"http://127.0.0.1:{automator}" : "未启动")}";
     public bool CanUseDevice() => !Busy && CurrentDevice?.Info.Online == true;
@@ -198,7 +192,7 @@ public sealed class WorkspaceViewModel : ObservableObject
     private ActionCommand Action(Action action, Func<bool> canExecute) { var command = new ActionCommand(action, canExecute); commands.Add(command); return command; }
     private void RefreshCommands() { foreach (var command in commands) { if (command is AsyncCommand asyncCommand) asyncCommand.Refresh(); else if (command is ActionCommand actionCommand) actionCommand.Refresh(); } Changed(nameof(TargetContext)); }
     private bool ScriptBusy(string serial) => runtime.Scripts.GetStatus(serial).State.ToString() is "Running" or "Cancelling";
-    private bool Matches(DeviceRow row) => (GroupFilter == "全部分组" || row.Group == GroupFilter) && (StatusFilter == "全部状态" || row.Info.State == StatusFilter);
+    private bool Matches(DeviceRow row) => StatusFilter == "全部状态" || row.Info.State == StatusFilter;
     private void RefreshFilter() { DeviceView.Refresh(); Changed(nameof(Counts)); WallChanged?.Invoke(); }
     public void SelectFiltered(bool selected) { foreach (var row in DeviceView.Cast<DeviceRow>()) row.IsSelected = selected; UpdateSelection(); }
     public void UpdateSelection() { Changed(nameof(Counts)); RefreshCommands(); }
@@ -249,9 +243,6 @@ public sealed class WorkspaceViewModel : ObservableObject
             else row.Info = info;
         }
         foreach (var row in Devices.Where(row => !rows.Any(info => info.Serial == row.Serial)).ToList()) Devices.Remove(row);
-        Groups.Clear(); Groups.Add("全部分组"); Groups.Add("未分组");
-        foreach (var group in Devices.Select(row => row.Group).Distinct().Where(group => group != "未分组").Order()) Groups.Add(group);
-        if (!Groups.Contains(GroupFilter)) GroupFilter = "全部分组";
         if (CurrentDevice is not null && !Devices.Contains(CurrentDevice)) CurrentDevice = null;
         if (MainDevice is not null && !Devices.Contains(MainDevice)) { await runtime.Input.HandoffAsync(null); MainDevice = null; }
         RefreshApiRows();
@@ -313,9 +304,8 @@ public sealed class WorkspaceViewModel : ObservableObject
     public Task SaveMetadataAsync() => ExecuteAsync("保存设备信息", async () =>
     {
         var row = CurrentDevice ?? throw new InvalidOperationException("未选择设备");
-        runtime.Metadata.UpsertMetadata(row.Serial, DeviceName.Trim(), DeviceGroup.Trim());
-        row.Info = row.Info with { Name = DeviceName.Trim(), GroupId = DeviceGroup.Trim() };
-        if (!string.IsNullOrWhiteSpace(DeviceGroup) && !Groups.Contains(DeviceGroup.Trim())) Groups.Add(DeviceGroup.Trim());
+        runtime.Metadata.UpsertMetadata(row.Serial, DeviceName.Trim(), row.Info.GroupId);
+        row.Info = row.Info with { Name = DeviceName.Trim() };
         RefreshFilter();
         Changed(nameof(DeviceContext));
         await Task.CompletedTask;

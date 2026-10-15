@@ -4723,8 +4723,6 @@ public partial class MainWindow : Window
     private bool closeApproved;
     private bool captureInProgress;
     private Task? captureOperation;
-    private int captureCursor;
-    private bool autoCapture = true;
     private bool debugAutoLoading;
     private bool debugAutoPending;
     public WorkspaceViewModel ViewModel { get; }
@@ -4883,11 +4881,10 @@ public partial class MainWindow : Window
 
     private async Task CaptureTickAsync()
     {
-        if (!autoCapture || captureInProgress || closing || ldBusy || ViewModel.HasActiveOperations || directoryOperation is { IsCompleted: false } || !Equals((tabs.SelectedItem as TabItem)?.Tag, "设备墙 / 主控") || !IsActive) return;
-        var rows = ViewModel.DeviceView.Cast<DeviceRow>().Where(row => row.Info.Online).ToArray();
-        if (rows.Length == 0) return;
-        var targets = rows.Skip(captureCursor % rows.Length).Concat(rows.Take(captureCursor % rows.Length)).Take(4).Select(row => row.Serial).ToArray();
-        captureCursor += targets.Length;
+        if (captureInProgress || closing || ldBusy || ViewModel.HasActiveOperations || directoryOperation is { IsCompleted: false }
+            || !Equals((tabs.SelectedItem as TabItem)?.Tag, "设备墙 / 主控") || !IsActive
+            || wallMainPanel.Visibility != Visibility.Visible || ViewModel.MainDevice is not { Info.Online: true } main) return;
+        var targets = new[] { main.Serial };
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(directoryCancellation.Token); deadline.CancelAfter(TimeSpan.FromSeconds(20));
         captureInProgress = true;
         try { captureOperation = ViewModel.RefreshAutomaticScreensAsync(targets, deadline.Token); await captureOperation; }
@@ -4958,6 +4955,7 @@ public partial class MainWindow : Window
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("启动验收仅允许显式演示模式");
         if (tabs.SelectedIndex != 0 || wallViewMode != "list") throw new InvalidOperationException("初始页面必须是统一设备列表。");
+        await VerifyListConsoleSimplificationAsync();
         if (screenshotPath is not null)
         {
             if (!System.IO.Path.IsPathFullyQualified(screenshotPath)) throw new InvalidOperationException("截图输出必须为绝对路径");
@@ -5034,11 +5032,12 @@ public partial class MainWindow : Window
         NavigateTo("设备墙 / 主控");
         var removedLabels = new[] { "刷新设备", "扫描设备", "刷新截图" };
         if (VisualDescendants<TextBlock>(Shell).Any(text => removedLabels.Contains(text.Text))) throw new InvalidOperationException("旧重复刷新入口仍可见");
-        SelectUnifiedInstance(unifiedDevices.Single(row => row.Index == ldRows.Single(item => !item.Instance.AndroidStarted).Index));
+        ClearWallSelection();
+        unifiedDevices.Single(row => row.Index == ldRows.Single(item => !item.Instance.AndroidStarted).Index).IsSelected = true;
         var runningOnly = new[] { "关闭实例", "重启实例" };
-        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || !ldCommandsByLabel["资源配置"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的生命周期操作状态不正确");
-        SelectUnifiedInstance(unifiedDevices.Single(row => row.Index == ldRows.Single(item => item.Instance.AndroidStarted).Index));
-        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || ldCommandsByLabel["资源配置"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的连接入口或生命周期操作状态不正确");
+        if (!ldCommandsByLabel["资源配置"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的生命周期操作状态不正确");
+        await ExecuteLdPlayerAsync("launch");
+        if (ldCommandsByLabel["资源配置"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的生命周期操作状态不正确");
         ldBusy = true; ldFeedback.Text = "正在执行所选实例命令…"; RefreshLdButtons();
         if (ldCommands.Any(command => command.CanExecute(null)) || !ldFeedback.Text.Contains("正在执行", StringComparison.Ordinal)) throw new InvalidOperationException("雷电忙状态未锁定操作");
         ldBusy = false; RefreshLdButtons();
@@ -5053,8 +5052,12 @@ public partial class MainWindow : Window
         finally { ViewModel.Confirm = originalConfirm; }
         if (confirmationCount != 2 || ldSelection.Generation != beforeConfirmation || !ldSelection.Instance.AndroidStarted || ldFeedback.Text != "操作已取消，未发送命令。") throw new InvalidOperationException("雷电关闭或重启的取消确认未生效");
         UpdateLdPlayerRows();
-        if (instanceActionChoice.SelectedItem is not UnifiedDeviceRow selectedInstance || selectedInstance.Index != ldSelection.Index || selectedInstance.Instance?.Generation != ldSelection.Generation)
-            throw new InvalidOperationException("实例操作下拉与真实命令目标不一致");
+        var selectedInstance = unifiedDevices.Single(row => row.IsSelected);
+        if (selectedInstance.Index != ldSelection.Index || selectedInstance.Instance?.Generation != ldSelection.Generation)
+            throw new InvalidOperationException("目录勾选与真实命令目标不一致");
+        ViewModel.Confirm = (_, _) => true;
+        try { await ExecuteLdPlayerAsync("quit"); }
+        finally { ViewModel.Confirm = originalConfirm; }
         await VerifyUnifiedDeviceActionsAsync(screenshotPath);
         var currentBeforeNavigation = ViewModel.CurrentDevice;
         var mainBeforeNavigation = ViewModel.MainDevice;
@@ -5076,70 +5079,67 @@ public partial class MainWindow : Window
         NavigateTo("设备墙 / 主控");
         if (sidebarColumn.Width.Value != 72 || sidebarCaptions.Any(caption => caption.Visibility != Visibility.Collapsed)) throw new InvalidOperationException("侧栏折叠未生效");
         SetSidebarCollapsed(false);
+        ClearWallSelection();
         foreach (var rowToSelect in ViewModel.Devices) rowToSelect.IsSelected = true;
         ViewModel.UpdateSelection();
         var filteredDevice = ViewModel.Devices[1];
-        var originalFilteredInfo = filteredDevice.Info;
-        const string testGroup = "离线筛选测试";
-        const string emptyGroup = "离线空目录测试";
-        ViewModel.Groups.Add(testGroup); ViewModel.Groups.Add(emptyGroup);
-        filteredDevice.Info = originalFilteredInfo with { GroupId = testGroup };
-        foreach (var mode in new[] { "cards", "screens", "list" })
+        var originalDeviceInfos = ViewModel.Devices.ToDictionary(device => device, device => device.Info);
+        var previousStatus = ViewModel.StatusFilter;
+        try
         {
-            ViewModel.GroupFilter = "全部分组";
-            SetWallViewMode(mode);
-            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-            foreach (var group in new[] { testGroup, emptyGroup, "全部分组" })
+            filteredDevice.Info = filteredDevice.Info with { State = "Offline" };
+            foreach (var status in new[] { "Ready", "Offline", "全部状态" })
             {
-                ViewModel.GroupFilter = group;
+                ViewModel.StatusFilter = status;
                 await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-                if (!ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation) || ViewModel.Targets().Count != 2)
-                    throw new InvalidOperationException($"激活视图筛选改变了上下文：视图={mode}，分组={group}，目标={ViewModel.Targets().Count}");
+                if (!ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation) || ViewModel.Devices.Count(device => device.IsSelected) != 2)
+                    throw new InvalidOperationException($"状态筛选改变了上下文：状态={status}，勾选={ViewModel.Devices.Count(device => device.IsSelected)}");
             }
-        }
-        SetWallViewMode("cards");
-        ViewModel.GroupFilter = testGroup;
-        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-        if (ViewModel.DeviceView.Cast<DeviceRow>().Count() != 1 || ViewModel.Targets().Count != 2 || !ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation))
-            throw new InvalidOperationException($"筛选改变了上下文：可见={ViewModel.DeviceView.Cast<DeviceRow>().Count()}，目标={ViewModel.Targets().Count}，当前={ViewModel.CurrentDevice?.Serial ?? "未选择"}，主控={ViewModel.MainDevice?.Serial ?? "未指定"}");
-        ClearWallSelection();
-        if (ViewModel.Devices.Any(device => device.IsSelected)) throw new InvalidOperationException("清空没有取消隐藏设备的选择");
-        ViewModel.GroupFilter = emptyGroup;
-        SetWallViewMode("cards");
-        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-        if (ViewModel.DeviceView.Cast<DeviceRow>().Any()) throw new InvalidOperationException("空目录筛选失效");
-        if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-empty.png"));
-        ViewModel.GroupFilter = "全部分组";
-        if (ViewModel.DebugImage is not { PixelWidth: > 0 }) throw new InvalidOperationException("视图筛选丢失了当前截图");
-        foreach (var mode in new[] { "cards", "screens", "list" })
-        {
-            wallViewChoices[mode].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            ViewModel.StatusFilter = "Offline";
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-            if (WallViewMode != mode || wallViewChoices.Count(choice => choice.Value.IsChecked == true) != 1 || !ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation))
-                throw new InvalidOperationException("设备视图切换丢失上下文：" + mode);
-            if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-" + mode + ".png"));
+            if (ViewModel.DeviceView.Cast<DeviceRow>().Count() != 1 || ViewModel.Devices.Count(device => device.IsSelected) != 2)
+                throw new InvalidOperationException("状态筛选没有形成唯一可见设备或改变了群控勾选。");
+            var selectAll = VisualDescendants<CheckBox>(Shell).Single(input => input.Name == "SelectAllDevices");
+            selectAll.IsChecked = false; selectAll.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            if (ViewModel.Devices.Any(device => device.IsSelected) || unifiedDevices.Any(device => device.IsSelected))
+                throw new InvalidOperationException("取消表头全选没有清除隐藏设备的选择。");
+            foreach (var device in ViewModel.Devices) device.Info = device.Info with { State = "Ready" };
+            ViewModel.StatusFilter = "Offline";
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (ViewModel.DeviceView.Cast<DeviceRow>().Any() || !unifiedDeviceView.IsEmpty) throw new InvalidOperationException("空目录状态筛选失效。");
+            if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-empty.png"));
         }
-        SetWallViewMode("screens");
+        finally
+        {
+            foreach (var pair in originalDeviceInfos) pair.Key.Info = pair.Value;
+            ViewModel.StatusFilter = previousStatus;
+        }
+        if (ViewModel.DebugImage is not { PixelWidth: > 0 }) throw new InvalidOperationException("状态筛选丢失了当前截图。");
+        SetWallViewMode("list");
+        foreach (var unsupported in new[] { "cards", "screens" })
+        {
+            try { SetWallViewMode(unsupported); throw new InvalidOperationException("已移除的设备视图仍被接受：" + unsupported); }
+            catch (ArgumentException) { }
+        }
+        if (WallViewMode != "list") throw new InvalidOperationException("设备管理未保持唯一列表模式。");
+        await OpenMainControlAsync(mainBeforeNavigation!);
         var expandedControls = VisualDescendants<Expander>(wallMainPanel).Single(); expandedControls.IsExpanded = true;
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (wallMainPanel is ScrollViewer mainScroll) mainScroll.ScrollToEnd();
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-expanded.png"));
         expandedControls.IsExpanded = false;
-        SetWallViewMode("cards");
-        var groupChoice = VisualDescendants<ComboBox>(Shell).First(input => BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == nameof(WorkspaceViewModel.GroupFilter));
-        groupChoice.IsDropDownOpen = true;
-        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-        if (groupChoice.Template.FindName("PART_Popup", groupChoice) is not Popup { IsOpen: true }) throw new InvalidOperationException("分组下拉模板未打开");
-        groupChoice.SelectedItem = "未分组";
-        if (ViewModel.GroupFilter != "未分组") throw new InvalidOperationException("分组下拉绑定失效");
-        groupChoice.IsDropDownOpen = false; groupChoice.SelectedItem = "全部分组";
+        CloseMainControl();
         ShowDeviceDirectory();
-        ViewModel.GroupFilter = testGroup;
+        var statusChoice = VisualDescendants<ComboBox>(directoryWindow!).Single(input => BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == nameof(WorkspaceViewModel.StatusFilter));
+        statusChoice.IsDropDownOpen = true;
+        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+        if (statusChoice.Template.FindName("PART_Popup", statusChoice) is not Popup { IsOpen: true }) throw new InvalidOperationException("状态筛选下拉模板未打开。");
+        statusChoice.SelectedItem = "Offline";
+        if (ViewModel.StatusFilter != "Offline") throw new InvalidOperationException("状态筛选下拉绑定失效。");
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (!ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation)) throw new InvalidOperationException("设备目录筛选改变了当前设备或主控");
-        ViewModel.GroupFilter = "全部分组"; directoryWindow!.Hide();
-        filteredDevice.Info = originalFilteredInfo; ViewModel.Groups.Remove(testGroup); ViewModel.Groups.Remove(emptyGroup);
+        statusChoice.IsDropDownOpen = false; statusChoice.SelectedItem = previousStatus; directoryWindow!.Hide();
         ShowScanner();
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-scanner.png"), (FrameworkElement)scannerWindow!.Content);
@@ -5198,23 +5198,26 @@ public partial class MainWindow : Window
         await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
         await Dispatcher.InvokeAsync(() => { UpdateLayout(); }, System.Windows.Threading.DispatcherPriority.Render);
         var tiles = VisualDescendants<UnifiedDeviceTile>(Shell).Where(tile => tile.IsVisible).ToArray();
-        if (screenshotPath is not null) await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".tiles.json"), JsonSerializer.Serialize(tiles.Select(tile => new { tile.Mode, owner = tile.Owner is not null, context = tile.DataContext?.GetType().Name, child = tile.Child?.GetType().Name, tile.ActualWidth, tile.ActualHeight }), JsonDefaults.Options));
-        if (wallViewMode != "list" && !unifiedDeviceView.IsEmpty && tiles.Length == 0) throw new InvalidOperationException("非空统一目录没有生成可见卡片。");
+        if (screenshotPath is not null) await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".rows.json"), JsonSerializer.Serialize(tiles.Select(tile => new { view = "list", owner = tile.Owner is not null, context = tile.DataContext?.GetType().Name, child = tile.Child?.GetType().Name, tile.ActualWidth, tile.ActualHeight }), JsonDefaults.Options));
+        if (!unifiedDeviceView.IsEmpty && tiles.Length == 0) throw new InvalidOperationException("非空统一目录没有生成可见列表操作行。");
         if (tiles.Any(tile => tile.Child is null || tile.ActualHeight < 1)) throw new InvalidOperationException("统一设备视图出现空白条目。");
         if (screenshotPath is not null) SaveRender(screenshotPath);
         var path = System.IO.Path.Combine(ViewModel.DataDirectory, "desktop-smoke.json");
         if (!string.IsNullOrWhiteSpace(ViewModel.Error)) throw new InvalidOperationException("桌面验收产生错误：" + ViewModel.Error);
-        var report = JsonSerializer.Serialize(new { width = ActualWidth, height = ActualHeight, deviceCount = ViewModel.Devices.Count, ldPlayerInstances = ldRows.Count, ldStateButtonsVerified = true, ldBusyVerified = true, ldConfirmationCancellationVerified = confirmationCount == 2, navigationVerified = true, navigationStatePreserved = true, sidebarCollapseVerified = true, wallModesVerified = true, filteredContextPreserved = true, clearHiddenSelectionVerified = true, emptyStateVerified = true, groupDropdownVerified = true, directoryFilterContextPreserved = true, nodes = ViewModel.FlattenNodes().Count(), selectedNode = ViewModel.SelectedNode?.Id, apps = ViewModel.Apps.Count, colors = ViewModel.Colors.Count, shell = ViewModel.ShellHistory.Count, script = LocalizationService.Current.Get(ViewModel.Runtime.Scripts.GetStatus(ViewModel.CurrentDevice!.Serial).State.ToString()), tabs = tabs.Items.Count, language = "zh-CN", chineseInterfaceVerified = true, unavailableControlsDisabled = true, error = ViewModel.Error }, JsonDefaults.Options);
+        var report = JsonSerializer.Serialize(new { width = ActualWidth, height = ActualHeight, deviceCount = ViewModel.Devices.Count, ldPlayerInstances = ldRows.Count, ldStateButtonsVerified = true, ldBusyVerified = true, ldConfirmationCancellationVerified = confirmationCount == 2, navigationVerified = true, navigationStatePreserved = true, sidebarCollapseVerified = true, listOnlyVerified = WallViewMode == "list", groupControlsRemoved = true, selectionTargetUnified = true, filteredContextPreserved = true, clearHiddenSelectionVerified = true, emptyStateVerified = true, statusDropdownVerified = true, directoryFilterContextPreserved = true, nodes = ViewModel.FlattenNodes().Count(), selectedNode = ViewModel.SelectedNode?.Id, apps = ViewModel.Apps.Count, colors = ViewModel.Colors.Count, shell = ViewModel.ShellHistory.Count, script = LocalizationService.Current.Get(ViewModel.Runtime.Scripts.GetStatus(ViewModel.CurrentDevice!.Serial).State.ToString()), tabs = tabs.Items.Count, language = "zh-CN", chineseInterfaceVerified = true, unavailableControlsDisabled = true, error = ViewModel.Error }, JsonDefaults.Options);
         await File.WriteAllTextAsync(path, report);
         if (screenshotPath is not null) await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".json"), report);
     }
 
     private void SaveRender(string path)
     {
-        var group = VisualDescendants<ComboBox>(Shell).Single(input => input.ToolTip as string == "设备分组");
-        var position = group.TranslatePoint(new Point(), Shell);
-        if (position.Y < 0 || position.Y + group.ActualHeight > Shell.ActualHeight)
-            throw new InvalidOperationException("截图前全局分组工具栏超出客户区。");
+        foreach (var label in new[] { "环境设置", "设备详情" })
+        {
+            var control = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == label);
+            var position = control.TranslatePoint(new Point(), Shell);
+            if (position.X < 0 || position.Y < 0 || position.X + control.ActualWidth > Shell.ActualWidth + 1 || position.Y + control.ActualHeight > Shell.ActualHeight + 1)
+                throw new InvalidOperationException("截图前全局工具栏超出客户区：" + label);
+        }
         SaveRender(path, Shell);
     }
     private static void SaveRender(string path, FrameworkElement surface)
@@ -6397,7 +6400,6 @@ public sealed class UnifiedDeviceRow : ObservableObject
     public string Serial => Device?.Serial ?? "-";
     public string Resolution => Device?.Resolution ?? (Instance?.Width is { } width && Instance.Height is { } height ? $"{width} × {height}" : "-");
     public string Group => Device?.Group ?? "未分组";
-    public string ActionCaption => Instance is null ? $"{Name} · {Serial}" : $"实例 {Number} · {Name}";
     public string AndroidState => Instance is null ? "-" : Instance.AndroidStarted ? "已启动" : "未启动";
     public string ProcessId => Instance?.ProcessId is > 0 ? Instance.ProcessId.ToString() : "-";
     public string VBoxProcessId => Instance?.VBoxProcessId is > 0 ? Instance.VBoxProcessId.ToString() : "-";
@@ -6602,9 +6604,9 @@ public partial class MainWindow
         await Task.Delay(60);
         await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         if (applicationPage.ActualWidth <= 0 || applicationTargetPanel.ActualWidth < 180) throw new InvalidOperationException("应用管理布局为空或目标栏被挤压。");
-        var groupChoice = VisualDescendants<ComboBox>(Shell).Single(input => input.ToolTip as string == "设备分组");
-        var groupTop = groupChoice.TranslatePoint(new Point(), Shell).Y;
-        if (groupTop < 0 || groupTop + groupChoice.ActualHeight > Shell.ActualHeight) throw new InvalidOperationException("应用页全局工具栏超出客户区。");
+        var settings = VisualDescendants<Button>(Shell).Single(input => input.ToolTip as string == "环境设置");
+        var settingsTop = settings.TranslatePoint(new Point(), Shell).Y;
+        if (settingsTop < 0 || settingsTop + settings.ActualHeight > Shell.ActualHeight) throw new InvalidOperationException("应用页全局工具栏超出客户区。");
         if (screenshotPath is not null) SaveRender(Path.Combine(Path.GetDirectoryName(screenshotPath)!, "applications-management.png"));
         foreach (var target in applicationTargets) target.IsSelected = false;
         applicationReadTimer?.Stop(); applicationReadPending = false;
@@ -7044,7 +7046,6 @@ public partial class MainWindow
         var panel = new DockPanel { Margin = new Thickness(12, 0, 8, 0) };
         var filters = new StackPanel(); DockPanel.SetDock(filters, Dock.Top);
         filters.Children.Add(Label("设备目录"));
-        var group = new ComboBox { ItemsSource = ViewModel.Groups, ItemTemplate = CaptionChoices() }; group.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.GroupFilter))); group.Margin = new Thickness(0, 0, 0, 7); filters.Children.Add(group);
         var state = new ComboBox { ItemsSource = new[] { "全部状态", "Ready", "Offline", "Unauthorized", "Discovered", "Error" }, ItemTemplate = CaptionChoices() }; state.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.StatusFilter))); state.Margin = new Thickness(0, 0, 0, 7); filters.Children.Add(state);
         var selection = Toolbar(); selection.Children.Add(Button("\uE73A", "全选筛选", () => ViewModel.SelectFiltered(true))); selection.Children.Add(Button("\uE711", "清空", ClearWallSelection)); filters.Children.Add(selection);
         panel.Children.Add(filters);
@@ -7059,7 +7060,6 @@ public partial class MainWindow
             status.FontSize = 11; status.Margin = new Thickness(0, 2, 0, 0); edit.Children.Add(status);
         }
         edit.Children.Add(Field("名称", BoundInput(nameof(WorkspaceViewModel.DeviceName)), 50));
-        edit.Children.Add(Field("分组", BoundInput(nameof(WorkspaceViewModel.DeviceGroup)), 50));
         edit.Children.Add(Button("\uE74E", "保存信息", ViewModel.SaveMetadataCommand));
         panel.Children.Add(edit);
 
@@ -7234,7 +7234,6 @@ using System.Collections.ObjectModel;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
 using MatrixDevice.Core;
 
 namespace MatrixDevice.Desktop;
@@ -7247,34 +7246,41 @@ public partial class MainWindow
     private LdInstanceRow? ldSelection;
     private bool ldBusy;
     private TextBlock ldFeedback = null!;
-    private ComboBox instanceActionChoice = null!;
-    private UnifiedDeviceRow? instanceActionRow;
 
     private FrameworkElement BuildInstanceActions()
     {
-        var page = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
         var toolbar = Toolbar();
-        instanceActionChoice = new ComboBox { ItemsSource = new ListCollectionView(unifiedDevices), DisplayMemberPath = nameof(UnifiedDeviceRow.ActionCaption),
-            IsSynchronizedWithCurrentItem = false, Width = 230, MinHeight = 34, Margin = new Thickness(0, 0, 8, 6), ToolTip = "实例操作目标" };
-        instanceActionChoice.SelectionChanged += (_, _) => SelectUnifiedInstance(instanceActionChoice.SelectedItem as UnifiedDeviceRow);
-        toolbar.Children.Add(instanceActionChoice);
-        toolbar.Children.Add(LdButton("\uE768", "启动并连接", () => ConnectLdInstancesAsync([ldSelection!.Index])));
-        toolbar.Children.Add(LdButton("\uE8D4", "接入已运行实例", ConnectRunningLdInstancesAsync, requireSelection: false));
         toolbar.Children.Add(LdButton("\uE710", "新建空白实例", () => EditLdInstanceAsync(true), requireSelection: false));
-        toolbar.Children.Add(LdButton("\uE713", "资源配置", () => EditLdInstanceAsync(false), requireStopped: true));
-        toolbar.Children.Add(LdButton("\uE71A", "关闭实例", () => ExecuteLdPlayerAsync("quit"), requireProcess: true));
-        toolbar.Children.Add(LdButton("\uE777", "重启实例", () => ExecuteLdPlayerAsync("reboot"), requireProcess: true));
-        page.Children.Add(toolbar);
+        var menu = new ContextMenu();
+        AddMenu("\uE713", "资源配置", () => EditLdInstanceAsync(false), requireStopped: true);
+        AddMenu("\uE71A", "关闭实例", () => ExecuteLdPlayerAsync("quit"), requireProcess: true);
+        AddMenu("\uE777", "重启实例", () => ExecuteLdPlayerAsync("reboot"), requireProcess: true);
+        menu.Items.Add(new Separator());
+        var show = new AsyncCommand(async () =>
+        {
+            foreach (var row in unifiedDevices.Where(row => row.IsSelected).ToArray()) await ShowUnifiedWindowAsync(row);
+        }, () => !ldBusy && !ViewModel.Busy && unifiedDevices.Any(row => row.IsSelected && row.Index is { } index && ldWindowVisibility?.IsHidden(index) == true));
+        launchCommands.Add(show);
+        menu.Items.Add(new MenuItem { Header = "恢复旧版隐藏窗口", Icon = WallGlyph("\uE8A7"), Command = show });
+        var more = WallButton("\uE712", "更多操作", new ActionCommand(() => { }));
+        more.ContextMenu = menu; menu.PlacementTarget = more; menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        more.Click += (_, _) => menu.IsOpen = true;
+        toolbar.Children.Add(more);
         UpdateLdPlayerRows();
         ViewModel.PropertyChanged += (_, _) => RefreshLdButtons();
-        return page;
+        return toolbar;
+
+        void AddMenu(string glyph, string label, Func<Task> action, bool requireStopped = false, bool requireProcess = false)
+        {
+            var button = LdButton(glyph, label, action, requireStopped: requireStopped, requireProcess: requireProcess);
+            menu.Items.Add(new MenuItem { Header = label, Icon = WallGlyph(glyph), Command = button.Command, ToolTip = label + "：仅操作列表中唯一勾选的实例" });
+        }
     }
 
     private void SelectUnifiedInstance(UnifiedDeviceRow? row)
     {
-        if (row is not null && !unifiedDevices.Contains(row)) row = null;
-        instanceActionRow = row;
-        if (instanceActionChoice is not null && !ReferenceEquals(instanceActionChoice.SelectedItem, row)) instanceActionChoice.SelectedItem = row;
+        var selected = unifiedDevices.Where(item => item.IsSelected).ToArray();
+        if (selected.Length != 1 || !ReferenceEquals(row, selected[0])) row = null;
         var instance = row?.Index is { } index ? ViewModel.Runtime.LdPlayer?.Instances.FirstOrDefault(item => item.Index == index) : null;
         ldSelection = instance is null ? null : new LdInstanceRow(instance, row!.Binding, row.State);
         RefreshLdButtons();
@@ -7306,7 +7312,8 @@ public partial class MainWindow
             var binding = ViewModel.Runtime.Settings.LdSerialBindings.TryGetValue(instance.Index, out var serial) ? serial + "（配置绑定，尚未核验）" : "尚未绑定";
             ldRows.Add(new LdInstanceRow(instance, binding, InstanceConnectionState(instance)));
         }
-        SelectUnifiedInstance(instanceActionRow);
+        var selected = unifiedDevices.Where(row => row.IsSelected).Take(2).ToArray();
+        SelectUnifiedInstance(selected.Length == 1 ? selected[0] : null);
         if (ViewModel.Runtime.LdPlayerError is { } error) ldFeedback.Text = "雷电实例发现失败：" + ViewModel.PresentError(new InvalidOperationException(error));
         else if (string.IsNullOrWhiteSpace(ldFeedback.Text)) ldFeedback.Text = ViewModel.Demo ? "演示模式" : "";
         RefreshLdButtons();
@@ -7647,8 +7654,9 @@ public partial class MainWindow
                 SaveRender(Path.Combine(output, $"page-{tabs.SelectedIndex:D2}.png"));
             }
             NavigateTo("设备墙 / 主控");
-            foreach (var mode in new[] { "cards", "screens", "list" }) { SetWallViewMode(mode); await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render); SaveRender(Path.Combine(output, "wall-" + mode + ".png")); }
-            SetWallViewMode("cards");
+            SetWallViewMode("list"); await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+            if (WallViewMode != "list") throw new InvalidOperationException("设备管理不再保持唯一列表模式。");
+            SaveRender(Path.Combine(output, "wall-list.png"));
         });
         await File.WriteAllTextAsync(Path.Combine(output, "build-sha256.txt"), Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(MainWindow).Assembly.Location))));
     }
@@ -8144,7 +8152,7 @@ public partial class MainWindow
         monitorTimer.Tick += (_, _) => MonitorTick();
         ViewModel.PropertyChanged += (_, args) =>
         {
-            if (args.PropertyName is nameof(WorkspaceViewModel.GroupFilter) or nameof(WorkspaceViewModel.Counts)) { monitorEpoch++; monitorLastReconcile = default; }
+            if (args.PropertyName is nameof(WorkspaceViewModel.StatusFilter) or nameof(WorkspaceViewModel.Counts)) { monitorEpoch++; monitorLastReconcile = default; }
         };
         return page;
     }
@@ -9083,29 +9091,24 @@ public partial class MainWindow
                 throw new InvalidOperationException("应用页仍显示无关的单设备目标，可能与应用勾选对象混淆。");
             NavigateTo("节点");
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
-            var group = VisualDescendants<ComboBox>(Shell).Single(input => BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == nameof(WorkspaceViewModel.GroupFilter));
-            if (!ReferenceEquals(group.ItemsSource, ViewModel.Groups) || !group.IsVisible)
-                throw new InvalidOperationException("全局设备分组入口不可用。");
-            if (previousDevice is not null && ViewModel.Devices.FirstOrDefault(row => !ReferenceEquals(row, previousDevice)) is { } groupedDevice)
+            if (VisualDescendants<ComboBox>(Shell).Any(input => BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == "GroupFilter"))
+                throw new InvalidOperationException("全局设备分组入口仍然存在。");
+            if (previousDevice is not null && ViewModel.Devices.FirstOrDefault(row => !ReferenceEquals(row, previousDevice)) is { } filteredDevice)
             {
-                var previousInfo = groupedDevice.Info;
-                var previousFilter = ViewModel.GroupFilter;
+                var previousInfo = filteredDevice.Info;
                 var previousStatus = ViewModel.StatusFilter;
                 var main = ViewModel.MainDevice;
                 var selected = ViewModel.Devices.Select(row => row.IsSelected).ToArray();
-                const string hiddenTargetGroup = "离线单设备目标隔离";
-                ViewModel.Groups.Add(hiddenTargetGroup);
                 try
                 {
                     await ViewModel.LoadNodesAsync();
                     var nodes = ViewModel.Nodes.ToArray();
                     var image = ViewModel.DebugImage;
                     var parameters = ViewModel.Parameters.ToArray();
-                    groupedDevice.Info = previousInfo with { GroupId = hiddenTargetGroup };
-                    ViewModel.StatusFilter = "全部状态";
-                    ViewModel.GroupFilter = hiddenTargetGroup;
+                    filteredDevice.Info = previousInfo with { State = "Offline" };
+                    ViewModel.StatusFilter = "Offline";
                     await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
-                    if (ViewModel.DeviceView.Cast<DeviceRow>().Contains(previousDevice) || !ViewModel.DeviceView.Cast<DeviceRow>().Contains(groupedDevice))
+                    if (ViewModel.DeviceView.Cast<DeviceRow>().Contains(previousDevice) || !ViewModel.DeviceView.Cast<DeviceRow>().Contains(filteredDevice))
                         throw new InvalidOperationException("单设备目标隐藏反例没有形成。");
                     foreach (var tag in new[] { "应用", "节点" })
                     {
@@ -9115,32 +9118,54 @@ public partial class MainWindow
                             || !ReferenceEquals(ViewModel.CurrentDevice, previousDevice) || !ReferenceEquals(ViewModel.MainDevice, main)
                             || !selected.SequenceEqual(ViewModel.Devices.Select(row => row.IsSelected)) || !nodes.SequenceEqual(ViewModel.Nodes)
                             || !ReferenceEquals(ViewModel.DebugImage, image) || !parameters.SequenceEqual(ViewModel.Parameters))
-                            throw new InvalidOperationException("分组筛选改写了单设备目标、主控、勾选或节点参数上下文。");
+                            throw new InvalidOperationException("状态筛选改写了单设备目标、主控、勾选或节点参数上下文。");
                     }
                 }
                 finally
                 {
-                    groupedDevice.Info = previousInfo;
-                    ViewModel.GroupFilter = previousFilter; ViewModel.StatusFilter = previousStatus;
-                    ViewModel.Groups.Remove(hiddenTargetGroup);
+                    filteredDevice.Info = previousInfo;
+                    ViewModel.StatusFilter = previousStatus;
                 }
             }
-            if (!VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "环境设置") || !VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "设备详情与分组"))
+            if (!VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "环境设置") || !VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "设备详情"))
                 throw new InvalidOperationException("设置或设备属性入口缺失。");
 
             ShowDeviceDirectory();
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             directoryWindow!.UpdateLayout();
-            VerifyNoRemovedShellControls(directoryWindow, "设备与分组");
+            VerifyNoRemovedShellControls(directoryWindow, "设备详情");
             var directoryList = VisualDescendants<ListBox>(directoryWindow).Single(list => ReferenceEquals(list.ItemsSource, ViewModel.DeviceView));
             if (BindingOperations.GetBinding(directoryList, Selector.SelectedItemProperty)?.Path.Path != nameof(WorkspaceViewModel.CurrentDevice))
                 throw new InvalidOperationException("设备目录已丢失明确选择功能。");
             var inputs = VisualDescendants<TextBox>(directoryWindow).Select(input => BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path).ToHashSet();
-            if (!inputs.Contains(nameof(WorkspaceViewModel.DeviceName)) || !inputs.Contains(nameof(WorkspaceViewModel.DeviceGroup)))
-                throw new InvalidOperationException("设备属性编辑缺失。");
+            if (!inputs.Contains(nameof(WorkspaceViewModel.DeviceName)) || inputs.Contains("DeviceGroup"))
+                throw new InvalidOperationException("设备名称编辑缺失或仍保留分组输入。");
+            var status = VisualDescendants<ComboBox>(directoryWindow).Single(input => BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == nameof(WorkspaceViewModel.StatusFilter));
+            if (!status.IsVisible) throw new InvalidOperationException("设备详情缺少有效状态筛选。");
             var captions = VisualDescendants<TextBlock>(directoryWindow).Select(text => text.Text).ToArray();
             if (!captions.Any(caption => caption.StartsWith("画面", StringComparison.Ordinal)) || !captions.Any(caption => caption.StartsWith("节点", StringComparison.Ordinal)))
                 throw new InvalidOperationException("设备子系统状态缺失。");
+            if (ViewModel.CurrentDevice is { } metadataTarget)
+            {
+                var info = metadataTarget.Info;
+                var name = ViewModel.DeviceName;
+                var metadata = ViewModel.Runtime.Metadata.GetMetadata(metadataTarget.Serial);
+                const string retainedGroup = "  保留原分组验收  ";
+                try
+                {
+                    metadataTarget.Info = info with { GroupId = retainedGroup };
+                    ViewModel.DeviceName = "名称保存验收";
+                    await ViewModel.SaveMetadataAsync();
+                    var saved = ViewModel.Runtime.Metadata.GetMetadata(metadataTarget.Serial);
+                    if (metadataTarget.Info.GroupId != retainedGroup || saved.GroupId != retainedGroup || saved.Name != "名称保存验收")
+                        throw new InvalidOperationException("仅保存名称时修改或裁剪了既有分组数据。");
+                }
+                finally
+                {
+                    ViewModel.Runtime.Metadata.UpsertMetadata(metadataTarget.Serial, metadata.Name, metadata.GroupId);
+                    metadataTarget.Info = info; ViewModel.DeviceName = name;
+                }
+            }
         }
         finally
         {
@@ -9158,6 +9183,10 @@ public partial class MainWindow
             throw new InvalidOperationException($"页面 {page} 仍有搜索输入或提示。");
         if (VisualDescendants<TextBlock>(source).Any(text => text.Text.Contains("当前设备", StringComparison.Ordinal) || text.Text is "高级管理" or "全部设备" || BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path.Path == "DeviceContext"))
             throw new InvalidOperationException($"页面 {page} 仍有旧设备摘要或独立标签。");
+        if (VisualDescendants<ComboBox>(source).Any(input => BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == "GroupFilter"
+            || input.Items.Cast<object>().Any(item => item as string == "全部分组"))
+            || VisualDescendants<TextBox>(source).Any(input => BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path == "DeviceGroup"))
+            throw new InvalidOperationException($"页面 {page} 仍有已删除的分组控件。");
     }
 }
 
@@ -9260,24 +9289,38 @@ namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
+    private async Task VerifyListConsoleSimplificationAsync()
+    {
+        NavigateTo("设备墙 / 主控");
+        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+        if (VisualDescendants<ComboBox>(Shell).Any(input => input.Items.Cast<object>().Any(item => item as string == "全部分组")))
+            throw new InvalidOperationException("设备管理仍显示已删除的全部分组筛选。");
+        var obsolete = new[] { "设备卡片", "屏幕视图", "启动并连接", "接入已运行实例", "选择当前筛选中的全部设备" };
+        if (VisualDescendants<FrameworkElement>(Shell).Any(control => control.ToolTip is string tip && obsolete.Any(label => tip.StartsWith(label, StringComparison.Ordinal))))
+            throw new InvalidOperationException("设备管理仍显示重复视图、启动或全选入口。");
+        if (VisualDescendants<FrameworkElement>(Shell).Any(control => control.ToolTip as string is "同步鼠标" or "同步键盘" or "自动截图"))
+            throw new InvalidOperationException("设备列表仍显示脱离主控场景的同步或截图开关。");
+    }
+
     private async Task VerifyOneClickProjectionAsync()
     {
         NavigateTo("设备墙 / 主控");
-        foreach (var mode in new[] { "cards", "screens", "list" })
-        {
-            SetWallViewMode(mode);
-            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-            if (VisualDescendants<Expander>(Shell).Any(expander => expander.Header as string == "实例快捷操作")
-                || VisualDescendants<TextBlock>(Shell).Any(text => text.Text is "应用包名" or "输入文字"))
-                throw new InvalidOperationException("设备管理仍保留与应用管理/文本输入重复的实例快捷表单：" + mode);
-            if (VisualDescendants<TextBlock>(Shell).Any(text => text.Text == "后台启动") ||
-                VisualDescendants<FrameworkElement>(Shell).Any(control => control.ToolTip is string tip && tip.Contains("隐藏本次启动", StringComparison.Ordinal)))
-                throw new InvalidOperationException("已删除的后台启动入口仍存在：" + mode);
-            var expectedActions = new[] { "启动所选", "一键启动全部", "取消启动", "启动并连接", "接入已运行实例", "新建空白实例", "资源配置", "关闭实例", "重启实例" };
-            foreach (var label in expectedActions)
-                if (!VisualDescendants<Button>(Shell).Any(button => button.ToolTip is string tip && tip.StartsWith(label, StringComparison.Ordinal)))
-                    throw new InvalidOperationException("统一设备页遗漏有效操作：" + mode + " / " + label);
-        }
+        SetWallViewMode("list");
+        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+        if (VisualDescendants<Expander>(Shell).Any(expander => expander.Header as string == "实例快捷操作")
+            || VisualDescendants<TextBlock>(Shell).Any(text => text.Text is "应用包名" or "输入文字"))
+            throw new InvalidOperationException("设备管理仍保留与应用管理/文本输入重复的实例快捷表单。");
+        if (VisualDescendants<TextBlock>(Shell).Any(text => text.Text == "后台启动") ||
+            VisualDescendants<FrameworkElement>(Shell).Any(control => control.ToolTip is string tip && tip.Contains("隐藏本次启动", StringComparison.Ordinal)))
+            throw new InvalidOperationException("已删除的后台启动入口仍存在。");
+        var expectedActions = new[] { "启动所选", "一键启动全部", "新建空白实例" };
+        foreach (var label in expectedActions)
+            if (!VisualDescendants<Button>(Shell).Any(button => button.ToolTip is string tip && tip.StartsWith(label, StringComparison.Ordinal)))
+                throw new InvalidOperationException("统一设备页遗漏有效操作：" + label);
+        foreach (var label in new[] { "资源配置", "关闭实例", "重启实例" })
+            if (!ldCommandsByLabel.ContainsKey(label)) throw new InvalidOperationException("更多菜单遗漏生命周期命令：" + label);
+        var cancel = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == "取消启动");
+        if (cancel.Visibility != Visibility.Collapsed) throw new InvalidOperationException("没有启动任务时仍显示取消启动按钮。");
         NavigateTo("设备墙 / 主控"); UpdateUnifiedDirectory();
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         var originalDevices = ViewModel.Devices.Count;
@@ -9300,11 +9343,17 @@ public partial class MainWindow
             if (ViewModel.Transfers.Count != transfers) throw new InvalidOperationException("未连接选择导致其它设备被加入传输。");
             ViewModel.Devices[0].IsSelected = true;
             if (ViewModel.Targets().Count != 0 || ViewModel.CanWriteTargets()) throw new InvalidOperationException("混合选择静默遗漏未连接设备。");
-            var all = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == "选择当前筛选中的全部设备");
-            all.Command!.Execute(null);
+            var all = VisualDescendants<CheckBox>(Shell).Single(input => input.Name == "SelectAllDevices");
+            all.IsChecked = true; all.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             if (unifiedDevices.Any(row => row.CanSelect && !row.IsSelected) || ViewModel.Devices.Count != originalDevices) throw new InvalidOperationException("全选未涵盖关闭实例或伪造了可控设备。");
+            if (all.IsChecked != true || !all.IsThreeState) throw new InvalidOperationException("全选表头没有反映完整选择或三态语义。");
             UpdateUnifiedDirectory();
             if (unifiedDevices.Any(row => row.CanSelect && !row.IsSelected)) throw new InvalidOperationException("自动目录更新丢失选择。");
+            unifiedDevices.First(row => row.CanSelect).IsSelected = false;
+            if (all.IsChecked is not null) throw new InvalidOperationException("部分选择未显示表头中间态。");
+            all.IsChecked = false; all.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            if (unifiedDevices.Any(row => row.IsSelected) || ViewModel.Devices.Any(row => row.IsSelected) || all.IsChecked != false)
+                throw new InvalidOperationException("取消全选没有清除统一目录及设备选择。");
         }
         finally { foreach (var row in unifiedDevices.ToArray()) row.IsSelected = originalSelection.GetValueOrDefault(row.Key); }
         var originalConfirm = ViewModel.Confirm; var confirmations = 0;
@@ -9327,15 +9376,42 @@ public partial class MainWindow
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("入口归属验收仅限演示模式。");
         var previousTag = (tabs.SelectedItem as TabItem)?.Tag?.ToString() ?? "设备墙 / 主控";
-        var previousMode = wallViewMode; var previousAction = instanceActionRow;
+        var previousMode = wallViewMode;
         var current = ViewModel.CurrentDevice; var main = ViewModel.MainDevice ?? throw new InvalidOperationException("主控夹具缺失。");
-        var info = main.Info; var text = ViewModel.TextInput; var sync = ViewModel.SyncKeyboard;
+        var info = main.Info; var text = ViewModel.TextInput; var sync = ViewModel.SyncKeyboard; var mouseSync = ViewModel.SyncMouse;
         var selections = ViewModel.Devices.ToDictionary(row => row, row => row.IsSelected);
+        var unifiedSelections = unifiedDevices.ToDictionary(row => row.Key, row => row.IsSelected);
         try
         {
-            NavigateTo("设备墙 / 主控"); SetWallViewMode("screens");
-            SelectUnifiedInstance(unifiedDevices.First(row => row.Instance is { Index: > 0, AndroidStarted: false }));
+            NavigateTo("设备墙 / 主控"); SetWallViewMode("list");
+            if (wallMainPanel.Visibility != Visibility.Collapsed) throw new InvalidOperationException("主控面板没有默认收起。");
+            ClearWallSelection();
+            Activate();
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (!IsActive) throw new InvalidOperationException("截图调度验收窗口未激活，不能证明可见主控请求路径。");
+            var hiddenFrames = ViewModel.Devices.ToDictionary(row => row, row => row.CapturedAt);
+            CloseMainControl(); await CaptureTickAsync();
+            if (hiddenFrames.Any(pair => pair.Key.CapturedAt != pair.Value))
+                throw new InvalidOperationException("隐藏主控面板仍请求了设备截图。");
+            await Task.Delay(20);
+            await OpenMainControlAsync(main);
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (wallMainPanel.Visibility != Visibility.Visible || wallWorkspace.ColumnDefinitions[1].Width.Value <= 0)
+                throw new InvalidOperationException("列表主控入口没有展开嵌入面板。");
+            if (!IsActive || main.CapturedAt is not { } captured || hiddenFrames[main] is { } beforeCapture && captured <= beforeCapture
+                || hiddenFrames.Any(pair => !ReferenceEquals(pair.Key, main) && pair.Key.CapturedAt != pair.Value))
+                throw new InvalidOperationException("可见主控没有请求新截图，窗口失焦，或刷新了其它设备。");
+            foreach (var (path, caption, scope) in new[]
+            {
+                (nameof(WorkspaceViewModel.SyncMouse), "同步点击滑动", "嵌入画面"),
+                (nameof(WorkspaceViewModel.SyncKeyboard), "同步按键", "程序")
+            })
+            {
+                var controls = VisualDescendants<CheckBox>(Shell).Where(input => BindingOperations.GetBinding(input, ToggleButton.IsCheckedProperty)?.Path.Path == path).ToArray();
+                if (controls.Length != 1 || !VisualDescendants<CheckBox>(wallMainPanel).Contains(controls[0]) || controls[0].Content as string != caption
+                    || controls[0].ToolTip is not string tip || !tip.Contains("主控", StringComparison.Ordinal) || !tip.Contains("勾选", StringComparison.Ordinal) || !tip.Contains(scope, StringComparison.Ordinal))
+                    throw new InvalidOperationException("主控同步控件的唯一归属或作用范围提示不清晰：" + path);
+            }
             var expected = new Dictionary<string, string> { ["MainVolumeUp"] = "增大音量", ["MainVolumeDown"] = "减小音量" };
             var buttons = VisualDescendants<Button>(wallMainPanel).Where(button => expected.ContainsKey(button.Name)).ToArray();
             if (buttons.Length != 2 || buttons.Any(button => button.ToolTip as string != expected[button.Name] || button.Content is not TextBlock || button.ActualWidth != 34 || button.Command is not AsyncCommand))
@@ -9344,9 +9420,10 @@ public partial class MainWindow
             foreach (var row in ViewModel.Devices) row.IsSelected = ReferenceEquals(row, other);
             foreach (var enabled in new[] { false, true })
             {
-                ViewModel.SyncKeyboard = enabled; ViewModel.UpdateSelection();
+                ViewModel.SyncKeyboard = enabled; ViewModel.SyncMouse = enabled; ViewModel.UpdateSelection();
                 string[] expectedTargets = enabled ? [other.Serial] : [];
-                if (!ViewModel.InputTargets(main.Serial, false).SequenceEqual(expectedTargets)) throw new InvalidOperationException("主控音量未沿用现有键盘同步目标规则。");
+                if (!ViewModel.InputTargets(main.Serial, false).SequenceEqual(expectedTargets) || !ViewModel.InputTargets(main.Serial, true).SequenceEqual(expectedTargets))
+                    throw new InvalidOperationException("主控鼠标或按键同步没有沿用勾选目标规则。");
                 foreach (var button in buttons)
                 {
                     if (!button.Command!.CanExecute(null)) throw new InvalidOperationException("有效主控的音量命令不可用。");
@@ -9358,7 +9435,7 @@ public partial class MainWindow
             finally { ViewModel.SetExternalBusy(false); }
             main.Info = info with { State = "Offline" }; ViewModel.UpdateSelection();
             if (buttons.Any(button => button.Command!.CanExecute(null))) throw new InvalidOperationException("离线主控音量仍可操作。");
-            main.Info = info; ViewModel.SyncKeyboard = sync;
+            main.Info = info; ViewModel.SyncKeyboard = sync; ViewModel.SyncMouse = mouseSync;
             foreach (var pair in selections) pair.Key.IsSelected = pair.Value;
             ViewModel.UpdateSelection();
             if (wallMainPanel is ScrollViewer viewport) viewport.ScrollToEnd();
@@ -9371,22 +9448,30 @@ public partial class MainWindow
             if (screenshot is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshot)!, "canonical-main-controls.png"));
             NavigateTo("应用"); SyncApplicationTargets();
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            var routedFrames = ViewModel.Devices.ToDictionary(row => row, row => row.CapturedAt);
+            await CaptureTickAsync();
+            if (routedFrames.Any(pair => pair.Key.CapturedAt != pair.Value))
+                throw new InvalidOperationException("切换到应用页后仍请求设备管理的主控截图。");
             if (applicationTargets.Any(row => row.IsSelected) || CanManageApplicationTargets() || !VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "安装 APK"))
-                throw new InvalidOperationException("应用入口缺失，或实例下拉隐式授权了应用目标。");
+                throw new InvalidOperationException("应用入口缺失，或统一目录勾选隐式授权了应用目标。");
             NavigateTo("文本"); ViewModel.TextInput = "入口去重中文验证";
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
             if (!VisualDescendants<TextBox>(Shell).Any(input => BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path == nameof(WorkspaceViewModel.TextInput))
                 || !VisualDescendants<Button>(Shell).Any(button => ReferenceEquals(button.Command, ViewModel.TextCommand)))
                 throw new InvalidOperationException("独立文本输入或发送命令入口缺失。");
             if (!ReferenceEquals(current, ViewModel.CurrentDevice) || !ReferenceEquals(main, ViewModel.MainDevice) || selections.Any(pair => pair.Key.IsSelected != pair.Value))
-                throw new InvalidOperationException("入口切换把实例目标隐式映射到群控或主控。");
+                throw new InvalidOperationException("入口切换改写了设备上下文、群控勾选或主控。");
         }
         finally
         {
-            main.Info = info; ViewModel.TextInput = text; ViewModel.SyncKeyboard = sync;
+            main.Info = info; ViewModel.TextInput = text; ViewModel.SyncKeyboard = sync; ViewModel.SyncMouse = mouseSync;
+            CloseMainControl();
+            foreach (var row in unifiedDevices) row.IsSelected = unifiedSelections.GetValueOrDefault(row.Key);
             foreach (var pair in selections) pair.Key.IsSelected = pair.Value;
-            ViewModel.UpdateSelection(); SelectUnifiedInstance(previousAction);
+            ViewModel.UpdateSelection();
             SetWallViewMode(previousMode); NavigateTo(previousTag);
+            if (wallMainPanel.Visibility != Visibility.Collapsed || wallWorkspace.ColumnDefinitions[1].Width.Value != 0)
+                throw new InvalidOperationException("关闭主控后没有归还列表宽度。");
         }
     }
 
@@ -9497,51 +9582,104 @@ public partial class MainWindow
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("统一实例操作验收仅限演示模式。");
         NavigateTo("设备墙 / 主控"); SetWallViewMode("list"); UpdateUnifiedDirectory();
-        var previousAction = instanceActionRow;
-        var previousGroup = ViewModel.GroupFilter;
+        await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+        var previousStatus = ViewModel.StatusFilter;
         var previousCurrent = ViewModel.CurrentDevice;
         var previousMain = ViewModel.MainDevice;
         var selection = unifiedDevices.ToDictionary(row => row.Key, row => row.IsSelected);
         var cold = unifiedDevices.Single(row => row.Instance is { Index: > 0, AndroidStarted: false });
         var other = unifiedDevices.First(row => row.Instance is null && row.Device is not null);
         var otherInfo = other.Device!.Info;
-        const string group = "离线实例目标测试";
-        ViewModel.Groups.Add(group);
+        var more = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == "更多操作");
+        var menu = more.ContextMenu ?? throw new InvalidOperationException("更多操作按钮没有实际菜单。");
+        var menuActions = new[] { "资源配置", "关闭实例", "重启实例" }.ToDictionary(label => label,
+            label => menu.Items.OfType<MenuItem>().Single(item => item.Header as string == label));
+        if (menuActions.Any(pair => !ReferenceEquals(pair.Value.Command, ldCommandsByLabel[pair.Key])))
+            throw new InvalidOperationException("更多菜单条目没有绑定实际生命周期命令。");
+        async Task CheckMenuAsync(bool configuration, bool running)
+        {
+            menu.IsOpen = false;
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            more.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var opened = System.Diagnostics.Stopwatch.StartNew();
+            while (true)
+            {
+                await Dispatcher.InvokeAsync(() => { UpdateLayout(); menu.UpdateLayout(); }, DispatcherPriority.ApplicationIdle);
+                if (menu.IsOpen && menu.IsLoaded && menu.IsVisible && menu.ActualWidth > 0 && menu.ActualHeight > 0) break;
+                if (opened.Elapsed >= TimeSpan.FromSeconds(1))
+                    throw new InvalidOperationException($"更多菜单打开超时：open={menu.IsOpen}, loaded={menu.IsLoaded}, visible={menu.IsVisible}, size={menu.ActualWidth}x{menu.ActualHeight}, active={IsActive}。");
+                await Task.Delay(20);
+            }
+            foreach (var pair in menuActions)
+            {
+                var expected = pair.Key == "资源配置" ? configuration : running;
+                if (pair.Value.Command!.CanExecute(null) != expected || pair.Value.IsEnabled != expected)
+                    throw new InvalidOperationException("更多菜单的可用状态与实际实例目标不一致：" + pair.Key);
+            }
+        }
         try
         {
-            var before = ViewModel.Devices.Select(row => row.IsSelected).ToArray();
-            SelectUnifiedInstance(cold);
-            if (ldSelection?.Index != cold.Index || !ReferenceEquals(instanceActionChoice.SelectedItem, cold))
-                throw new InvalidOperationException("实例操作下拉与实际命令目标不一致。");
-            SelectUnifiedInstance(other);
+            ClearWallSelection(); await CheckMenuAsync(false, false);
+            cold.IsSelected = true; await CheckMenuAsync(true, false);
+            if (ldSelection is not { } coldSelection || coldSelection.Index != cold.Index || coldSelection.Generation != cold.Instance?.Generation)
+                throw new InvalidOperationException("统一目录单选与实际实例命令目标不一致。");
+            cold.IsSelected = false; other.IsSelected = true;
             if (ldSelection is not null || ldCommandsByLabel["资源配置"].CanExecute(null) || ldCommandsByLabel["关闭实例"].CanExecute(null))
                 throw new InvalidOperationException("非雷电行仍沿用旧实例目标。");
             if (!ReferenceEquals(previousCurrent, ViewModel.CurrentDevice) || !ReferenceEquals(previousMain, ViewModel.MainDevice)
-                || !before.SequenceEqual(ViewModel.Devices.Select(row => row.IsSelected)))
-                throw new InvalidOperationException("实例操作目标切换隐式改写了群控选择或主控。");
+                || !other.Device.IsSelected)
+                throw new InvalidOperationException("目录勾选改写当前设备、主控或没有同步对应群控目标。");
 
-            foreach (var row in unifiedDevices.ToArray()) row.IsSelected = false;
-            cold.IsSelected = true; other.IsSelected = true;
-            other.Device.Info = otherInfo with { GroupId = group };
-            ViewModel.GroupFilter = group;
+            cold.IsSelected = true;
+            await CheckMenuAsync(false, false);
+            if (ldSelection is not null || ldCommandsByLabel["资源配置"].CanExecute(null))
+                throw new InvalidOperationException("多选目录仍保留单实例命令目标。");
+            other.Device.Info = otherInfo with { State = "Ready" };
+            ViewModel.StatusFilter = "Ready";
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
             if (unifiedDeviceView.Cast<UnifiedDeviceRow>().Contains(cold)) throw new InvalidOperationException("隐藏目标反例没有形成。");
             other.IsSelected = false;
-            if (!cold.IsSelected || ldSelection?.Index != cold.Index || !ReferenceEquals(instanceActionChoice.SelectedItem, cold))
-                throw new InvalidOperationException("筛选后唯一隐藏勾选目标与实例下拉不一致。");
+            if (!cold.IsSelected || ldSelection is not { } hiddenSelection || hiddenSelection.Index != cold.Index || hiddenSelection.Generation != cold.Instance?.Generation)
+                throw new InvalidOperationException("状态筛选后的唯一隐藏勾选目标与实例命令快照不一致。");
+            var selectAll = VisualDescendants<CheckBox>(Shell).Single(input => input.Name == "SelectAllDevices");
+            selectAll.IsChecked = false; selectAll.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            if (unifiedDevices.Any(row => row.IsSelected) || ldSelection is not null)
+                throw new InvalidOperationException("表头取消选择没有清除隐藏目标或实例命令快照。");
 
-            ViewModel.GroupFilter = previousGroup;
+            var beforeEmptyInfos = ViewModel.Devices.ToDictionary(row => row, row => row.Info);
+            var beforeEmptyStatus = ViewModel.StatusFilter;
+            try
+            {
+                ClearWallSelection(); cold.IsSelected = true;
+                foreach (var row in ViewModel.Devices) row.Info = row.Info with { State = "Ready" };
+                ViewModel.StatusFilter = "Offline";
+                await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+                if (!unifiedDeviceView.IsEmpty || !cold.IsSelected || selectAll.IsChecked is not null || !selectAll.IsEnabled)
+                    throw new InvalidOperationException("空可见列表的隐藏勾选未显示为可取消的表头中间态。");
+                selectAll.IsChecked = false; selectAll.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                if (unifiedDevices.Any(row => row.IsSelected) || ViewModel.Devices.Any(row => row.IsSelected) || ldSelection is not null)
+                    throw new InvalidOperationException("空可见列表中的表头取消未清除隐藏目标或实例命令快照。");
+            }
+            finally
+            {
+                foreach (var pair in beforeEmptyInfos) pair.Key.Info = pair.Value;
+                ViewModel.StatusFilter = beforeEmptyStatus;
+            }
+
+            ViewModel.StatusFilter = previousStatus;
             other.Device.Info = otherInfo;
             var confirm = ViewModel.Confirm;
             ViewModel.Confirm = (_, _) => true;
             try
             {
-                SelectUnifiedInstance(cold);
+                cold.IsSelected = true;
                 await ExecuteLdPlayerAsync("launch");
                 var running = ViewModel.Runtime.LdPlayer!.Instances.Single(item => item.Index == cold.Index);
                 var projected = unifiedDevices.Single(row => row.Index == cold.Index);
                 if (!running.AndroidStarted || projected.Instance != running || projected.AndroidState != "已启动" || projected.ProcessId != running.ProcessId.ToString())
                     throw new InvalidOperationException("模拟命令后统一列表仍显示旧进程或安卓状态。");
+                await CheckMenuAsync(false, true);
+                if (screenshot is not null) SaveRender(Path.Combine(Path.GetDirectoryName(screenshot)!, "instance-actions-menu.png"), menu);
                 await ExecuteLdPlayerAsync("quit");
                 var stopped = ViewModel.Runtime.LdPlayer!.Instances.Single(item => item.Index == cold.Index);
                 if (stopped.AndroidStarted || projected.Instance != stopped || projected.ProcessId != "-")
@@ -9551,29 +9689,28 @@ public partial class MainWindow
             wallActionsViewport.ScrollToTop();
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
             await Task.Delay(60);
-            if (instanceActionChoice.ActualWidth <= 0 || instanceActionChoice.ActualHeight < 32)
-                throw new InvalidOperationException("实例生命周期目标控件未布局。");
             if (screenshot is not null) SaveRender(Path.Combine(Path.GetDirectoryName(screenshot)!, "merged-device-actions.png"));
-            var groupChoice = VisualDescendants<ComboBox>(Shell).Single(input => input.ToolTip as string == "设备分组");
-            var groupTop = groupChoice.TranslatePoint(new Point(), Shell).Y;
+            var settings = VisualDescendants<Button>(Shell).Single(input => input.ToolTip as string == "环境设置");
+            var settingsTop = settings.TranslatePoint(new Point(), Shell).Y;
             var listTop = wallWorkspace.TranslatePoint(new Point(), Shell).Y;
             var footer = workspace.Children.OfType<FrameworkElement>().Single(child => Grid.GetRow(child) == 3);
             var footerTop = footer.TranslatePoint(new Point(), Shell).Y;
             var visibleListHeight = Math.Min(listTop + wallWorkspace.ActualHeight, footerTop) - Math.Max(listTop, 0);
             if (wallWorkspace.ActualHeight < 140 || visibleListHeight < 140 || listTop + wallWorkspace.ActualHeight > footerTop + 1
-                || groupTop < 0 || groupTop + groupChoice.ActualHeight > Shell.ActualHeight)
-                throw new InvalidOperationException($"统一页操作区挤占列表或裁切全局工具栏：列表高 {wallWorkspace.ActualHeight:F1}，分组顶 {groupTop:F1}。");
-            var targetTop = instanceActionChoice.TranslatePoint(new Point(), wallActionsViewport).Y;
-            if (targetTop < 0 || targetTop + instanceActionChoice.ActualHeight > wallActionsViewport.ActualHeight)
-                throw new InvalidOperationException("实例操作目标超出可见操作区。");
+                || settingsTop < 0 || settingsTop + settings.ActualHeight > Shell.ActualHeight)
+                throw new InvalidOperationException($"统一页操作区挤占列表或裁切全局工具栏：列表高 {wallWorkspace.ActualHeight:F1}，设置顶 {settingsTop:F1}。");
+            var create = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == "新建空白实例");
+            var actionTop = create.TranslatePoint(new Point(), wallActionsViewport).Y;
+            if (actionTop < 0 || actionTop + create.ActualHeight > wallActionsViewport.ActualHeight)
+                throw new InvalidOperationException("实例生命周期操作超出可见操作区。");
         }
         finally
         {
+            menu.IsOpen = false;
             wallActionsViewport.ScrollToTop();
             other.Device.Info = otherInfo;
-            ViewModel.GroupFilter = previousGroup; ViewModel.Groups.Remove(group);
+            ViewModel.StatusFilter = previousStatus;
             foreach (var row in unifiedDevices.ToArray()) row.IsSelected = selection.GetValueOrDefault(row.Key);
-            SelectUnifiedInstance(previousAction);
         }
     }
 }
@@ -9703,6 +9840,7 @@ public partial class MainWindow
     private readonly List<TextBlock> launchFeedback = [];
     private readonly List<AsyncCommand> launchCommands = [];
     private readonly List<ActionCommand> launchCancelCommands = [];
+    private Button? launchCancelButton;
     private bool updatingUnifiedDirectory;
     private readonly HashSet<int> coldLaunched = [];
     private LdWindowVisibility? ldWindowVisibility;
@@ -9719,9 +9857,8 @@ public partial class MainWindow
     {
         unifiedDeviceView = CollectionViewSource.GetDefaultView(unifiedDevices);
         unifiedDeviceView.Filter = item => item is UnifiedDeviceRow row
-            && (ViewModel.GroupFilter == "全部分组" || row.Group == ViewModel.GroupFilter)
             && (ViewModel.StatusFilter == "全部状态" || row.Device?.Info.State == ViewModel.StatusFilter);
-        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts) or nameof(WorkspaceViewModel.GroupFilter) or nameof(WorkspaceViewModel.StatusFilter)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
+        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts) or nameof(WorkspaceViewModel.StatusFilter)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
     }
 
     internal void UpdateUnifiedDirectory()
@@ -9743,7 +9880,6 @@ public partial class MainWindow
         }
         foreach (var device in ViewModel.Devices.Where(row => !boundSerials.Contains(row.Serial))) Upsert("device:" + device.Serial, null, device, device.Info.Online);
         foreach (var stale in unifiedDevices.Where(row => !expected.Contains(row.Key)).ToArray()) unifiedDevices.Remove(stale);
-        SelectUnifiedInstance(instanceActionRow);
         foreach (var summary in deviceSummaries) summary.Text = $"本机 {instances.Count} 台 · 已接入 {admitted} 台 · 已连接 {unifiedDevices.Count(row => row.Connected)} 台";
         unifiedDeviceView.Refresh(); SynchronizeUnifiedSelection();
         void Upsert(string key, LdPlayerInstance? instance, DeviceRow? device, bool connected)
@@ -9752,8 +9888,8 @@ public partial class MainWindow
             var row = unifiedDevices.FirstOrDefault(item => item.Key == key);
             if (row is null)
             {
-                row = new UnifiedDeviceRow(key, ActivateUnifiedRowAsync, CanActivateUnifiedRow, ShowUnifiedWindowAsync, item => !ldBusy && !ViewModel.Busy && item.Index is { } index && ldWindowVisibility?.IsHidden(index) == true, item => item.Device is null ? Task.CompletedTask : ViewModel.SetMainAsync(item.Device));
-                row.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(UnifiedDeviceRow.IsSelected)) SynchronizeUnifiedSelection(true); };
+                row = new UnifiedDeviceRow(key, ActivateUnifiedRowAsync, CanActivateUnifiedRow, ShowUnifiedWindowAsync, item => !ldBusy && !ViewModel.Busy && item.Index is { } index && ldWindowVisibility?.IsHidden(index) == true, item => item.Device is null ? Task.CompletedTask : OpenMainControlAsync(item.Device));
+                row.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(UnifiedDeviceRow.IsSelected)) SynchronizeUnifiedSelection(); };
                 unifiedDevices.Add(row);
             }
             row.Update(instance, device, connected, instance is not null && launchPhases.TryGetValue(instance.Index, out var phase) ? phase : "",
@@ -9780,32 +9916,37 @@ public partial class MainWindow
         catch (Exception ex) { SetLaunchFeedback("显示窗口失败：" + ViewModel.PresentError(ex)); }
     }
     private void SetLaunchFeedback(string text) { if (ldFeedback is not null) ldFeedback.Text = text; foreach (var feedback in launchFeedback) feedback.Text = text; }
-    private void SynchronizeUnifiedSelection(bool changed = false)
+    private void SynchronizeUnifiedSelection()
     {
-        if (changed)
-        {
-            var selected = unifiedDevices.Where(row => row.IsSelected).ToArray();
-            SelectUnifiedInstance(selected.Length == 1 ? selected[0] : null);
-        }
+        var selected = unifiedDevices.Where(row => row.IsSelected).Take(2).ToArray();
+        SelectUnifiedInstance(selected.Length == 1 ? selected[0] : null);
         ViewModel.SetPendingLaunchSelection(unifiedDevices.Count(row => row.IsSelected && !row.Connected));
         workspaceCounts.Text = $"目录 {unifiedDevices.Count} · 已连接 {unifiedDevices.Count(row => row.Connected)} · 筛选 {unifiedDeviceView.Cast<UnifiedDeviceRow>().Count()} · 已选 {unifiedDevices.Count(row => row.IsSelected)}";
+        UpdateWallSelectionToggle();
         RefreshLaunchCommands();
     }
-    private void RefreshLaunchCommands() { foreach (var command in launchCommands) command.Refresh(); foreach (var command in launchCancelCommands) command.Refresh(); foreach (var row in unifiedDevices) row.RefreshCommands(); }
+    private void RefreshLaunchCommands()
+    {
+        foreach (var command in launchCommands) command.Refresh();
+        foreach (var command in launchCancelCommands) command.Refresh();
+        foreach (var row in unifiedDevices) row.RefreshCommands();
+        if (launchCancelButton is not null) launchCancelButton.Visibility = ldOperationCancellation is not null ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     private FrameworkElement BuildOneClickLaunchTools()
     {
         var section = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+        var feedback = new TextBlock { Foreground = WallMuted, TextWrapping = TextWrapping.Wrap, MinHeight = 19, Margin = new Thickness(0, 0, 0, 4) }; ldFeedback = feedback; launchFeedback.Add(feedback);
         var tools = Toolbar();
         tools.Children.Add(LaunchButton("\uE768", "启动所选", () => ConnectLdInstancesAsync(unifiedDevices.Where(row => row.IsSelected && !row.Connected && row.Index is > 0 and < 99999).Select(row => row.Index!.Value).ToArray()), () => !ViewModel.Demo && CanStartInstances() && unifiedDevices.Any(row => row.IsSelected && !row.Connected && row.Index is > 0 and < 99999), true));
         tools.Children.Add(LaunchButton("\uE768", "一键启动全部", StartAllLdInstancesAsync, () => !ViewModel.Demo && CanStartInstances() && unifiedDevices.Any(row => !row.Connected && row.Index is > 0 and < 99999)));
-        tools.Children.Add(LaunchButton("\uE7F4", "显示窗口", async () => { foreach (var row in unifiedDevices.Where(row => row.IsSelected).ToArray()) await ShowUnifiedWindowAsync(row); }, () => !ldBusy && unifiedDevices.Any(row => row.IsSelected && row.Index is { } index && ldWindowVisibility?.IsHidden(index) == true)));
+        tools.Children.Add(BuildInstanceActions());
         var stop = new ActionCommand(() => ldOperationCancellation?.Cancel(), () => ldOperationCancellation is not null);
         launchCancelCommands.Add(stop);
-        var stopButton = WallButton("\uE71A", "取消启动", stop); stopButton.Content = WallGlyph("\uE71A"); stopButton.Width = 34; stopButton.MinWidth = 0; stopButton.Padding = new Thickness(0); tools.Children.Add(stopButton);
+        var stopButton = WallButton("\uE71A", "取消启动", stop); stopButton.Visibility = Visibility.Collapsed; stopButton.Content = WallGlyph("\uE71A"); stopButton.Width = 34; stopButton.MinWidth = 0; stopButton.Padding = new Thickness(0); launchCancelButton = stopButton; tools.Children.Add(stopButton);
         ViewModel.PropertyChanged += (_, _) => stop.Refresh();
         section.Children.Add(tools);
-        var feedback = new TextBlock { Foreground = WallMuted, TextWrapping = TextWrapping.Wrap, MinHeight = 19, Margin = new Thickness(0, 0, 0, 4) }; ldFeedback = feedback; launchFeedback.Add(feedback); section.Children.Add(feedback);
+        section.Children.Add(feedback);
         return section;
     }
     private Button LaunchButton(string glyph, string label, Func<Task> operation, Func<bool> enabled, bool primary = false)
@@ -9918,12 +10059,6 @@ public partial class MainWindow
         var indices = confirmedInstances.Select(item => item.Index).ToArray();
         if (indices.Length == 0) throw new DeviceException("没有可启动的独立实例。", 404, 1002);
         await ConnectLdInstancesAsync(indices);
-    }
-
-    private Task ConnectRunningLdInstancesAsync()
-    {
-        var indices = ViewModel.Runtime.LdPlayer?.Instances.Where(item => item.Index > 0 && item.Index != 99999 && item.AndroidStarted && !LdInstanceConnected(item.Index)).Select(item => item.Index).ToArray() ?? [];
-        return ConnectLdInstancesAsync(indices);
     }
 
     private async Task ConnectLdInstancesAsync(int[] indices, IReadOnlyDictionary<int, string>? expectedSerials = null)
@@ -10122,9 +10257,7 @@ namespace MatrixDevice.Desktop;
 public sealed class UnifiedDeviceTile : Border
 {
     public static readonly DependencyProperty OwnerProperty = DependencyProperty.Register(nameof(Owner), typeof(MainWindow), typeof(UnifiedDeviceTile), new PropertyMetadata(null, OnChanged));
-    public static readonly DependencyProperty ModeProperty = DependencyProperty.Register(nameof(Mode), typeof(string), typeof(UnifiedDeviceTile), new PropertyMetadata("cards", OnChanged));
     public MainWindow? Owner { get => (MainWindow?)GetValue(OwnerProperty); set => SetValue(OwnerProperty, value); }
-    public string Mode { get => (string)GetValue(ModeProperty); set => SetValue(ModeProperty, value); }
     private UnifiedDeviceRow? row;
     public UnifiedDeviceTile()
     {
@@ -10138,21 +10271,7 @@ public sealed class UnifiedDeviceTile : Border
     {
         if (row is null || Owner is null) { Child = null; return; }
         BorderThickness = new Thickness(0); Padding = new Thickness(0); Margin = new Thickness(0);
-        if (row.Connected && row.Device is not null && Mode != "list")
-        {
-            Child = new WallDeviceTile { Owner = Owner, Mode = Mode, DataContext = row.Device }; return;
-        }
-        if (Mode == "list") { Child = Actions(); return; }
-        var content = new StackPanel { Margin = new Thickness(Mode == "screens" ? 8 : 18) };
-        var check = new CheckBox { IsEnabled = row.CanSelect, Margin = new Thickness(0, 0, 0, 10) };
-        check.SetBinding(ToggleButton.IsCheckedProperty, new Binding(nameof(UnifiedDeviceRow.IsSelected)) { Mode = BindingMode.TwoWay });
-        check.Content = new TextBlock { Text = row.Name, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = row.Name }; content.Children.Add(check);
-        var state = new TextBlock { Foreground = Brushes.DimGray, Margin = new Thickness(0, 6, 0, 12), TextWrapping = TextWrapping.Wrap };
-        state.SetBinding(TextBlock.TextProperty, new Binding(nameof(UnifiedDeviceRow.State))); content.Children.Add(state);
-        content.Children.Add(new TextBlock { Text = "实例 " + row.Number, Margin = new Thickness(0, 0, 0, 12) });
-        var spacer = new Border { Height = Mode == "screens" ? 170 : 132, Background = new SolidColorBrush(Color.FromRgb(247, 249, 252)), Margin = new Thickness(0, 0, 0, 12), Child = new TextBlock { Text = "\uE7F4", FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 32, Foreground = Brushes.LightSlateGray, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center } };
-        content.Children.Add(spacer); content.Children.Add(Actions());
-        Child = new Border { Child = content, Background = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(228, 232, 240)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Margin = new Thickness(0, 0, 12, 12) };
+        Child = Actions();
     }
     private FrameworkElement Actions()
     {
@@ -10164,179 +10283,13 @@ public sealed class UnifiedDeviceTile : Border
         start.SetResourceReference(StyleProperty, "SubtleButton"); actions.Children.Add(start);
         if (row.Connected && row.Device is not null)
         {
-            var main = new Button { Content = new TextBlock { Text = "\uE7F4", FontFamily = new FontFamily("Segoe MDL2 Assets") }, Command = row.MainCommand, ToolTip = "设为主控", Margin = new Thickness(0, 0, 6, 0) };
-            main.SetResourceReference(StyleProperty, "IconButton"); actions.Children.Add(main);
+            var main = new Button { Content = "控制", Command = row.MainCommand, ToolTip = "打开此设备的主控面板", Height = 32, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 6, 0) };
+            main.SetResourceReference(StyleProperty, "SubtleButton"); actions.Children.Add(main);
         }
         var show = new Button { Content = new TextBlock { Text = "\uE8A7", FontFamily = new FontFamily("Segoe MDL2 Assets") }, Command = row.ShowWindowCommand, ToolTip = "显示模拟器窗口", Visibility = row.ShowWindowCommand.CanExecute(null) ? Visibility.Visible : Visibility.Collapsed };
         show.SetResourceReference(StyleProperty, "IconButton"); actions.Children.Add(show);
         return actions;
     }
-}
-
-```
-
-## src/MatrixDevice.Desktop/Views/WallDeviceTile.cs
-
-```csharp
-using System.ComponentModel;
-using System.Globalization;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
-using System.Windows.Data;
-using System.Windows.Input;
-using System.Windows.Media;
-
-namespace MatrixDevice.Desktop;
-
-public sealed class WallDeviceTile : Border
-{
-    public static readonly DependencyProperty OwnerProperty = DependencyProperty.Register(nameof(Owner), typeof(MainWindow), typeof(WallDeviceTile), new PropertyMetadata(null, RebuildOnChange));
-    public static readonly DependencyProperty ModeProperty = DependencyProperty.Register(nameof(Mode), typeof(string), typeof(WallDeviceTile), new PropertyMetadata("cards", RebuildOnChange));
-    private static readonly Brush Ink = new SolidColorBrush(Color.FromRgb(24, 34, 57));
-    private static readonly Brush Muted = new SolidColorBrush(Color.FromRgb(99, 113, 138));
-    private static readonly Brush Line = new SolidColorBrush(Color.FromRgb(228, 232, 240));
-    private static readonly Brush Accent = new SolidColorBrush(Color.FromRgb(50, 116, 246));
-    private static readonly Brush AccentText = new SolidColorBrush(Color.FromRgb(33, 90, 206));
-    private DeviceRow? row;
-    private WorkspaceViewModel? subscribed;
-    private readonly List<ICommand> commands = [];
-    private TextBlock? status;
-    private TextBlock? mainBadge;
-    public MainWindow? Owner { get => (MainWindow?)GetValue(OwnerProperty); set => SetValue(OwnerProperty, value); }
-    public string Mode { get => (string)GetValue(ModeProperty); set => SetValue(ModeProperty, value); }
-
-    public WallDeviceTile()
-    {
-        DataContextChanged += (_, _) => Rebuild();
-        Loaded += (_, _) => { Subscribe(); RefreshState(); }; Unloaded += (_, _) => Unsubscribe();
-        MouseLeftButtonDown += (_, e) =>
-        {
-            if (Owner is null || row is null || FindParent<ButtonBase>(e.OriginalSource as DependencyObject) is not null) return;
-            Owner.ViewModel.CurrentDevice = row;
-        };
-    }
-
-    private static void RebuildOnChange(DependencyObject target, DependencyPropertyChangedEventArgs args) => ((WallDeviceTile)target).Rebuild();
-    private void Rebuild()
-    {
-        Unsubscribe(); row = DataContext as DeviceRow;
-        if (row is null || Owner is null) { Child = null; return; }
-        commands.Clear(); status = null; mainBadge = null;
-        Background = Brushes.White; CornerRadius = new CornerRadius(8); BorderThickness = Mode == "list" ? new Thickness(0) : new Thickness(1); BorderBrush = Line;
-        Margin = Mode == "cards" ? new Thickness(0, 0, 14, 14) : Mode == "screens" ? new Thickness(0, 0, 8, 12) : new Thickness(0);
-        VerticalAlignment = VerticalAlignment.Top; Padding = Mode == "cards" ? new Thickness(19, 16, 19, 16) : Mode == "screens" ? new Thickness(7) : new Thickness(0);
-        Child = Mode switch { "screens" => BuildScreen(), "list" => BuildActions(compact: true), _ => BuildCard() };
-        if (IsLoaded) Subscribe(); RefreshState();
-    }
-
-    private FrameworkElement BuildCard()
-    {
-        var body = new StackPanel();
-        var top = new DockPanel { Margin = new Thickness(0, 0, 0, 11) };
-        var selection = Selection(); DockPanel.SetDock(selection, Dock.Left); top.Children.Add(selection);
-        status = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) }; DockPanel.SetDock(status, Dock.Right); top.Children.Add(status);
-        top.Children.Add(Bound(nameof(DeviceRow.Name), 14, bold: true)); body.Children.Add(top);
-        var model = new DockPanel { Margin = new Thickness(0, 0, 0, 9) };
-        var phone = new TextBlock { Text = "\uE8EA", FontFamily = new FontFamily("Segoe MDL2 Assets"), Foreground = Accent, FontSize = 23, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0, 0, 0) }; DockPanel.SetDock(phone, Dock.Right); model.Children.Add(phone);
-        var modelText = new StackPanel(); modelText.Children.Add(new TextBlock { Text = "设备型号", Foreground = Muted, FontSize = 11, Margin = new Thickness(0, 0, 0, 3) }); modelText.Children.Add(Bound("Info.Model", 17, bold: true)); model.Children.Add(modelText); body.Children.Add(model);
-        var badges = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
-        badges.Children.Add(Badge("Info.Brand", false)); badges.Children.Add(Badge("Info.AndroidVersion", true));
-        mainBadge = new TextBlock { FontSize = 11, Foreground = AccentText, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 0, 0) }; badges.Children.Add(mainBadge); body.Children.Add(badges);
-        body.Children.Add(Detail("序列号", nameof(DeviceRow.Serial))); body.Children.Add(Detail("分辨率", nameof(DeviceRow.Resolution))); body.Children.Add(Detail("分组", nameof(DeviceRow.Group))); body.Children.Add(Detail("脚本", nameof(DeviceRow.ScriptState)));
-        body.Children.Add(new Border { Background = Line, Height = 1, Margin = new Thickness(0, 13, 0, 13) });
-        body.Children.Add(BuildActions()); return body;
-    }
-
-    private FrameworkElement BuildScreen()
-    {
-        var body = new StackPanel();
-        var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 6) }; heading.Children.Add(Selection()); heading.Children.Add(Bound(nameof(DeviceRow.Name), 11, bold: true)); body.Children.Add(heading);
-        var screen = new Grid { Height = 230, Background = new SolidColorBrush(Color.FromRgb(244, 247, 251)) };
-        var image = new Image { Stretch = Stretch.Uniform, Cursor = Cursors.Hand }; image.SetBinding(Image.SourceProperty, new Binding(nameof(DeviceRow.Screenshot))); screen.Children.Add(image);
-        var empty = new TextBlock { Text = "无截图", FontSize = 11, Foreground = Muted, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        empty.SetBinding(VisibilityProperty, new Binding(nameof(DeviceRow.Screenshot)) { Converter = new WallNullVisibilityConverter() }); screen.Children.Add(empty); body.Children.Add(screen);
-        var state = new DockPanel { Margin = new Thickness(0, 6, 0, 4) }; status = new TextBlock { FontSize = 10 }; state.Children.Add(status);
-        mainBadge = new TextBlock { FontSize = 10, Foreground = AccentText, HorizontalAlignment = HorizontalAlignment.Right }; state.Children.Add(mainBadge); body.Children.Add(state);
-        var frame = Bound(nameof(DeviceRow.FrameLabel), 10); frame.Margin = new Thickness(0, 0, 0, 5); frame.Foreground = Muted; body.Children.Add(frame);
-        var script = Bound(nameof(DeviceRow.ScriptState), 10); script.Foreground = Muted; script.Margin = new Thickness(0, 0, 0, 5); body.Children.Add(script);
-        body.Children.Add(BuildActions(compact: true)); return body;
-    }
-
-    private FrameworkElement BuildActions(bool compact = false)
-    {
-        var grid = new Grid(); grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var debug = new ActionCommand(() => { if (row is null || Owner is null) return; Owner.ViewModel.CurrentDevice = row; Owner.NavigateTo("节点"); }, () => Owner is not null && !Owner.ViewModel.Busy);
-        commands.Add(debug);
-        var inspect = TileButton("\uE946", compact ? "调试" : "开始调试", debug); inspect.Margin = new Thickness(0, 0, 6, 0); grid.Children.Add(inspect);
-        var control = new AsyncCommand(async () => { if (row is not null && Owner is not null) await Owner.ViewModel.SetMainAsync(row); }, () => row?.Info.Online == true && Owner is not null && !Owner.ViewModel.Busy);
-        commands.Add(control);
-        var main = TileButton("\uE7F4", "设为主控", control); main.ToolTip = "设为主控";
-        if (compact && Mode == "screens") { main.Content = new TextBlock { Text = "\uE7F4", FontFamily = new FontFamily("Segoe MDL2 Assets"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }; main.Width = 28; main.Padding = new Thickness(0); }
-        Grid.SetColumn(main, 1); grid.Children.Add(main); return grid;
-    }
-
-    private Button TileButton(string glyph, string caption, ICommand command)
-    {
-        var content = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
-        content.Children.Add(new TextBlock { Text = glyph, FontFamily = new FontFamily("Segoe MDL2 Assets"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 5, 0) }); content.Children.Add(new TextBlock { Text = caption, VerticalAlignment = VerticalAlignment.Center });
-        var button = new Button { Content = content, Command = command, ToolTip = caption, Height = Mode == "cards" ? 34 : 28, Margin = new Thickness(0), Padding = new Thickness(8, 0, 8, 0), FontSize = Mode == "screens" ? 10 : 12 };
-        if (Owner?.TryFindResource("SubtleButton") is Style style) button.Style = style; return button;
-    }
-
-    private static CheckBox Selection()
-    {
-        var check = new CheckBox { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0), ToolTip = "选择设备" };
-        check.SetBinding(ToggleButton.IsCheckedProperty, new Binding(nameof(DeviceRow.IsSelected)) { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }); return check;
-    }
-    private static TextBlock Bound(string path, double size, bool bold = false)
-    {
-        var text = new TextBlock { FontSize = size, Foreground = Ink, FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
-        text.SetBinding(TextBlock.TextProperty, new Binding(path) { Converter = new WallValueConverter() }); text.SetBinding(ToolTipProperty, new Binding(path)); return text;
-    }
-    private static FrameworkElement Detail(string title, string path)
-    {
-        var grid = new Grid { Margin = new Thickness(0, 0, 0, 5) }; grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(60) }); grid.ColumnDefinitions.Add(new ColumnDefinition());
-        grid.Children.Add(new TextBlock { Text = title, FontSize = 11, Foreground = Muted, VerticalAlignment = VerticalAlignment.Center }); var value = Bound(path, 11); Grid.SetColumn(value, 1); grid.Children.Add(value); return grid;
-    }
-    private static FrameworkElement Badge(string path, bool android)
-    {
-        var text = Bound(path, 11); text.Foreground = android ? AccentText : Muted;
-        text.SetBinding(TextBlock.TextProperty, new Binding(path) { Converter = new WallValueConverter(android ? "安卓 " : "") });
-        return new Border { Child = text, Background = new SolidColorBrush(android ? Color.FromRgb(239, 245, 255) : Color.FromRgb(244, 246, 249)), CornerRadius = new CornerRadius(5), Padding = new Thickness(7, 3, 7, 3), Margin = new Thickness(0, 0, 7, 0) };
-    }
-
-    private void Subscribe()
-    {
-        if (subscribed is not null || Owner is null || row is null) return;
-        subscribed = Owner.ViewModel; subscribed.PropertyChanged += ViewModelChanged; row.PropertyChanged += RowChanged;
-    }
-    private void Unsubscribe()
-    {
-        if (subscribed is not null) subscribed.PropertyChanged -= ViewModelChanged;
-        if (row is not null) row.PropertyChanged -= RowChanged; subscribed = null;
-    }
-    private void ViewModelChanged(object? sender, PropertyChangedEventArgs args) => RefreshState();
-    private void RowChanged(object? sender, PropertyChangedEventArgs args) => RefreshState();
-    private void RefreshState()
-    {
-        if (row is null || Owner is null) return;
-        BorderBrush = ReferenceEquals(Owner.ViewModel.CurrentDevice, row) ? Accent : Line;
-        if (status is not null) { status.Text = row.State; status.Foreground = row.Info.Online ? new SolidColorBrush(Color.FromRgb(8, 115, 76)) : Muted; }
-        if (mainBadge is not null) mainBadge.Text = ReferenceEquals(Owner.ViewModel.MainDevice, row) ? "主控" : "";
-        foreach (var command in commands) { if (command is ActionCommand action) action.Refresh(); if (command is AsyncCommand asyncCommand) asyncCommand.Refresh(); }
-    }
-    private static T? FindParent<T>(DependencyObject? value) where T : DependencyObject
-    {
-        while (value is not null) { if (value is T parent) return parent; value = value is Visual ? VisualTreeHelper.GetParent(value) : LogicalTreeHelper.GetParent(value); }
-        return null;
-    }
-}
-
-public sealed class WallValueConverter(string prefix = "") : IValueConverter
-{
-    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) => prefix + (value is null || string.IsNullOrWhiteSpace(value.ToString()) ? "未核验" : value);
-    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => throw new NotSupportedException();
 }
 
 ```
@@ -10358,15 +10311,12 @@ namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
-    private string wallViewMode = "list";
-    private readonly Dictionary<string, ToggleButton> wallViewChoices = [];
+    private const string wallViewMode = "list";
     private Grid wallWorkspace = null!;
-    private FrameworkElement wallCards = null!;
-    private FrameworkElement wallScreens = null!;
     private FrameworkElement wallList = null!;
     private FrameworkElement wallMainPanel = null!;
-    private FrameworkElement wallDensity = null!;
-    private ToggleButton wallMainToggle = null!;
+    private CheckBox wallSelectAll = null!;
+    private TextBlock mainSyncSummary = null!;
     private ScrollViewer wallActionsViewport = null!;
 
     internal string WallViewMode => wallViewMode;
@@ -10379,68 +10329,15 @@ public partial class MainWindow
         page.SizeChanged += (_, _) => wallActionsViewport.MaxHeight = Math.Max(120, page.ActualHeight - 176);
         DockPanel.SetDock(wallActionsViewport, Dock.Top); page.Children.Add(wallActionsViewport);
         top.Children.Add(BuildDeviceSummary());
-        var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 18) };
-        var modes = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        var modeFrame = new Border { Child = modes, Background = new SolidColorBrush(Color.FromRgb(245, 247, 251)), CornerRadius = new CornerRadius(6), Padding = new Thickness(3) }; DockPanel.SetDock(modeFrame, Dock.Right); heading.Children.Add(modeFrame);
-        foreach (var (mode, glyph, title) in new[] { ("cards", "\uE8A9", "设备卡片"), ("screens", "\uE80A", "屏幕视图"), ("list", "\uE8EF", "列表视图") })
-        {
-            var choice = WallToggle(glyph, title); choice.Margin = new Thickness(0);
-            choice.Click += (_, _) => SetWallViewMode(mode);
-            wallViewChoices.Add(mode, choice); modes.Children.Add(choice);
-        }
-        heading.Children.Add(new TextBlock { Text = "设备管理", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, VerticalAlignment = VerticalAlignment.Center });
-        top.Children.Add(heading);
+        top.Children.Add(new TextBlock { Text = "设备管理", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, Margin = new Thickness(0, 0, 0, 14) });
         top.Children.Add(BuildOneClickLaunchTools());
-        top.Children.Add(BuildInstanceActions());
-        var tools = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
-        var select = WallButton("\uE73A", "全选", new ActionCommand(() => { foreach (var row in unifiedDeviceView.Cast<UnifiedDeviceRow>().ToArray()) row.IsSelected = true; RefreshLaunchCommands(); })); select.ToolTip = "选择当前筛选中的全部设备"; tools.Children.Add(select);
-        tools.Children.Add(WallButton("\uE711", "清空", new ActionCommand(ClearWallSelection)));
-        var mouse = WallToggle("\uE962", "同步鼠标"); mouse.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(WorkspaceViewModel.SyncMouse))); tools.Children.Add(mouse);
-        var keyboard = WallToggle("\uE765", "同步键盘"); keyboard.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(WorkspaceViewModel.SyncKeyboard))); tools.Children.Add(keyboard);
-        var automatic = WallToggle("\uE787", "自动截图"); automatic.IsChecked = true; automatic.Checked += (_, _) => { autoCapture = true; }; automatic.Unchecked += (_, _) => { autoCapture = false; }; tools.Children.Add(automatic);
-        wallMainToggle = WallToggle("\uE7F4", "主控面板"); wallMainToggle.Checked += (_, _) => UpdateWallMainPanel(); wallMainToggle.Unchecked += (_, _) => UpdateWallMainPanel(); tools.Children.Add(wallMainToggle);
-        tools.Children.Add(BuildWallDensity()); top.Children.Add(tools);
         top.Children.Add(new Border { Height = 1, Background = WallBorder });
         wallWorkspace = new Grid { Margin = new Thickness(22, 18, 22, 18) };
         wallWorkspace.RowDefinitions.Add(new RowDefinition());
         wallWorkspace.ColumnDefinitions.Add(new ColumnDefinition()); wallWorkspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0) });
-        var views = new Grid(); wallWorkspace.Children.Add(views);
-        wallCards = BuildWallItems("cards"); views.Children.Add(wallCards);
-        wallScreens = BuildWallItems("screens"); views.Children.Add(wallScreens);
-        wallList = BuildWallList(); views.Children.Add(wallList);
+        wallList = BuildWallList(); wallWorkspace.Children.Add(wallList);
         wallMainPanel = BuildWallMainPanel(); Grid.SetColumn(wallMainPanel, 1); wallWorkspace.Children.Add(wallMainPanel);
-        page.Children.Add(wallWorkspace); SetWallViewMode("list"); return page;
-    }
-
-    private FrameworkElement BuildWallDensity()
-    {
-        var density = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 6), ToolTip = "屏幕视图目标列数；窄窗口自动减少列数" };
-        density.Children.Add(new TextBlock { Text = "屏数", Foreground = WallMuted, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 9, 0) });
-        var slider = new Slider { Minimum = 5, Maximum = 20, TickFrequency = 1, IsSnapToTickEnabled = true, Width = 94, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 9, 0) };
-        slider.SetBinding(RangeBase.ValueProperty, TwoWay(nameof(WorkspaceViewModel.WallColumns))); density.Children.Add(slider);
-        var decreaseCommand = new ActionCommand(() => ViewModel.WallColumns--, () => ViewModel.WallColumns > 5);
-        var increaseCommand = new ActionCommand(() => ViewModel.WallColumns++, () => ViewModel.WallColumns < 20);
-        var decrease = WallButton("\uE738", "减少屏数", decreaseCommand); decrease.Content = WallGlyph("\uE738"); decrease.Width = 28; decrease.MinWidth = 0; decrease.Padding = new Thickness(0); density.Children.Add(decrease);
-        var count = BoundText(nameof(WorkspaceViewModel.WallColumns)); count.Width = 24; count.TextAlignment = TextAlignment.Center; count.FontWeight = FontWeights.SemiBold; count.Margin = new Thickness(0, 0, 5, 0); density.Children.Add(count);
-        var increase = WallButton("\uE710", "增加屏数", increaseCommand); increase.Content = WallGlyph("\uE710"); increase.Width = 28; increase.MinWidth = 0; increase.Padding = new Thickness(0); density.Children.Add(increase);
-        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(WorkspaceViewModel.WallColumns)) { decreaseCommand.Refresh(); increaseCommand.Refresh(); } };
-        wallDensity = density; return density;
-    }
-
-    private FrameworkElement BuildWallItems(string mode)
-    {
-        var grid = new Grid();
-        var items = new ItemsControl { ItemsSource = unifiedDeviceView, HorizontalContentAlignment = HorizontalAlignment.Stretch };
-        var panel = new FrameworkElementFactory(typeof(UniformGrid));
-        var columns = new MultiBinding { Converter = new WallColumnsConverter(mode == "screens" ? 118 : 344, mode == "screens") };
-        columns.Bindings.Add(new Binding(nameof(WorkspaceViewModel.WallColumns)) { Source = ViewModel });
-        columns.Bindings.Add(new Binding(nameof(ActualWidth)) { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(ScrollViewer), 1) });
-        panel.SetBinding(UniformGrid.ColumnsProperty, columns); items.ItemsPanel = new ItemsPanelTemplate(panel);
-        var tile = new FrameworkElementFactory(typeof(UnifiedDeviceTile)); tile.SetBinding(UnifiedDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) }); tile.SetValue(UnifiedDeviceTile.ModeProperty, mode);
-        items.ItemTemplate = new DataTemplate { VisualTree = tile };
-        grid.Children.Add(new ScrollViewer { Content = items, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
-        var empty = new TextBlock { Text = "当前筛选没有设备", Foreground = WallMuted, FontSize = 14, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        empty.SetBinding(VisibilityProperty, new Binding(nameof(ItemsControl.HasItems)) { Source = items, Converter = new WallEmptyVisibilityConverter() }); grid.Children.Add(empty); return grid;
+        page.Children.Add(wallWorkspace); CloseMainControl(); return page;
     }
 
     private FrameworkElement BuildWallList()
@@ -10448,13 +10345,22 @@ public partial class MainWindow
         var grid = new DataGrid { ItemsSource = unifiedDeviceView, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Single, HeadersVisibility = DataGridHeadersVisibility.Column, RowHeight = 48, ColumnHeaderHeight = 40, Background = Brushes.White, BorderThickness = new Thickness(0), GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, HorizontalGridLinesBrush = WallBorder, IsReadOnly = true };
         grid.SelectionChanged += (_, _) => { if (wallViewMode == "list" && grid.SelectedItem is UnifiedDeviceRow { Device: { } device }) ViewModel.CurrentDevice = device; };
         var checkbox = new FrameworkElementFactory(typeof(CheckBox)); checkbox.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center); checkbox.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(UnifiedDeviceRow.IsSelected))); checkbox.SetBinding(IsEnabledProperty, new Binding(nameof(UnifiedDeviceRow.CanSelect)));
-        grid.Columns.Add(new DataGridTemplateColumn { Header = "选择", Width = 54, CellTemplate = new DataTemplate { VisualTree = checkbox } });
+        wallSelectAll = new CheckBox { Name = "SelectAllDevices", IsThreeState = true, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, ToolTip = "勾选全部可操作设备；取消勾选清除所有选择，不删除设备或数据" };
+        System.Windows.Automation.AutomationProperties.SetName(wallSelectAll, "选择全部设备");
+        wallSelectAll.Click += (_, _) =>
+        {
+            var select = wallSelectAll.IsChecked == true;
+            if (select) foreach (var row in unifiedDeviceView.Cast<UnifiedDeviceRow>().Where(row => row.CanSelect).ToArray()) row.IsSelected = true;
+            else ClearWallSelection();
+            UpdateWallSelectionToggle();
+        };
+        grid.Columns.Add(new DataGridTemplateColumn { Header = wallSelectAll, Width = 54, CellTemplate = new DataTemplate { VisualTree = checkbox } });
         TextColumn(grid, "编号", nameof(UnifiedDeviceRow.Number), 58);
         TextColumn(grid, "设备名称", nameof(UnifiedDeviceRow.Name), 175); TextColumn(grid, "状态", nameof(UnifiedDeviceRow.State), 110);
-        var actions = new FrameworkElementFactory(typeof(UnifiedDeviceTile)); actions.SetBinding(UnifiedDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) }); actions.SetValue(UnifiedDeviceTile.ModeProperty, "list");
+        var actions = new FrameworkElementFactory(typeof(UnifiedDeviceTile)); actions.SetBinding(UnifiedDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) });
         grid.Columns.Add(new DataGridTemplateColumn { Header = "操作", Width = 214, CellTemplate = new DataTemplate { VisualTree = actions } });
         TextColumn(grid, "型号", nameof(UnifiedDeviceRow.Model), 145); TextColumn(grid, "品牌", nameof(UnifiedDeviceRow.Brand), 110); TextColumn(grid, "安卓", nameof(UnifiedDeviceRow.Android), 80);
-        TextColumn(grid, "设备序列号", nameof(UnifiedDeviceRow.Serial), 185); TextColumn(grid, "分辨率", nameof(UnifiedDeviceRow.Resolution), 120); TextColumn(grid, "分组", nameof(UnifiedDeviceRow.Group), 110);
+        TextColumn(grid, "设备序列号", nameof(UnifiedDeviceRow.Serial), 185); TextColumn(grid, "分辨率", nameof(UnifiedDeviceRow.Resolution), 120);
         TextColumn(grid, "安卓状态", nameof(UnifiedDeviceRow.AndroidState), 100);
         TextColumn(grid, "播放器进程", nameof(UnifiedDeviceRow.ProcessId), 105); TextColumn(grid, "虚拟机进程", nameof(UnifiedDeviceRow.VBoxProcessId), 105);
         TextColumn(grid, "密度", nameof(UnifiedDeviceRow.Dpi), 75); TextColumn(grid, "会话代次", nameof(UnifiedDeviceRow.Generation), 175);
@@ -10469,7 +10375,14 @@ public partial class MainWindow
         var main = new DockPanel { LastChildFill = true, MinHeight = 360 };
         var viewport = new ScrollViewer { Content = main, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new Thickness(18, 0, 0, 0) };
         main.SetBinding(HeightProperty, new Binding(nameof(ActualHeight)) { Source = viewport });
-        var heading = BoundText(nameof(WorkspaceViewModel.MainContext), true); heading.FontWeight = FontWeights.SemiBold; heading.Foreground = WallInk; heading.Margin = new Thickness(0, 0, 0, 12); DockPanel.SetDock(heading, Dock.Top); main.Children.Add(heading);
+        var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
+        var close = Button("\uE711", "关闭控制面板", CloseMainControl); close.Content = WallGlyph("\uE711"); close.Width = close.MinWidth = 32; close.Padding = new Thickness(0); DockPanel.SetDock(close, Dock.Right); heading.Children.Add(close);
+        var caption = BoundText(nameof(WorkspaceViewModel.MainContext), true); caption.FontWeight = FontWeights.SemiBold; caption.Foreground = WallInk; heading.Children.Add(caption); DockPanel.SetDock(heading, Dock.Top); main.Children.Add(heading);
+        var sync = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
+        mainSyncSummary = new TextBlock { Foreground = WallMuted, Margin = new Thickness(0, 0, 0, 6), TextWrapping = TextWrapping.Wrap }; sync.Children.Add(mainSyncSummary);
+        var mouse = Check("同步点击滑动", nameof(WorkspaceViewModel.SyncMouse)); mouse.ToolTip = "将主控面板嵌入画面上的点击、滑动同步到列表勾选的其他设备；不监听雷电窗口的鼠标"; sync.Children.Add(mouse);
+        var keyboard = Check("同步按键", nameof(WorkspaceViewModel.SyncKeyboard)); keyboard.ToolTip = "将程序内主控面板的主页、返回、任务和音量键同步到列表勾选的其他设备；不是物理键盘镜像，文字请使用文本输入"; keyboard.Margin = new Thickness(0, 6, 0, 0); sync.Children.Add(keyboard);
+        DockPanel.SetDock(sync, Dock.Top); main.Children.Add(sync);
         var bottom = new StackPanel { Margin = new Thickness(0, 12, 0, 0) }; DockPanel.SetDock(bottom, Dock.Bottom); main.Children.Add(bottom);
         var keys = Toolbar(); keys.Children.Add(Button("\uE72B", "返回", () => ViewModel.KeyAsync(4), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE80F", "主页", () => ViewModel.KeyAsync(3), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE7C4", "任务", () => ViewModel.KeyAsync(187), canExecute: ViewModel.CanControlMainInput));
         foreach (var (glyph, label, key, name) in new[] { ("\uE995", "增大音量", 24, "MainVolumeUp"), ("\uE993", "减小音量", 25, "MainVolumeDown") })
@@ -10500,21 +10413,41 @@ public partial class MainWindow
 
     internal void SetWallViewMode(string mode)
     {
-        if (mode is not ("cards" or "screens" or "list")) throw new ArgumentException("设备视图不合法：" + mode, nameof(mode));
-        wallViewMode = mode;
-        wallCards.Visibility = mode == "cards" ? Visibility.Visible : Visibility.Collapsed;
-        wallScreens.Visibility = mode == "screens" ? Visibility.Visible : Visibility.Collapsed;
-        wallList.Visibility = mode == "list" ? Visibility.Visible : Visibility.Collapsed;
-        foreach (var choice in wallViewChoices) choice.Value.IsChecked = choice.Key == mode;
-        wallDensity.IsEnabled = mode == "screens"; wallMainToggle.IsChecked = mode == "screens"; UpdateWallMainPanel();
-        wallDensity.Visibility = wallMainToggle.Visibility = mode == "screens" ? Visibility.Visible : Visibility.Collapsed;
+        if (mode != "list") throw new ArgumentException("设备管理仅支持列表：" + mode, nameof(mode));
     }
 
-    private void UpdateWallMainPanel()
+    internal async Task OpenMainControlAsync(DeviceRow row)
     {
-        if (wallMainPanel is null || wallWorkspace is null) return;
-        var visible = wallMainToggle.IsChecked == true;
-        wallMainPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed; wallWorkspace.ColumnDefinitions[1].Width = new GridLength(visible ? 272 : 0);
+        if (!ViewModel.Devices.Contains(row) || !row.Info.Online || ViewModel.Busy) throw new DeviceException("控制目标不可用，请选择已连接设备。", 409, 1003);
+        await ViewModel.SetMainAsync(row);
+        if (!ReferenceEquals(ViewModel.MainDevice, row)) return;
+        wallMainPanel.Visibility = Visibility.Visible; wallWorkspace.ColumnDefinitions[1].Width = new GridLength(300);
+        UpdateWallSelectionToggle();
+        await CaptureTickAsync();
+    }
+
+    internal void CloseMainControl()
+    {
+        gestureStart = null; gestureDevice = null; gestureTargets = []; gestureTargetGenerations.Clear();
+        if (Mouse.Captured is Image image) image.ReleaseMouseCapture();
+        wallMainPanel.Visibility = Visibility.Collapsed; wallWorkspace.ColumnDefinitions[1].Width = new GridLength(0);
+    }
+
+    private void UpdateWallSelectionToggle()
+    {
+        if (wallSelectAll is not null)
+        {
+            var visible = unifiedDeviceView.Cast<UnifiedDeviceRow>().Where(row => row.CanSelect).ToArray();
+            var selected = visible.Count(row => row.IsSelected);
+            var hiddenSelected = unifiedDevices.Any(row => row.IsSelected && !visible.Contains(row));
+            wallSelectAll.IsChecked = visible.Length == 0 && hiddenSelected ? null : selected == 0 ? false : selected == visible.Length ? true : null;
+            wallSelectAll.IsEnabled = visible.Length != 0 || unifiedDevices.Any(row => row.IsSelected);
+        }
+        if (mainSyncSummary is not null)
+        {
+            var targets = unifiedDevices.Where(row => row.IsSelected && row.Device != ViewModel.MainDevice).ToArray();
+            mainSyncSummary.Text = $"同步目标 {targets.Length} 台" + (targets.Any(row => !row.Connected) ? " · 含未连接设备，连接前不可同步" : "");
+        }
     }
 
     private static readonly Brush WallInk = new SolidColorBrush(Color.FromRgb(24, 34, 57));
@@ -10551,18 +10484,6 @@ public partial class MainWindow
         var swipe = (start - end.Value).Length > 8;
         await ViewModel.SendInputAsync(new InputSnapshot { SourceSerial = row.Serial, Kind = swipe ? InputKind.Swipe : InputKind.Tap, X = (int)start.X, Y = (int)start.Y, X2 = (int)end.Value.X, Y2 = (int)end.Value.Y, DurationMs = 300, SourceWidth = (image.Source as BitmapSource)?.PixelWidth ?? row.Info.Width, SourceHeight = (image.Source as BitmapSource)?.PixelHeight ?? row.Info.Height, SourceGeneration = gestureDeviceGeneration, Generation = gestureGeneration, TargetSerials = gestureTargets }); e.Handled = true;
     }
-}
-
-public sealed class WallColumnsConverter(double minimumWidth, bool usePreferred) : IMultiValueConverter
-{
-    public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
-    {
-        var preferred = values.FirstOrDefault() is int count ? count : 5;
-        var available = values.Length > 1 && values[1] is double width && double.IsFinite(width) && width > 0 ? width : minimumWidth;
-        var responsive = Math.Max(1, (int)Math.Floor(available / minimumWidth));
-        return usePreferred ? Math.Min(preferred, responsive) : responsive;
-    }
-    public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture) => throw new NotSupportedException();
 }
 
 public sealed class WallEmptyVisibilityConverter : IValueConverter
@@ -10696,23 +10617,20 @@ public partial class MainWindow
     {
         var surface = new Border { Background = Brushes.White, BorderBrush = WorkspaceBrush("#E4E8F0"), BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(20, 10, 20, 10) };
         var row = new Grid(); surface.Child = row;
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(158) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         row.ColumnDefinitions.Add(new ColumnDefinition());
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var group = new ComboBox { ItemsSource = ViewModel.Groups, ItemTemplate = CaptionChoices(), ToolTip = "设备分组", Margin = new Thickness(0, 0, 12, 0), MinHeight = 38 };
-        group.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.GroupFilter))); row.Children.Add(group);
         var targetLabel = new TextBlock { Text = "单设备目标", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 10, 0), Foreground = WorkspaceBrush("#63718A") };
         singleTargetLabel = targetLabel;
-        Grid.SetColumn(targetLabel, 1); row.Children.Add(targetLabel);
+        row.Children.Add(targetLabel);
         var target = new ComboBox { Name = "SingleDeviceTarget", ItemsSource = new ListCollectionView(ViewModel.Devices), ItemTemplate = OperationTargetTemplate(), IsSynchronizedWithCurrentItem = false, MinHeight = 38, MaxWidth = 520, HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 0, 10, 0), ToolTip = "节点、截图、命令等单设备操作目标" };
         singleTargetChoice = target;
         target.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.CurrentDevice)));
-        System.Windows.Automation.AutomationProperties.SetName(target, "单设备目标"); Grid.SetColumn(target, 2); row.Children.Add(target);
-        var details = new Button { Content = ShellGlyph("\uE8A7"), ToolTip = "设备详情与分组", MinHeight = 38, Margin = new Thickness(0, 0, 5, 0) };
-        details.SetResourceReference(StyleProperty, "IconButton"); details.Click += (_, _) => ShowDeviceDirectory(); Grid.SetColumn(details, 3); row.Children.Add(details);
+        System.Windows.Automation.AutomationProperties.SetName(target, "单设备目标"); Grid.SetColumn(target, 1); row.Children.Add(target);
+        var details = new Button { Content = ShellGlyph("\uE8A7"), ToolTip = "设备详情", MinHeight = 38, Margin = new Thickness(0, 0, 5, 0) };
+        details.SetResourceReference(StyleProperty, "IconButton"); details.Click += (_, _) => ShowDeviceDirectory(); Grid.SetColumn(details, 2); row.Children.Add(details);
         var settings = new Button { Content = ShellGlyph("\uE713"), ToolTip = "环境设置", MinHeight = 38 };
-        settings.SetResourceReference(StyleProperty, "IconButton"); settings.Click += (_, _) => NavigateTo("设置"); Grid.SetColumn(settings, 4); row.Children.Add(settings);
+        settings.SetResourceReference(StyleProperty, "IconButton"); settings.Click += (_, _) => NavigateTo("设置"); Grid.SetColumn(settings, 3); row.Children.Add(settings);
         var advanced = new ContextMenu();
         var network = new MenuItem { Header = "网络连接（高级）" }; network.Click += (_, _) => ShowScanner(); advanced.Items.Add(network);
         var refresh = new MenuItem { Header = "立即更新目录" }; refresh.Click += async (_, _) => await UpdateDeviceDirectoryAsync(); advanced.Items.Add(refresh);
@@ -10774,7 +10692,7 @@ public partial class MainWindow
     {
         if (directoryWindow is null)
         {
-            directoryWindow = new Window { Owner = this, DataContext = ViewModel, Title = "设备与分组", Width = 420, Height = 640, MinWidth = 360, MinHeight = 480, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            directoryWindow = new Window { Owner = this, DataContext = ViewModel, Title = "设备详情", Width = 420, Height = 640, MinWidth = 360, MinHeight = 480, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             directoryWindow.Content = BuildDirectory();
             directoryWindow.Closing += (_, args) => { if (!closing) { args.Cancel = true; directoryWindow.Hide(); } };
         }
@@ -10823,7 +10741,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     private CancellationTokenSource? transferCancellation;
     private DeviceRow? currentDevice;
     private DeviceRow? mainDevice;
-    private string groupFilter = "全部分组";
     private string statusFilter = "全部状态";
     private bool busy;
     private bool externalBusy;
@@ -10845,7 +10762,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     private bool syncKeyboard;
     private int wallColumns;
     private string deviceName = "";
-    private string deviceGroup = "";
     private string settingsNotice = "";
 
     public WorkspaceViewModel(MatrixRuntime initialRuntime, string dataDirectory, bool demo)
@@ -10893,7 +10809,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     public string ModeLabel => LocalizationService.Current.Get(demo ? "演示设备 · 不连接真实 ADB" : "真实设备模式");
     public ObservableCollection<DeviceRow> Devices { get; } = [];
     public System.ComponentModel.ICollectionView DeviceView { get; }
-    public ObservableCollection<string> Groups { get; } = ["全部分组", "未分组"];
     public ObservableCollection<NodeRow> Nodes { get; } = [];
     public ObservableCollection<ShellEntry> ShellHistory { get; } = [];
     public ObservableCollection<PixelSample> Colors { get; } = [];
@@ -10938,7 +10853,6 @@ public sealed class WorkspaceViewModel : ObservableObject
         {
             if (!Set(ref currentDevice, value)) return;
             DeviceName = value?.Name ?? "";
-            DeviceGroup = value?.Info.GroupId ?? "";
             DebugImage = value?.Screenshot;
             ClearNodes();
             Apps.Clear();
@@ -10952,7 +10866,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     public DeviceRow? MainDevice { get => mainDevice; private set { Set(ref mainDevice, value); Changed(nameof(MainContext)); WallChanged?.Invoke(); } }
     public string DeviceContext => CurrentDevice is { } row ? $"{row.Name} · {row.Serial} · {LocalizationService.Current.Get(row.State)}" : LocalizationService.Current.Get("未选择设备");
     public string MainContext => MainDevice is { } row ? $"{LocalizationService.Current.Get("主控")}: {row.Name} · {row.Serial}" : $"{LocalizationService.Current.Get("主控")}: {LocalizationService.Current.Get("未指定")}";
-    public string GroupFilter { get => groupFilter; set { Set(ref groupFilter, value); RefreshFilter(); } }
     public string StatusFilter { get => statusFilter; set { Set(ref statusFilter, value); RefreshFilter(); } }
     public bool Busy { get => busy || externalBusy; private set { Set(ref busy, value); SyncApiWriteGuard(); RefreshCommands(); } }
     internal void SetExternalBusy(bool value) { externalBusy = value; Changed(nameof(Busy)); SyncApiWriteGuard(); RefreshCommands(); }
@@ -10976,7 +10889,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     public bool SyncKeyboard { get => syncKeyboard; set => Set(ref syncKeyboard, value); }
     public int WallColumns { get => wallColumns; set { Set(ref wallColumns, Math.Clamp(value, 5, 20)); WallChanged?.Invoke(); } }
     public string DeviceName { get => deviceName; set => Set(ref deviceName, value); }
-    public string DeviceGroup { get => deviceGroup; set => Set(ref deviceGroup, value); }
     public string SettingsNotice { get => settingsNotice; private set => Set(ref settingsNotice, value); }
     public string ApiSummary => $"普通接口：{(runtime.Api.RunningBasicPort is { } basic ? $"http://127.0.0.1:{basic}" : "未启动")}    自动化接口：{(runtime.Api.RunningAutomatorPort is { } automator ? $"http://127.0.0.1:{automator}" : "未启动")}";
     public bool CanUseDevice() => !Busy && CurrentDevice?.Info.Online == true;
@@ -11000,7 +10912,7 @@ public sealed class WorkspaceViewModel : ObservableObject
     private ActionCommand Action(Action action, Func<bool> canExecute) { var command = new ActionCommand(action, canExecute); commands.Add(command); return command; }
     private void RefreshCommands() { foreach (var command in commands) { if (command is AsyncCommand asyncCommand) asyncCommand.Refresh(); else if (command is ActionCommand actionCommand) actionCommand.Refresh(); } Changed(nameof(TargetContext)); }
     private bool ScriptBusy(string serial) => runtime.Scripts.GetStatus(serial).State.ToString() is "Running" or "Cancelling";
-    private bool Matches(DeviceRow row) => (GroupFilter == "全部分组" || row.Group == GroupFilter) && (StatusFilter == "全部状态" || row.Info.State == StatusFilter);
+    private bool Matches(DeviceRow row) => StatusFilter == "全部状态" || row.Info.State == StatusFilter;
     private void RefreshFilter() { DeviceView.Refresh(); Changed(nameof(Counts)); WallChanged?.Invoke(); }
     public void SelectFiltered(bool selected) { foreach (var row in DeviceView.Cast<DeviceRow>()) row.IsSelected = selected; UpdateSelection(); }
     public void UpdateSelection() { Changed(nameof(Counts)); RefreshCommands(); }
@@ -11051,9 +10963,6 @@ public sealed class WorkspaceViewModel : ObservableObject
             else row.Info = info;
         }
         foreach (var row in Devices.Where(row => !rows.Any(info => info.Serial == row.Serial)).ToList()) Devices.Remove(row);
-        Groups.Clear(); Groups.Add("全部分组"); Groups.Add("未分组");
-        foreach (var group in Devices.Select(row => row.Group).Distinct().Where(group => group != "未分组").Order()) Groups.Add(group);
-        if (!Groups.Contains(GroupFilter)) GroupFilter = "全部分组";
         if (CurrentDevice is not null && !Devices.Contains(CurrentDevice)) CurrentDevice = null;
         if (MainDevice is not null && !Devices.Contains(MainDevice)) { await runtime.Input.HandoffAsync(null); MainDevice = null; }
         RefreshApiRows();
@@ -11115,9 +11024,8 @@ public sealed class WorkspaceViewModel : ObservableObject
     public Task SaveMetadataAsync() => ExecuteAsync("保存设备信息", async () =>
     {
         var row = CurrentDevice ?? throw new InvalidOperationException("未选择设备");
-        runtime.Metadata.UpsertMetadata(row.Serial, DeviceName.Trim(), DeviceGroup.Trim());
-        row.Info = row.Info with { Name = DeviceName.Trim(), GroupId = DeviceGroup.Trim() };
-        if (!string.IsNullOrWhiteSpace(DeviceGroup) && !Groups.Contains(DeviceGroup.Trim())) Groups.Add(DeviceGroup.Trim());
+        runtime.Metadata.UpsertMetadata(row.Serial, DeviceName.Trim(), row.Info.GroupId);
+        row.Info = row.Info with { Name = DeviceName.Trim() };
         RefreshFilter();
         Changed(nameof(DeviceContext));
         await Task.CompletedTask;

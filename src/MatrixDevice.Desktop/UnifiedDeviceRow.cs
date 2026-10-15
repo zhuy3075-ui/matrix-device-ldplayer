@@ -21,7 +21,6 @@ public sealed class UnifiedDeviceRow : ObservableObject
     public string Serial => Device?.Serial ?? "-";
     public string Resolution => Device?.Resolution ?? (Instance?.Width is { } width && Instance.Height is { } height ? $"{width} × {height}" : "-");
     public string Group => Device?.Group ?? "未分组";
-    public string ActionCaption => Instance is null ? $"{Name} · {Serial}" : $"实例 {Number} · {Name}";
     public string AndroidState => Instance is null ? "-" : Instance.AndroidStarted ? "已启动" : "未启动";
     public string ProcessId => Instance?.ProcessId is > 0 ? Instance.ProcessId.ToString() : "-";
     public string VBoxProcessId => Instance?.VBoxProcessId is > 0 ? Instance.VBoxProcessId.ToString() : "-";

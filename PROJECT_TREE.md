@@ -13,6 +13,8 @@ MatrixDevice.Reconstructed/
 |   |   |   +-- REPORT.md
 |   |   |-- launch-resource-confirmation/
 |   |   |   +-- REPORT.md
+|   |   |-- list-console/
+|   |   |   +-- REPORT.md
 |   |   |-- realtime-monitoring/
 |   |   |   |-- goal-prompt.md
 |   |   |   |-- HANDOFF.md
@@ -244,7 +246,6 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- UnifiedDevicesAcceptance.cs
 |   |   |   |-- UnifiedDevicesView.cs
 |   |   |   |-- UnifiedDeviceTile.cs
-|   |   |   |-- WallDeviceTile.cs
 |   |   |   |-- WallView.cs
 |   |   |   +-- WorkspaceShell.cs
 |   |   +-- WorkspaceViewModel.cs

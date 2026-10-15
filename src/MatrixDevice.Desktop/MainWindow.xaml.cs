@@ -47,8 +47,6 @@ public partial class MainWindow : Window
     private bool closeApproved;
     private bool captureInProgress;
     private Task? captureOperation;
-    private int captureCursor;
-    private bool autoCapture = true;
     private bool debugAutoLoading;
     private bool debugAutoPending;
     public WorkspaceViewModel ViewModel { get; }
@@ -207,11 +205,10 @@ public partial class MainWindow : Window
 
     private async Task CaptureTickAsync()
     {
-        if (!autoCapture || captureInProgress || closing || ldBusy || ViewModel.HasActiveOperations || directoryOperation is { IsCompleted: false } || !Equals((tabs.SelectedItem as TabItem)?.Tag, "设备墙 / 主控") || !IsActive) return;
-        var rows = ViewModel.DeviceView.Cast<DeviceRow>().Where(row => row.Info.Online).ToArray();
-        if (rows.Length == 0) return;
-        var targets = rows.Skip(captureCursor % rows.Length).Concat(rows.Take(captureCursor % rows.Length)).Take(4).Select(row => row.Serial).ToArray();
-        captureCursor += targets.Length;
+        if (captureInProgress || closing || ldBusy || ViewModel.HasActiveOperations || directoryOperation is { IsCompleted: false }
+            || !Equals((tabs.SelectedItem as TabItem)?.Tag, "设备墙 / 主控") || !IsActive
+            || wallMainPanel.Visibility != Visibility.Visible || ViewModel.MainDevice is not { Info.Online: true } main) return;
+        var targets = new[] { main.Serial };
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(directoryCancellation.Token); deadline.CancelAfter(TimeSpan.FromSeconds(20));
         captureInProgress = true;
         try { captureOperation = ViewModel.RefreshAutomaticScreensAsync(targets, deadline.Token); await captureOperation; }
@@ -282,6 +279,7 @@ public partial class MainWindow : Window
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("启动验收仅允许显式演示模式");
         if (tabs.SelectedIndex != 0 || wallViewMode != "list") throw new InvalidOperationException("初始页面必须是统一设备列表。");
+        await VerifyListConsoleSimplificationAsync();
         if (screenshotPath is not null)
         {
             if (!System.IO.Path.IsPathFullyQualified(screenshotPath)) throw new InvalidOperationException("截图输出必须为绝对路径");
@@ -358,11 +356,12 @@ public partial class MainWindow : Window
         NavigateTo("设备墙 / 主控");
         var removedLabels = new[] { "刷新设备", "扫描设备", "刷新截图" };
         if (VisualDescendants<TextBlock>(Shell).Any(text => removedLabels.Contains(text.Text))) throw new InvalidOperationException("旧重复刷新入口仍可见");
-        SelectUnifiedInstance(unifiedDevices.Single(row => row.Index == ldRows.Single(item => !item.Instance.AndroidStarted).Index));
+        ClearWallSelection();
+        unifiedDevices.Single(row => row.Index == ldRows.Single(item => !item.Instance.AndroidStarted).Index).IsSelected = true;
         var runningOnly = new[] { "关闭实例", "重启实例" };
-        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || !ldCommandsByLabel["资源配置"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的生命周期操作状态不正确");
-        SelectUnifiedInstance(unifiedDevices.Single(row => row.Index == ldRows.Single(item => item.Instance.AndroidStarted).Index));
-        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || ldCommandsByLabel["资源配置"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的连接入口或生命周期操作状态不正确");
+        if (!ldCommandsByLabel["资源配置"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的生命周期操作状态不正确");
+        await ExecuteLdPlayerAsync("launch");
+        if (ldCommandsByLabel["资源配置"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的生命周期操作状态不正确");
         ldBusy = true; ldFeedback.Text = "正在执行所选实例命令…"; RefreshLdButtons();
         if (ldCommands.Any(command => command.CanExecute(null)) || !ldFeedback.Text.Contains("正在执行", StringComparison.Ordinal)) throw new InvalidOperationException("雷电忙状态未锁定操作");
         ldBusy = false; RefreshLdButtons();
@@ -377,8 +376,12 @@ public partial class MainWindow : Window
         finally { ViewModel.Confirm = originalConfirm; }
         if (confirmationCount != 2 || ldSelection.Generation != beforeConfirmation || !ldSelection.Instance.AndroidStarted || ldFeedback.Text != "操作已取消，未发送命令。") throw new InvalidOperationException("雷电关闭或重启的取消确认未生效");
         UpdateLdPlayerRows();
-        if (instanceActionChoice.SelectedItem is not UnifiedDeviceRow selectedInstance || selectedInstance.Index != ldSelection.Index || selectedInstance.Instance?.Generation != ldSelection.Generation)
-            throw new InvalidOperationException("实例操作下拉与真实命令目标不一致");
+        var selectedInstance = unifiedDevices.Single(row => row.IsSelected);
+        if (selectedInstance.Index != ldSelection.Index || selectedInstance.Instance?.Generation != ldSelection.Generation)
+            throw new InvalidOperationException("目录勾选与真实命令目标不一致");
+        ViewModel.Confirm = (_, _) => true;
+        try { await ExecuteLdPlayerAsync("quit"); }
+        finally { ViewModel.Confirm = originalConfirm; }
         await VerifyUnifiedDeviceActionsAsync(screenshotPath);
         var currentBeforeNavigation = ViewModel.CurrentDevice;
         var mainBeforeNavigation = ViewModel.MainDevice;
@@ -400,70 +403,67 @@ public partial class MainWindow : Window
         NavigateTo("设备墙 / 主控");
         if (sidebarColumn.Width.Value != 72 || sidebarCaptions.Any(caption => caption.Visibility != Visibility.Collapsed)) throw new InvalidOperationException("侧栏折叠未生效");
         SetSidebarCollapsed(false);
+        ClearWallSelection();
         foreach (var rowToSelect in ViewModel.Devices) rowToSelect.IsSelected = true;
         ViewModel.UpdateSelection();
         var filteredDevice = ViewModel.Devices[1];
-        var originalFilteredInfo = filteredDevice.Info;
-        const string testGroup = "离线筛选测试";
-        const string emptyGroup = "离线空目录测试";
-        ViewModel.Groups.Add(testGroup); ViewModel.Groups.Add(emptyGroup);
-        filteredDevice.Info = originalFilteredInfo with { GroupId = testGroup };
-        foreach (var mode in new[] { "cards", "screens", "list" })
+        var originalDeviceInfos = ViewModel.Devices.ToDictionary(device => device, device => device.Info);
+        var previousStatus = ViewModel.StatusFilter;
+        try
         {
-            ViewModel.GroupFilter = "全部分组";
-            SetWallViewMode(mode);
-            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-            foreach (var group in new[] { testGroup, emptyGroup, "全部分组" })
+            filteredDevice.Info = filteredDevice.Info with { State = "Offline" };
+            foreach (var status in new[] { "Ready", "Offline", "全部状态" })
             {
-                ViewModel.GroupFilter = group;
+                ViewModel.StatusFilter = status;
                 await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-                if (!ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation) || ViewModel.Targets().Count != 2)
-                    throw new InvalidOperationException($"激活视图筛选改变了上下文：视图={mode}，分组={group}，目标={ViewModel.Targets().Count}");
+                if (!ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation) || ViewModel.Devices.Count(device => device.IsSelected) != 2)
+                    throw new InvalidOperationException($"状态筛选改变了上下文：状态={status}，勾选={ViewModel.Devices.Count(device => device.IsSelected)}");
             }
-        }
-        SetWallViewMode("cards");
-        ViewModel.GroupFilter = testGroup;
-        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-        if (ViewModel.DeviceView.Cast<DeviceRow>().Count() != 1 || ViewModel.Targets().Count != 2 || !ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation))
-            throw new InvalidOperationException($"筛选改变了上下文：可见={ViewModel.DeviceView.Cast<DeviceRow>().Count()}，目标={ViewModel.Targets().Count}，当前={ViewModel.CurrentDevice?.Serial ?? "未选择"}，主控={ViewModel.MainDevice?.Serial ?? "未指定"}");
-        ClearWallSelection();
-        if (ViewModel.Devices.Any(device => device.IsSelected)) throw new InvalidOperationException("清空没有取消隐藏设备的选择");
-        ViewModel.GroupFilter = emptyGroup;
-        SetWallViewMode("cards");
-        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-        if (ViewModel.DeviceView.Cast<DeviceRow>().Any()) throw new InvalidOperationException("空目录筛选失效");
-        if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-empty.png"));
-        ViewModel.GroupFilter = "全部分组";
-        if (ViewModel.DebugImage is not { PixelWidth: > 0 }) throw new InvalidOperationException("视图筛选丢失了当前截图");
-        foreach (var mode in new[] { "cards", "screens", "list" })
-        {
-            wallViewChoices[mode].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            ViewModel.StatusFilter = "Offline";
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-            if (WallViewMode != mode || wallViewChoices.Count(choice => choice.Value.IsChecked == true) != 1 || !ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation))
-                throw new InvalidOperationException("设备视图切换丢失上下文：" + mode);
-            if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-" + mode + ".png"));
+            if (ViewModel.DeviceView.Cast<DeviceRow>().Count() != 1 || ViewModel.Devices.Count(device => device.IsSelected) != 2)
+                throw new InvalidOperationException("状态筛选没有形成唯一可见设备或改变了群控勾选。");
+            var selectAll = VisualDescendants<CheckBox>(Shell).Single(input => input.Name == "SelectAllDevices");
+            selectAll.IsChecked = false; selectAll.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            if (ViewModel.Devices.Any(device => device.IsSelected) || unifiedDevices.Any(device => device.IsSelected))
+                throw new InvalidOperationException("取消表头全选没有清除隐藏设备的选择。");
+            foreach (var device in ViewModel.Devices) device.Info = device.Info with { State = "Ready" };
+            ViewModel.StatusFilter = "Offline";
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (ViewModel.DeviceView.Cast<DeviceRow>().Any() || !unifiedDeviceView.IsEmpty) throw new InvalidOperationException("空目录状态筛选失效。");
+            if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-empty.png"));
         }
-        SetWallViewMode("screens");
+        finally
+        {
+            foreach (var pair in originalDeviceInfos) pair.Key.Info = pair.Value;
+            ViewModel.StatusFilter = previousStatus;
+        }
+        if (ViewModel.DebugImage is not { PixelWidth: > 0 }) throw new InvalidOperationException("状态筛选丢失了当前截图。");
+        SetWallViewMode("list");
+        foreach (var unsupported in new[] { "cards", "screens" })
+        {
+            try { SetWallViewMode(unsupported); throw new InvalidOperationException("已移除的设备视图仍被接受：" + unsupported); }
+            catch (ArgumentException) { }
+        }
+        if (WallViewMode != "list") throw new InvalidOperationException("设备管理未保持唯一列表模式。");
+        await OpenMainControlAsync(mainBeforeNavigation!);
         var expandedControls = VisualDescendants<Expander>(wallMainPanel).Single(); expandedControls.IsExpanded = true;
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (wallMainPanel is ScrollViewer mainScroll) mainScroll.ScrollToEnd();
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-expanded.png"));
         expandedControls.IsExpanded = false;
-        SetWallViewMode("cards");
-        var groupChoice = VisualDescendants<ComboBox>(Shell).First(input => BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == nameof(WorkspaceViewModel.GroupFilter));
-        groupChoice.IsDropDownOpen = true;
-        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-        if (groupChoice.Template.FindName("PART_Popup", groupChoice) is not Popup { IsOpen: true }) throw new InvalidOperationException("分组下拉模板未打开");
-        groupChoice.SelectedItem = "未分组";
-        if (ViewModel.GroupFilter != "未分组") throw new InvalidOperationException("分组下拉绑定失效");
-        groupChoice.IsDropDownOpen = false; groupChoice.SelectedItem = "全部分组";
+        CloseMainControl();
         ShowDeviceDirectory();
-        ViewModel.GroupFilter = testGroup;
+        var statusChoice = VisualDescendants<ComboBox>(directoryWindow!).Single(input => BindingOperations.GetBinding(input, Selector.SelectedItemProperty)?.Path.Path == nameof(WorkspaceViewModel.StatusFilter));
+        statusChoice.IsDropDownOpen = true;
+        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+        if (statusChoice.Template.FindName("PART_Popup", statusChoice) is not Popup { IsOpen: true }) throw new InvalidOperationException("状态筛选下拉模板未打开。");
+        statusChoice.SelectedItem = "Offline";
+        if (ViewModel.StatusFilter != "Offline") throw new InvalidOperationException("状态筛选下拉绑定失效。");
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (!ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation)) throw new InvalidOperationException("设备目录筛选改变了当前设备或主控");
-        ViewModel.GroupFilter = "全部分组"; directoryWindow!.Hide();
-        filteredDevice.Info = originalFilteredInfo; ViewModel.Groups.Remove(testGroup); ViewModel.Groups.Remove(emptyGroup);
+        statusChoice.IsDropDownOpen = false; statusChoice.SelectedItem = previousStatus; directoryWindow!.Hide();
         ShowScanner();
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-scanner.png"), (FrameworkElement)scannerWindow!.Content);
@@ -522,23 +522,26 @@ public partial class MainWindow : Window
         await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
         await Dispatcher.InvokeAsync(() => { UpdateLayout(); }, System.Windows.Threading.DispatcherPriority.Render);
         var tiles = VisualDescendants<UnifiedDeviceTile>(Shell).Where(tile => tile.IsVisible).ToArray();
-        if (screenshotPath is not null) await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".tiles.json"), JsonSerializer.Serialize(tiles.Select(tile => new { tile.Mode, owner = tile.Owner is not null, context = tile.DataContext?.GetType().Name, child = tile.Child?.GetType().Name, tile.ActualWidth, tile.ActualHeight }), JsonDefaults.Options));
-        if (wallViewMode != "list" && !unifiedDeviceView.IsEmpty && tiles.Length == 0) throw new InvalidOperationException("非空统一目录没有生成可见卡片。");
+        if (screenshotPath is not null) await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".rows.json"), JsonSerializer.Serialize(tiles.Select(tile => new { view = "list", owner = tile.Owner is not null, context = tile.DataContext?.GetType().Name, child = tile.Child?.GetType().Name, tile.ActualWidth, tile.ActualHeight }), JsonDefaults.Options));
+        if (!unifiedDeviceView.IsEmpty && tiles.Length == 0) throw new InvalidOperationException("非空统一目录没有生成可见列表操作行。");
         if (tiles.Any(tile => tile.Child is null || tile.ActualHeight < 1)) throw new InvalidOperationException("统一设备视图出现空白条目。");
         if (screenshotPath is not null) SaveRender(screenshotPath);
         var path = System.IO.Path.Combine(ViewModel.DataDirectory, "desktop-smoke.json");
         if (!string.IsNullOrWhiteSpace(ViewModel.Error)) throw new InvalidOperationException("桌面验收产生错误：" + ViewModel.Error);
-        var report = JsonSerializer.Serialize(new { width = ActualWidth, height = ActualHeight, deviceCount = ViewModel.Devices.Count, ldPlayerInstances = ldRows.Count, ldStateButtonsVerified = true, ldBusyVerified = true, ldConfirmationCancellationVerified = confirmationCount == 2, navigationVerified = true, navigationStatePreserved = true, sidebarCollapseVerified = true, wallModesVerified = true, filteredContextPreserved = true, clearHiddenSelectionVerified = true, emptyStateVerified = true, groupDropdownVerified = true, directoryFilterContextPreserved = true, nodes = ViewModel.FlattenNodes().Count(), selectedNode = ViewModel.SelectedNode?.Id, apps = ViewModel.Apps.Count, colors = ViewModel.Colors.Count, shell = ViewModel.ShellHistory.Count, script = LocalizationService.Current.Get(ViewModel.Runtime.Scripts.GetStatus(ViewModel.CurrentDevice!.Serial).State.ToString()), tabs = tabs.Items.Count, language = "zh-CN", chineseInterfaceVerified = true, unavailableControlsDisabled = true, error = ViewModel.Error }, JsonDefaults.Options);
+        var report = JsonSerializer.Serialize(new { width = ActualWidth, height = ActualHeight, deviceCount = ViewModel.Devices.Count, ldPlayerInstances = ldRows.Count, ldStateButtonsVerified = true, ldBusyVerified = true, ldConfirmationCancellationVerified = confirmationCount == 2, navigationVerified = true, navigationStatePreserved = true, sidebarCollapseVerified = true, listOnlyVerified = WallViewMode == "list", groupControlsRemoved = true, selectionTargetUnified = true, filteredContextPreserved = true, clearHiddenSelectionVerified = true, emptyStateVerified = true, statusDropdownVerified = true, directoryFilterContextPreserved = true, nodes = ViewModel.FlattenNodes().Count(), selectedNode = ViewModel.SelectedNode?.Id, apps = ViewModel.Apps.Count, colors = ViewModel.Colors.Count, shell = ViewModel.ShellHistory.Count, script = LocalizationService.Current.Get(ViewModel.Runtime.Scripts.GetStatus(ViewModel.CurrentDevice!.Serial).State.ToString()), tabs = tabs.Items.Count, language = "zh-CN", chineseInterfaceVerified = true, unavailableControlsDisabled = true, error = ViewModel.Error }, JsonDefaults.Options);
         await File.WriteAllTextAsync(path, report);
         if (screenshotPath is not null) await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".json"), report);
     }
 
     private void SaveRender(string path)
     {
-        var group = VisualDescendants<ComboBox>(Shell).Single(input => input.ToolTip as string == "设备分组");
-        var position = group.TranslatePoint(new Point(), Shell);
-        if (position.Y < 0 || position.Y + group.ActualHeight > Shell.ActualHeight)
-            throw new InvalidOperationException("截图前全局分组工具栏超出客户区。");
+        foreach (var label in new[] { "环境设置", "设备详情" })
+        {
+            var control = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == label);
+            var position = control.TranslatePoint(new Point(), Shell);
+            if (position.X < 0 || position.Y < 0 || position.X + control.ActualWidth > Shell.ActualWidth + 1 || position.Y + control.ActualHeight > Shell.ActualHeight + 1)
+                throw new InvalidOperationException("截图前全局工具栏超出客户区：" + label);
+        }
         SaveRender(path, Shell);
     }
     private static void SaveRender(string path, FrameworkElement surface)

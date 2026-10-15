@@ -23,6 +23,7 @@ public partial class MainWindow
     private readonly List<TextBlock> launchFeedback = [];
     private readonly List<AsyncCommand> launchCommands = [];
     private readonly List<ActionCommand> launchCancelCommands = [];
+    private Button? launchCancelButton;
     private bool updatingUnifiedDirectory;
     private readonly HashSet<int> coldLaunched = [];
     private LdWindowVisibility? ldWindowVisibility;
@@ -39,9 +40,8 @@ public partial class MainWindow
     {
         unifiedDeviceView = CollectionViewSource.GetDefaultView(unifiedDevices);
         unifiedDeviceView.Filter = item => item is UnifiedDeviceRow row
-            && (ViewModel.GroupFilter == "全部分组" || row.Group == ViewModel.GroupFilter)
             && (ViewModel.StatusFilter == "全部状态" || row.Device?.Info.State == ViewModel.StatusFilter);
-        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts) or nameof(WorkspaceViewModel.GroupFilter) or nameof(WorkspaceViewModel.StatusFilter)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
+        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts) or nameof(WorkspaceViewModel.StatusFilter)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
     }
 
     internal void UpdateUnifiedDirectory()
@@ -63,7 +63,6 @@ public partial class MainWindow
         }
         foreach (var device in ViewModel.Devices.Where(row => !boundSerials.Contains(row.Serial))) Upsert("device:" + device.Serial, null, device, device.Info.Online);
         foreach (var stale in unifiedDevices.Where(row => !expected.Contains(row.Key)).ToArray()) unifiedDevices.Remove(stale);
-        SelectUnifiedInstance(instanceActionRow);
         foreach (var summary in deviceSummaries) summary.Text = $"本机 {instances.Count} 台 · 已接入 {admitted} 台 · 已连接 {unifiedDevices.Count(row => row.Connected)} 台";
         unifiedDeviceView.Refresh(); SynchronizeUnifiedSelection();
         void Upsert(string key, LdPlayerInstance? instance, DeviceRow? device, bool connected)
@@ -72,8 +71,8 @@ public partial class MainWindow
             var row = unifiedDevices.FirstOrDefault(item => item.Key == key);
             if (row is null)
             {
-                row = new UnifiedDeviceRow(key, ActivateUnifiedRowAsync, CanActivateUnifiedRow, ShowUnifiedWindowAsync, item => !ldBusy && !ViewModel.Busy && item.Index is { } index && ldWindowVisibility?.IsHidden(index) == true, item => item.Device is null ? Task.CompletedTask : ViewModel.SetMainAsync(item.Device));
-                row.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(UnifiedDeviceRow.IsSelected)) SynchronizeUnifiedSelection(true); };
+                row = new UnifiedDeviceRow(key, ActivateUnifiedRowAsync, CanActivateUnifiedRow, ShowUnifiedWindowAsync, item => !ldBusy && !ViewModel.Busy && item.Index is { } index && ldWindowVisibility?.IsHidden(index) == true, item => item.Device is null ? Task.CompletedTask : OpenMainControlAsync(item.Device));
+                row.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(UnifiedDeviceRow.IsSelected)) SynchronizeUnifiedSelection(); };
                 unifiedDevices.Add(row);
             }
             row.Update(instance, device, connected, instance is not null && launchPhases.TryGetValue(instance.Index, out var phase) ? phase : "",
@@ -100,32 +99,37 @@ public partial class MainWindow
         catch (Exception ex) { SetLaunchFeedback("显示窗口失败：" + ViewModel.PresentError(ex)); }
     }
     private void SetLaunchFeedback(string text) { if (ldFeedback is not null) ldFeedback.Text = text; foreach (var feedback in launchFeedback) feedback.Text = text; }
-    private void SynchronizeUnifiedSelection(bool changed = false)
+    private void SynchronizeUnifiedSelection()
     {
-        if (changed)
-        {
-            var selected = unifiedDevices.Where(row => row.IsSelected).ToArray();
-            SelectUnifiedInstance(selected.Length == 1 ? selected[0] : null);
-        }
+        var selected = unifiedDevices.Where(row => row.IsSelected).Take(2).ToArray();
+        SelectUnifiedInstance(selected.Length == 1 ? selected[0] : null);
         ViewModel.SetPendingLaunchSelection(unifiedDevices.Count(row => row.IsSelected && !row.Connected));
         workspaceCounts.Text = $"目录 {unifiedDevices.Count} · 已连接 {unifiedDevices.Count(row => row.Connected)} · 筛选 {unifiedDeviceView.Cast<UnifiedDeviceRow>().Count()} · 已选 {unifiedDevices.Count(row => row.IsSelected)}";
+        UpdateWallSelectionToggle();
         RefreshLaunchCommands();
     }
-    private void RefreshLaunchCommands() { foreach (var command in launchCommands) command.Refresh(); foreach (var command in launchCancelCommands) command.Refresh(); foreach (var row in unifiedDevices) row.RefreshCommands(); }
+    private void RefreshLaunchCommands()
+    {
+        foreach (var command in launchCommands) command.Refresh();
+        foreach (var command in launchCancelCommands) command.Refresh();
+        foreach (var row in unifiedDevices) row.RefreshCommands();
+        if (launchCancelButton is not null) launchCancelButton.Visibility = ldOperationCancellation is not null ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     private FrameworkElement BuildOneClickLaunchTools()
     {
         var section = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+        var feedback = new TextBlock { Foreground = WallMuted, TextWrapping = TextWrapping.Wrap, MinHeight = 19, Margin = new Thickness(0, 0, 0, 4) }; ldFeedback = feedback; launchFeedback.Add(feedback);
         var tools = Toolbar();
         tools.Children.Add(LaunchButton("\uE768", "启动所选", () => ConnectLdInstancesAsync(unifiedDevices.Where(row => row.IsSelected && !row.Connected && row.Index is > 0 and < 99999).Select(row => row.Index!.Value).ToArray()), () => !ViewModel.Demo && CanStartInstances() && unifiedDevices.Any(row => row.IsSelected && !row.Connected && row.Index is > 0 and < 99999), true));
         tools.Children.Add(LaunchButton("\uE768", "一键启动全部", StartAllLdInstancesAsync, () => !ViewModel.Demo && CanStartInstances() && unifiedDevices.Any(row => !row.Connected && row.Index is > 0 and < 99999)));
-        tools.Children.Add(LaunchButton("\uE7F4", "显示窗口", async () => { foreach (var row in unifiedDevices.Where(row => row.IsSelected).ToArray()) await ShowUnifiedWindowAsync(row); }, () => !ldBusy && unifiedDevices.Any(row => row.IsSelected && row.Index is { } index && ldWindowVisibility?.IsHidden(index) == true)));
+        tools.Children.Add(BuildInstanceActions());
         var stop = new ActionCommand(() => ldOperationCancellation?.Cancel(), () => ldOperationCancellation is not null);
         launchCancelCommands.Add(stop);
-        var stopButton = WallButton("\uE71A", "取消启动", stop); stopButton.Content = WallGlyph("\uE71A"); stopButton.Width = 34; stopButton.MinWidth = 0; stopButton.Padding = new Thickness(0); tools.Children.Add(stopButton);
+        var stopButton = WallButton("\uE71A", "取消启动", stop); stopButton.Visibility = Visibility.Collapsed; stopButton.Content = WallGlyph("\uE71A"); stopButton.Width = 34; stopButton.MinWidth = 0; stopButton.Padding = new Thickness(0); launchCancelButton = stopButton; tools.Children.Add(stopButton);
         ViewModel.PropertyChanged += (_, _) => stop.Refresh();
         section.Children.Add(tools);
-        var feedback = new TextBlock { Foreground = WallMuted, TextWrapping = TextWrapping.Wrap, MinHeight = 19, Margin = new Thickness(0, 0, 0, 4) }; ldFeedback = feedback; launchFeedback.Add(feedback); section.Children.Add(feedback);
+        section.Children.Add(feedback);
         return section;
     }
     private Button LaunchButton(string glyph, string label, Func<Task> operation, Func<bool> enabled, bool primary = false)
@@ -238,12 +242,6 @@ public partial class MainWindow
         var indices = confirmedInstances.Select(item => item.Index).ToArray();
         if (indices.Length == 0) throw new DeviceException("没有可启动的独立实例。", 404, 1002);
         await ConnectLdInstancesAsync(indices);
-    }
-
-    private Task ConnectRunningLdInstancesAsync()
-    {
-        var indices = ViewModel.Runtime.LdPlayer?.Instances.Where(item => item.Index > 0 && item.Index != 99999 && item.AndroidStarted && !LdInstanceConnected(item.Index)).Select(item => item.Index).ToArray() ?? [];
-        return ConnectLdInstancesAsync(indices);
     }
 
     private async Task ConnectLdInstancesAsync(int[] indices, IReadOnlyDictionary<int, string>? expectedSerials = null)

@@ -2,7 +2,6 @@ using System.Collections.ObjectModel;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
 using MatrixDevice.Core;
 
 namespace MatrixDevice.Desktop;
@@ -15,34 +14,41 @@ public partial class MainWindow
     private LdInstanceRow? ldSelection;
     private bool ldBusy;
     private TextBlock ldFeedback = null!;
-    private ComboBox instanceActionChoice = null!;
-    private UnifiedDeviceRow? instanceActionRow;
 
     private FrameworkElement BuildInstanceActions()
     {
-        var page = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
         var toolbar = Toolbar();
-        instanceActionChoice = new ComboBox { ItemsSource = new ListCollectionView(unifiedDevices), DisplayMemberPath = nameof(UnifiedDeviceRow.ActionCaption),
-            IsSynchronizedWithCurrentItem = false, Width = 230, MinHeight = 34, Margin = new Thickness(0, 0, 8, 6), ToolTip = "实例操作目标" };
-        instanceActionChoice.SelectionChanged += (_, _) => SelectUnifiedInstance(instanceActionChoice.SelectedItem as UnifiedDeviceRow);
-        toolbar.Children.Add(instanceActionChoice);
-        toolbar.Children.Add(LdButton("\uE768", "启动并连接", () => ConnectLdInstancesAsync([ldSelection!.Index])));
-        toolbar.Children.Add(LdButton("\uE8D4", "接入已运行实例", ConnectRunningLdInstancesAsync, requireSelection: false));
         toolbar.Children.Add(LdButton("\uE710", "新建空白实例", () => EditLdInstanceAsync(true), requireSelection: false));
-        toolbar.Children.Add(LdButton("\uE713", "资源配置", () => EditLdInstanceAsync(false), requireStopped: true));
-        toolbar.Children.Add(LdButton("\uE71A", "关闭实例", () => ExecuteLdPlayerAsync("quit"), requireProcess: true));
-        toolbar.Children.Add(LdButton("\uE777", "重启实例", () => ExecuteLdPlayerAsync("reboot"), requireProcess: true));
-        page.Children.Add(toolbar);
+        var menu = new ContextMenu();
+        AddMenu("\uE713", "资源配置", () => EditLdInstanceAsync(false), requireStopped: true);
+        AddMenu("\uE71A", "关闭实例", () => ExecuteLdPlayerAsync("quit"), requireProcess: true);
+        AddMenu("\uE777", "重启实例", () => ExecuteLdPlayerAsync("reboot"), requireProcess: true);
+        menu.Items.Add(new Separator());
+        var show = new AsyncCommand(async () =>
+        {
+            foreach (var row in unifiedDevices.Where(row => row.IsSelected).ToArray()) await ShowUnifiedWindowAsync(row);
+        }, () => !ldBusy && !ViewModel.Busy && unifiedDevices.Any(row => row.IsSelected && row.Index is { } index && ldWindowVisibility?.IsHidden(index) == true));
+        launchCommands.Add(show);
+        menu.Items.Add(new MenuItem { Header = "恢复旧版隐藏窗口", Icon = WallGlyph("\uE8A7"), Command = show });
+        var more = WallButton("\uE712", "更多操作", new ActionCommand(() => { }));
+        more.ContextMenu = menu; menu.PlacementTarget = more; menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        more.Click += (_, _) => menu.IsOpen = true;
+        toolbar.Children.Add(more);
         UpdateLdPlayerRows();
         ViewModel.PropertyChanged += (_, _) => RefreshLdButtons();
-        return page;
+        return toolbar;
+
+        void AddMenu(string glyph, string label, Func<Task> action, bool requireStopped = false, bool requireProcess = false)
+        {
+            var button = LdButton(glyph, label, action, requireStopped: requireStopped, requireProcess: requireProcess);
+            menu.Items.Add(new MenuItem { Header = label, Icon = WallGlyph(glyph), Command = button.Command, ToolTip = label + "：仅操作列表中唯一勾选的实例" });
+        }
     }
 
     private void SelectUnifiedInstance(UnifiedDeviceRow? row)
     {
-        if (row is not null && !unifiedDevices.Contains(row)) row = null;
-        instanceActionRow = row;
-        if (instanceActionChoice is not null && !ReferenceEquals(instanceActionChoice.SelectedItem, row)) instanceActionChoice.SelectedItem = row;
+        var selected = unifiedDevices.Where(item => item.IsSelected).ToArray();
+        if (selected.Length != 1 || !ReferenceEquals(row, selected[0])) row = null;
         var instance = row?.Index is { } index ? ViewModel.Runtime.LdPlayer?.Instances.FirstOrDefault(item => item.Index == index) : null;
         ldSelection = instance is null ? null : new LdInstanceRow(instance, row!.Binding, row.State);
         RefreshLdButtons();
@@ -74,7 +80,8 @@ public partial class MainWindow
             var binding = ViewModel.Runtime.Settings.LdSerialBindings.TryGetValue(instance.Index, out var serial) ? serial + "（配置绑定，尚未核验）" : "尚未绑定";
             ldRows.Add(new LdInstanceRow(instance, binding, InstanceConnectionState(instance)));
         }
-        SelectUnifiedInstance(instanceActionRow);
+        var selected = unifiedDevices.Where(row => row.IsSelected).Take(2).ToArray();
+        SelectUnifiedInstance(selected.Length == 1 ? selected[0] : null);
         if (ViewModel.Runtime.LdPlayerError is { } error) ldFeedback.Text = "雷电实例发现失败：" + ViewModel.PresentError(new InvalidOperationException(error));
         else if (string.IsNullOrWhiteSpace(ldFeedback.Text)) ldFeedback.Text = ViewModel.Demo ? "演示模式" : "";
         RefreshLdButtons();

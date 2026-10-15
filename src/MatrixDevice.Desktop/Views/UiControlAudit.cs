@@ -8,24 +8,38 @@ namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
+    private async Task VerifyListConsoleSimplificationAsync()
+    {
+        NavigateTo("设备墙 / 主控");
+        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+        if (VisualDescendants<ComboBox>(Shell).Any(input => input.Items.Cast<object>().Any(item => item as string == "全部分组")))
+            throw new InvalidOperationException("设备管理仍显示已删除的全部分组筛选。");
+        var obsolete = new[] { "设备卡片", "屏幕视图", "启动并连接", "接入已运行实例", "选择当前筛选中的全部设备" };
+        if (VisualDescendants<FrameworkElement>(Shell).Any(control => control.ToolTip is string tip && obsolete.Any(label => tip.StartsWith(label, StringComparison.Ordinal))))
+            throw new InvalidOperationException("设备管理仍显示重复视图、启动或全选入口。");
+        if (VisualDescendants<FrameworkElement>(Shell).Any(control => control.ToolTip as string is "同步鼠标" or "同步键盘" or "自动截图"))
+            throw new InvalidOperationException("设备列表仍显示脱离主控场景的同步或截图开关。");
+    }
+
     private async Task VerifyOneClickProjectionAsync()
     {
         NavigateTo("设备墙 / 主控");
-        foreach (var mode in new[] { "cards", "screens", "list" })
-        {
-            SetWallViewMode(mode);
-            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-            if (VisualDescendants<Expander>(Shell).Any(expander => expander.Header as string == "实例快捷操作")
-                || VisualDescendants<TextBlock>(Shell).Any(text => text.Text is "应用包名" or "输入文字"))
-                throw new InvalidOperationException("设备管理仍保留与应用管理/文本输入重复的实例快捷表单：" + mode);
-            if (VisualDescendants<TextBlock>(Shell).Any(text => text.Text == "后台启动") ||
-                VisualDescendants<FrameworkElement>(Shell).Any(control => control.ToolTip is string tip && tip.Contains("隐藏本次启动", StringComparison.Ordinal)))
-                throw new InvalidOperationException("已删除的后台启动入口仍存在：" + mode);
-            var expectedActions = new[] { "启动所选", "一键启动全部", "取消启动", "启动并连接", "接入已运行实例", "新建空白实例", "资源配置", "关闭实例", "重启实例" };
-            foreach (var label in expectedActions)
-                if (!VisualDescendants<Button>(Shell).Any(button => button.ToolTip is string tip && tip.StartsWith(label, StringComparison.Ordinal)))
-                    throw new InvalidOperationException("统一设备页遗漏有效操作：" + mode + " / " + label);
-        }
+        SetWallViewMode("list");
+        await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+        if (VisualDescendants<Expander>(Shell).Any(expander => expander.Header as string == "实例快捷操作")
+            || VisualDescendants<TextBlock>(Shell).Any(text => text.Text is "应用包名" or "输入文字"))
+            throw new InvalidOperationException("设备管理仍保留与应用管理/文本输入重复的实例快捷表单。");
+        if (VisualDescendants<TextBlock>(Shell).Any(text => text.Text == "后台启动") ||
+            VisualDescendants<FrameworkElement>(Shell).Any(control => control.ToolTip is string tip && tip.Contains("隐藏本次启动", StringComparison.Ordinal)))
+            throw new InvalidOperationException("已删除的后台启动入口仍存在。");
+        var expectedActions = new[] { "启动所选", "一键启动全部", "新建空白实例" };
+        foreach (var label in expectedActions)
+            if (!VisualDescendants<Button>(Shell).Any(button => button.ToolTip is string tip && tip.StartsWith(label, StringComparison.Ordinal)))
+                throw new InvalidOperationException("统一设备页遗漏有效操作：" + label);
+        foreach (var label in new[] { "资源配置", "关闭实例", "重启实例" })
+            if (!ldCommandsByLabel.ContainsKey(label)) throw new InvalidOperationException("更多菜单遗漏生命周期命令：" + label);
+        var cancel = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == "取消启动");
+        if (cancel.Visibility != Visibility.Collapsed) throw new InvalidOperationException("没有启动任务时仍显示取消启动按钮。");
         NavigateTo("设备墙 / 主控"); UpdateUnifiedDirectory();
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         var originalDevices = ViewModel.Devices.Count;
@@ -48,11 +62,17 @@ public partial class MainWindow
             if (ViewModel.Transfers.Count != transfers) throw new InvalidOperationException("未连接选择导致其它设备被加入传输。");
             ViewModel.Devices[0].IsSelected = true;
             if (ViewModel.Targets().Count != 0 || ViewModel.CanWriteTargets()) throw new InvalidOperationException("混合选择静默遗漏未连接设备。");
-            var all = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == "选择当前筛选中的全部设备");
-            all.Command!.Execute(null);
+            var all = VisualDescendants<CheckBox>(Shell).Single(input => input.Name == "SelectAllDevices");
+            all.IsChecked = true; all.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             if (unifiedDevices.Any(row => row.CanSelect && !row.IsSelected) || ViewModel.Devices.Count != originalDevices) throw new InvalidOperationException("全选未涵盖关闭实例或伪造了可控设备。");
+            if (all.IsChecked != true || !all.IsThreeState) throw new InvalidOperationException("全选表头没有反映完整选择或三态语义。");
             UpdateUnifiedDirectory();
             if (unifiedDevices.Any(row => row.CanSelect && !row.IsSelected)) throw new InvalidOperationException("自动目录更新丢失选择。");
+            unifiedDevices.First(row => row.CanSelect).IsSelected = false;
+            if (all.IsChecked is not null) throw new InvalidOperationException("部分选择未显示表头中间态。");
+            all.IsChecked = false; all.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            if (unifiedDevices.Any(row => row.IsSelected) || ViewModel.Devices.Any(row => row.IsSelected) || all.IsChecked != false)
+                throw new InvalidOperationException("取消全选没有清除统一目录及设备选择。");
         }
         finally { foreach (var row in unifiedDevices.ToArray()) row.IsSelected = originalSelection.GetValueOrDefault(row.Key); }
         var originalConfirm = ViewModel.Confirm; var confirmations = 0;
@@ -75,15 +95,42 @@ public partial class MainWindow
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("入口归属验收仅限演示模式。");
         var previousTag = (tabs.SelectedItem as TabItem)?.Tag?.ToString() ?? "设备墙 / 主控";
-        var previousMode = wallViewMode; var previousAction = instanceActionRow;
+        var previousMode = wallViewMode;
         var current = ViewModel.CurrentDevice; var main = ViewModel.MainDevice ?? throw new InvalidOperationException("主控夹具缺失。");
-        var info = main.Info; var text = ViewModel.TextInput; var sync = ViewModel.SyncKeyboard;
+        var info = main.Info; var text = ViewModel.TextInput; var sync = ViewModel.SyncKeyboard; var mouseSync = ViewModel.SyncMouse;
         var selections = ViewModel.Devices.ToDictionary(row => row, row => row.IsSelected);
+        var unifiedSelections = unifiedDevices.ToDictionary(row => row.Key, row => row.IsSelected);
         try
         {
-            NavigateTo("设备墙 / 主控"); SetWallViewMode("screens");
-            SelectUnifiedInstance(unifiedDevices.First(row => row.Instance is { Index: > 0, AndroidStarted: false }));
+            NavigateTo("设备墙 / 主控"); SetWallViewMode("list");
+            if (wallMainPanel.Visibility != Visibility.Collapsed) throw new InvalidOperationException("主控面板没有默认收起。");
+            ClearWallSelection();
+            Activate();
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (!IsActive) throw new InvalidOperationException("截图调度验收窗口未激活，不能证明可见主控请求路径。");
+            var hiddenFrames = ViewModel.Devices.ToDictionary(row => row, row => row.CapturedAt);
+            CloseMainControl(); await CaptureTickAsync();
+            if (hiddenFrames.Any(pair => pair.Key.CapturedAt != pair.Value))
+                throw new InvalidOperationException("隐藏主控面板仍请求了设备截图。");
+            await Task.Delay(20);
+            await OpenMainControlAsync(main);
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (wallMainPanel.Visibility != Visibility.Visible || wallWorkspace.ColumnDefinitions[1].Width.Value <= 0)
+                throw new InvalidOperationException("列表主控入口没有展开嵌入面板。");
+            if (!IsActive || main.CapturedAt is not { } captured || hiddenFrames[main] is { } beforeCapture && captured <= beforeCapture
+                || hiddenFrames.Any(pair => !ReferenceEquals(pair.Key, main) && pair.Key.CapturedAt != pair.Value))
+                throw new InvalidOperationException("可见主控没有请求新截图，窗口失焦，或刷新了其它设备。");
+            foreach (var (path, caption, scope) in new[]
+            {
+                (nameof(WorkspaceViewModel.SyncMouse), "同步点击滑动", "嵌入画面"),
+                (nameof(WorkspaceViewModel.SyncKeyboard), "同步按键", "程序")
+            })
+            {
+                var controls = VisualDescendants<CheckBox>(Shell).Where(input => BindingOperations.GetBinding(input, ToggleButton.IsCheckedProperty)?.Path.Path == path).ToArray();
+                if (controls.Length != 1 || !VisualDescendants<CheckBox>(wallMainPanel).Contains(controls[0]) || controls[0].Content as string != caption
+                    || controls[0].ToolTip is not string tip || !tip.Contains("主控", StringComparison.Ordinal) || !tip.Contains("勾选", StringComparison.Ordinal) || !tip.Contains(scope, StringComparison.Ordinal))
+                    throw new InvalidOperationException("主控同步控件的唯一归属或作用范围提示不清晰：" + path);
+            }
             var expected = new Dictionary<string, string> { ["MainVolumeUp"] = "增大音量", ["MainVolumeDown"] = "减小音量" };
             var buttons = VisualDescendants<Button>(wallMainPanel).Where(button => expected.ContainsKey(button.Name)).ToArray();
             if (buttons.Length != 2 || buttons.Any(button => button.ToolTip as string != expected[button.Name] || button.Content is not TextBlock || button.ActualWidth != 34 || button.Command is not AsyncCommand))
@@ -92,9 +139,10 @@ public partial class MainWindow
             foreach (var row in ViewModel.Devices) row.IsSelected = ReferenceEquals(row, other);
             foreach (var enabled in new[] { false, true })
             {
-                ViewModel.SyncKeyboard = enabled; ViewModel.UpdateSelection();
+                ViewModel.SyncKeyboard = enabled; ViewModel.SyncMouse = enabled; ViewModel.UpdateSelection();
                 string[] expectedTargets = enabled ? [other.Serial] : [];
-                if (!ViewModel.InputTargets(main.Serial, false).SequenceEqual(expectedTargets)) throw new InvalidOperationException("主控音量未沿用现有键盘同步目标规则。");
+                if (!ViewModel.InputTargets(main.Serial, false).SequenceEqual(expectedTargets) || !ViewModel.InputTargets(main.Serial, true).SequenceEqual(expectedTargets))
+                    throw new InvalidOperationException("主控鼠标或按键同步没有沿用勾选目标规则。");
                 foreach (var button in buttons)
                 {
                     if (!button.Command!.CanExecute(null)) throw new InvalidOperationException("有效主控的音量命令不可用。");
@@ -106,7 +154,7 @@ public partial class MainWindow
             finally { ViewModel.SetExternalBusy(false); }
             main.Info = info with { State = "Offline" }; ViewModel.UpdateSelection();
             if (buttons.Any(button => button.Command!.CanExecute(null))) throw new InvalidOperationException("离线主控音量仍可操作。");
-            main.Info = info; ViewModel.SyncKeyboard = sync;
+            main.Info = info; ViewModel.SyncKeyboard = sync; ViewModel.SyncMouse = mouseSync;
             foreach (var pair in selections) pair.Key.IsSelected = pair.Value;
             ViewModel.UpdateSelection();
             if (wallMainPanel is ScrollViewer viewport) viewport.ScrollToEnd();
@@ -119,22 +167,30 @@ public partial class MainWindow
             if (screenshot is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshot)!, "canonical-main-controls.png"));
             NavigateTo("应用"); SyncApplicationTargets();
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            var routedFrames = ViewModel.Devices.ToDictionary(row => row, row => row.CapturedAt);
+            await CaptureTickAsync();
+            if (routedFrames.Any(pair => pair.Key.CapturedAt != pair.Value))
+                throw new InvalidOperationException("切换到应用页后仍请求设备管理的主控截图。");
             if (applicationTargets.Any(row => row.IsSelected) || CanManageApplicationTargets() || !VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "安装 APK"))
-                throw new InvalidOperationException("应用入口缺失，或实例下拉隐式授权了应用目标。");
+                throw new InvalidOperationException("应用入口缺失，或统一目录勾选隐式授权了应用目标。");
             NavigateTo("文本"); ViewModel.TextInput = "入口去重中文验证";
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
             if (!VisualDescendants<TextBox>(Shell).Any(input => BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path == nameof(WorkspaceViewModel.TextInput))
                 || !VisualDescendants<Button>(Shell).Any(button => ReferenceEquals(button.Command, ViewModel.TextCommand)))
                 throw new InvalidOperationException("独立文本输入或发送命令入口缺失。");
             if (!ReferenceEquals(current, ViewModel.CurrentDevice) || !ReferenceEquals(main, ViewModel.MainDevice) || selections.Any(pair => pair.Key.IsSelected != pair.Value))
-                throw new InvalidOperationException("入口切换把实例目标隐式映射到群控或主控。");
+                throw new InvalidOperationException("入口切换改写了设备上下文、群控勾选或主控。");
         }
         finally
         {
-            main.Info = info; ViewModel.TextInput = text; ViewModel.SyncKeyboard = sync;
+            main.Info = info; ViewModel.TextInput = text; ViewModel.SyncKeyboard = sync; ViewModel.SyncMouse = mouseSync;
+            CloseMainControl();
+            foreach (var row in unifiedDevices) row.IsSelected = unifiedSelections.GetValueOrDefault(row.Key);
             foreach (var pair in selections) pair.Key.IsSelected = pair.Value;
-            ViewModel.UpdateSelection(); SelectUnifiedInstance(previousAction);
+            ViewModel.UpdateSelection();
             SetWallViewMode(previousMode); NavigateTo(previousTag);
+            if (wallMainPanel.Visibility != Visibility.Collapsed || wallWorkspace.ColumnDefinitions[1].Width.Value != 0)
+                throw new InvalidOperationException("关闭主控后没有归还列表宽度。");
         }
     }
 

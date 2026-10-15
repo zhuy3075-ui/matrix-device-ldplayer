@@ -24,7 +24,6 @@ public partial class MainWindow
         var panel = new DockPanel { Margin = new Thickness(12, 0, 8, 0) };
         var filters = new StackPanel(); DockPanel.SetDock(filters, Dock.Top);
         filters.Children.Add(Label("设备目录"));
-        var group = new ComboBox { ItemsSource = ViewModel.Groups, ItemTemplate = CaptionChoices() }; group.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.GroupFilter))); group.Margin = new Thickness(0, 0, 0, 7); filters.Children.Add(group);
         var state = new ComboBox { ItemsSource = new[] { "全部状态", "Ready", "Offline", "Unauthorized", "Discovered", "Error" }, ItemTemplate = CaptionChoices() }; state.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.StatusFilter))); state.Margin = new Thickness(0, 0, 0, 7); filters.Children.Add(state);
         var selection = Toolbar(); selection.Children.Add(Button("\uE73A", "全选筛选", () => ViewModel.SelectFiltered(true))); selection.Children.Add(Button("\uE711", "清空", ClearWallSelection)); filters.Children.Add(selection);
         panel.Children.Add(filters);
@@ -39,7 +38,6 @@ public partial class MainWindow
             status.FontSize = 11; status.Margin = new Thickness(0, 2, 0, 0); edit.Children.Add(status);
         }
         edit.Children.Add(Field("名称", BoundInput(nameof(WorkspaceViewModel.DeviceName)), 50));
-        edit.Children.Add(Field("分组", BoundInput(nameof(WorkspaceViewModel.DeviceGroup)), 50));
         edit.Children.Add(Button("\uE74E", "保存信息", ViewModel.SaveMetadataCommand));
         panel.Children.Add(edit);
 

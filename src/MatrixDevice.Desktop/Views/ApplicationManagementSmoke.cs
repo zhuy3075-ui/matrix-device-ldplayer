@@ -80,9 +80,9 @@ public partial class MainWindow
         await Task.Delay(60);
         await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         if (applicationPage.ActualWidth <= 0 || applicationTargetPanel.ActualWidth < 180) throw new InvalidOperationException("应用管理布局为空或目标栏被挤压。");
-        var groupChoice = VisualDescendants<ComboBox>(Shell).Single(input => input.ToolTip as string == "设备分组");
-        var groupTop = groupChoice.TranslatePoint(new Point(), Shell).Y;
-        if (groupTop < 0 || groupTop + groupChoice.ActualHeight > Shell.ActualHeight) throw new InvalidOperationException("应用页全局工具栏超出客户区。");
+        var settings = VisualDescendants<Button>(Shell).Single(input => input.ToolTip as string == "环境设置");
+        var settingsTop = settings.TranslatePoint(new Point(), Shell).Y;
+        if (settingsTop < 0 || settingsTop + settings.ActualHeight > Shell.ActualHeight) throw new InvalidOperationException("应用页全局工具栏超出客户区。");
         if (screenshotPath is not null) SaveRender(Path.Combine(Path.GetDirectoryName(screenshotPath)!, "applications-management.png"));
         foreach (var target in applicationTargets) target.IsSelected = false;
         applicationReadTimer?.Stop(); applicationReadPending = false;

@@ -106,8 +106,9 @@ public partial class MainWindow
                 SaveRender(Path.Combine(output, $"page-{tabs.SelectedIndex:D2}.png"));
             }
             NavigateTo("设备墙 / 主控");
-            foreach (var mode in new[] { "cards", "screens", "list" }) { SetWallViewMode(mode); await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render); SaveRender(Path.Combine(output, "wall-" + mode + ".png")); }
-            SetWallViewMode("cards");
+            SetWallViewMode("list"); await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+            if (WallViewMode != "list") throw new InvalidOperationException("设备管理不再保持唯一列表模式。");
+            SaveRender(Path.Combine(output, "wall-list.png"));
         });
         await File.WriteAllTextAsync(Path.Combine(output, "build-sha256.txt"), Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(MainWindow).Assembly.Location))));
     }

@@ -12,15 +12,12 @@ namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
-    private string wallViewMode = "list";
-    private readonly Dictionary<string, ToggleButton> wallViewChoices = [];
+    private const string wallViewMode = "list";
     private Grid wallWorkspace = null!;
-    private FrameworkElement wallCards = null!;
-    private FrameworkElement wallScreens = null!;
     private FrameworkElement wallList = null!;
     private FrameworkElement wallMainPanel = null!;
-    private FrameworkElement wallDensity = null!;
-    private ToggleButton wallMainToggle = null!;
+    private CheckBox wallSelectAll = null!;
+    private TextBlock mainSyncSummary = null!;
     private ScrollViewer wallActionsViewport = null!;
 
     internal string WallViewMode => wallViewMode;
@@ -33,68 +30,15 @@ public partial class MainWindow
         page.SizeChanged += (_, _) => wallActionsViewport.MaxHeight = Math.Max(120, page.ActualHeight - 176);
         DockPanel.SetDock(wallActionsViewport, Dock.Top); page.Children.Add(wallActionsViewport);
         top.Children.Add(BuildDeviceSummary());
-        var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 18) };
-        var modes = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        var modeFrame = new Border { Child = modes, Background = new SolidColorBrush(Color.FromRgb(245, 247, 251)), CornerRadius = new CornerRadius(6), Padding = new Thickness(3) }; DockPanel.SetDock(modeFrame, Dock.Right); heading.Children.Add(modeFrame);
-        foreach (var (mode, glyph, title) in new[] { ("cards", "\uE8A9", "设备卡片"), ("screens", "\uE80A", "屏幕视图"), ("list", "\uE8EF", "列表视图") })
-        {
-            var choice = WallToggle(glyph, title); choice.Margin = new Thickness(0);
-            choice.Click += (_, _) => SetWallViewMode(mode);
-            wallViewChoices.Add(mode, choice); modes.Children.Add(choice);
-        }
-        heading.Children.Add(new TextBlock { Text = "设备管理", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, VerticalAlignment = VerticalAlignment.Center });
-        top.Children.Add(heading);
+        top.Children.Add(new TextBlock { Text = "设备管理", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, Margin = new Thickness(0, 0, 0, 14) });
         top.Children.Add(BuildOneClickLaunchTools());
-        top.Children.Add(BuildInstanceActions());
-        var tools = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
-        var select = WallButton("\uE73A", "全选", new ActionCommand(() => { foreach (var row in unifiedDeviceView.Cast<UnifiedDeviceRow>().ToArray()) row.IsSelected = true; RefreshLaunchCommands(); })); select.ToolTip = "选择当前筛选中的全部设备"; tools.Children.Add(select);
-        tools.Children.Add(WallButton("\uE711", "清空", new ActionCommand(ClearWallSelection)));
-        var mouse = WallToggle("\uE962", "同步鼠标"); mouse.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(WorkspaceViewModel.SyncMouse))); tools.Children.Add(mouse);
-        var keyboard = WallToggle("\uE765", "同步键盘"); keyboard.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(WorkspaceViewModel.SyncKeyboard))); tools.Children.Add(keyboard);
-        var automatic = WallToggle("\uE787", "自动截图"); automatic.IsChecked = true; automatic.Checked += (_, _) => { autoCapture = true; }; automatic.Unchecked += (_, _) => { autoCapture = false; }; tools.Children.Add(automatic);
-        wallMainToggle = WallToggle("\uE7F4", "主控面板"); wallMainToggle.Checked += (_, _) => UpdateWallMainPanel(); wallMainToggle.Unchecked += (_, _) => UpdateWallMainPanel(); tools.Children.Add(wallMainToggle);
-        tools.Children.Add(BuildWallDensity()); top.Children.Add(tools);
         top.Children.Add(new Border { Height = 1, Background = WallBorder });
         wallWorkspace = new Grid { Margin = new Thickness(22, 18, 22, 18) };
         wallWorkspace.RowDefinitions.Add(new RowDefinition());
         wallWorkspace.ColumnDefinitions.Add(new ColumnDefinition()); wallWorkspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0) });
-        var views = new Grid(); wallWorkspace.Children.Add(views);
-        wallCards = BuildWallItems("cards"); views.Children.Add(wallCards);
-        wallScreens = BuildWallItems("screens"); views.Children.Add(wallScreens);
-        wallList = BuildWallList(); views.Children.Add(wallList);
+        wallList = BuildWallList(); wallWorkspace.Children.Add(wallList);
         wallMainPanel = BuildWallMainPanel(); Grid.SetColumn(wallMainPanel, 1); wallWorkspace.Children.Add(wallMainPanel);
-        page.Children.Add(wallWorkspace); SetWallViewMode("list"); return page;
-    }
-
-    private FrameworkElement BuildWallDensity()
-    {
-        var density = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 6), ToolTip = "屏幕视图目标列数；窄窗口自动减少列数" };
-        density.Children.Add(new TextBlock { Text = "屏数", Foreground = WallMuted, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 9, 0) });
-        var slider = new Slider { Minimum = 5, Maximum = 20, TickFrequency = 1, IsSnapToTickEnabled = true, Width = 94, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 9, 0) };
-        slider.SetBinding(RangeBase.ValueProperty, TwoWay(nameof(WorkspaceViewModel.WallColumns))); density.Children.Add(slider);
-        var decreaseCommand = new ActionCommand(() => ViewModel.WallColumns--, () => ViewModel.WallColumns > 5);
-        var increaseCommand = new ActionCommand(() => ViewModel.WallColumns++, () => ViewModel.WallColumns < 20);
-        var decrease = WallButton("\uE738", "减少屏数", decreaseCommand); decrease.Content = WallGlyph("\uE738"); decrease.Width = 28; decrease.MinWidth = 0; decrease.Padding = new Thickness(0); density.Children.Add(decrease);
-        var count = BoundText(nameof(WorkspaceViewModel.WallColumns)); count.Width = 24; count.TextAlignment = TextAlignment.Center; count.FontWeight = FontWeights.SemiBold; count.Margin = new Thickness(0, 0, 5, 0); density.Children.Add(count);
-        var increase = WallButton("\uE710", "增加屏数", increaseCommand); increase.Content = WallGlyph("\uE710"); increase.Width = 28; increase.MinWidth = 0; increase.Padding = new Thickness(0); density.Children.Add(increase);
-        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(WorkspaceViewModel.WallColumns)) { decreaseCommand.Refresh(); increaseCommand.Refresh(); } };
-        wallDensity = density; return density;
-    }
-
-    private FrameworkElement BuildWallItems(string mode)
-    {
-        var grid = new Grid();
-        var items = new ItemsControl { ItemsSource = unifiedDeviceView, HorizontalContentAlignment = HorizontalAlignment.Stretch };
-        var panel = new FrameworkElementFactory(typeof(UniformGrid));
-        var columns = new MultiBinding { Converter = new WallColumnsConverter(mode == "screens" ? 118 : 344, mode == "screens") };
-        columns.Bindings.Add(new Binding(nameof(WorkspaceViewModel.WallColumns)) { Source = ViewModel });
-        columns.Bindings.Add(new Binding(nameof(ActualWidth)) { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(ScrollViewer), 1) });
-        panel.SetBinding(UniformGrid.ColumnsProperty, columns); items.ItemsPanel = new ItemsPanelTemplate(panel);
-        var tile = new FrameworkElementFactory(typeof(UnifiedDeviceTile)); tile.SetBinding(UnifiedDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) }); tile.SetValue(UnifiedDeviceTile.ModeProperty, mode);
-        items.ItemTemplate = new DataTemplate { VisualTree = tile };
-        grid.Children.Add(new ScrollViewer { Content = items, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
-        var empty = new TextBlock { Text = "当前筛选没有设备", Foreground = WallMuted, FontSize = 14, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        empty.SetBinding(VisibilityProperty, new Binding(nameof(ItemsControl.HasItems)) { Source = items, Converter = new WallEmptyVisibilityConverter() }); grid.Children.Add(empty); return grid;
+        page.Children.Add(wallWorkspace); CloseMainControl(); return page;
     }
 
     private FrameworkElement BuildWallList()
@@ -102,13 +46,22 @@ public partial class MainWindow
         var grid = new DataGrid { ItemsSource = unifiedDeviceView, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Single, HeadersVisibility = DataGridHeadersVisibility.Column, RowHeight = 48, ColumnHeaderHeight = 40, Background = Brushes.White, BorderThickness = new Thickness(0), GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, HorizontalGridLinesBrush = WallBorder, IsReadOnly = true };
         grid.SelectionChanged += (_, _) => { if (wallViewMode == "list" && grid.SelectedItem is UnifiedDeviceRow { Device: { } device }) ViewModel.CurrentDevice = device; };
         var checkbox = new FrameworkElementFactory(typeof(CheckBox)); checkbox.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center); checkbox.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(nameof(UnifiedDeviceRow.IsSelected))); checkbox.SetBinding(IsEnabledProperty, new Binding(nameof(UnifiedDeviceRow.CanSelect)));
-        grid.Columns.Add(new DataGridTemplateColumn { Header = "选择", Width = 54, CellTemplate = new DataTemplate { VisualTree = checkbox } });
+        wallSelectAll = new CheckBox { Name = "SelectAllDevices", IsThreeState = true, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, ToolTip = "勾选全部可操作设备；取消勾选清除所有选择，不删除设备或数据" };
+        System.Windows.Automation.AutomationProperties.SetName(wallSelectAll, "选择全部设备");
+        wallSelectAll.Click += (_, _) =>
+        {
+            var select = wallSelectAll.IsChecked == true;
+            if (select) foreach (var row in unifiedDeviceView.Cast<UnifiedDeviceRow>().Where(row => row.CanSelect).ToArray()) row.IsSelected = true;
+            else ClearWallSelection();
+            UpdateWallSelectionToggle();
+        };
+        grid.Columns.Add(new DataGridTemplateColumn { Header = wallSelectAll, Width = 54, CellTemplate = new DataTemplate { VisualTree = checkbox } });
         TextColumn(grid, "编号", nameof(UnifiedDeviceRow.Number), 58);
         TextColumn(grid, "设备名称", nameof(UnifiedDeviceRow.Name), 175); TextColumn(grid, "状态", nameof(UnifiedDeviceRow.State), 110);
-        var actions = new FrameworkElementFactory(typeof(UnifiedDeviceTile)); actions.SetBinding(UnifiedDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) }); actions.SetValue(UnifiedDeviceTile.ModeProperty, "list");
+        var actions = new FrameworkElementFactory(typeof(UnifiedDeviceTile)); actions.SetBinding(UnifiedDeviceTile.OwnerProperty, new Binding { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(MainWindow), 1) });
         grid.Columns.Add(new DataGridTemplateColumn { Header = "操作", Width = 214, CellTemplate = new DataTemplate { VisualTree = actions } });
         TextColumn(grid, "型号", nameof(UnifiedDeviceRow.Model), 145); TextColumn(grid, "品牌", nameof(UnifiedDeviceRow.Brand), 110); TextColumn(grid, "安卓", nameof(UnifiedDeviceRow.Android), 80);
-        TextColumn(grid, "设备序列号", nameof(UnifiedDeviceRow.Serial), 185); TextColumn(grid, "分辨率", nameof(UnifiedDeviceRow.Resolution), 120); TextColumn(grid, "分组", nameof(UnifiedDeviceRow.Group), 110);
+        TextColumn(grid, "设备序列号", nameof(UnifiedDeviceRow.Serial), 185); TextColumn(grid, "分辨率", nameof(UnifiedDeviceRow.Resolution), 120);
         TextColumn(grid, "安卓状态", nameof(UnifiedDeviceRow.AndroidState), 100);
         TextColumn(grid, "播放器进程", nameof(UnifiedDeviceRow.ProcessId), 105); TextColumn(grid, "虚拟机进程", nameof(UnifiedDeviceRow.VBoxProcessId), 105);
         TextColumn(grid, "密度", nameof(UnifiedDeviceRow.Dpi), 75); TextColumn(grid, "会话代次", nameof(UnifiedDeviceRow.Generation), 175);
@@ -123,7 +76,14 @@ public partial class MainWindow
         var main = new DockPanel { LastChildFill = true, MinHeight = 360 };
         var viewport = new ScrollViewer { Content = main, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new Thickness(18, 0, 0, 0) };
         main.SetBinding(HeightProperty, new Binding(nameof(ActualHeight)) { Source = viewport });
-        var heading = BoundText(nameof(WorkspaceViewModel.MainContext), true); heading.FontWeight = FontWeights.SemiBold; heading.Foreground = WallInk; heading.Margin = new Thickness(0, 0, 0, 12); DockPanel.SetDock(heading, Dock.Top); main.Children.Add(heading);
+        var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
+        var close = Button("\uE711", "关闭控制面板", CloseMainControl); close.Content = WallGlyph("\uE711"); close.Width = close.MinWidth = 32; close.Padding = new Thickness(0); DockPanel.SetDock(close, Dock.Right); heading.Children.Add(close);
+        var caption = BoundText(nameof(WorkspaceViewModel.MainContext), true); caption.FontWeight = FontWeights.SemiBold; caption.Foreground = WallInk; heading.Children.Add(caption); DockPanel.SetDock(heading, Dock.Top); main.Children.Add(heading);
+        var sync = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
+        mainSyncSummary = new TextBlock { Foreground = WallMuted, Margin = new Thickness(0, 0, 0, 6), TextWrapping = TextWrapping.Wrap }; sync.Children.Add(mainSyncSummary);
+        var mouse = Check("同步点击滑动", nameof(WorkspaceViewModel.SyncMouse)); mouse.ToolTip = "将主控面板嵌入画面上的点击、滑动同步到列表勾选的其他设备；不监听雷电窗口的鼠标"; sync.Children.Add(mouse);
+        var keyboard = Check("同步按键", nameof(WorkspaceViewModel.SyncKeyboard)); keyboard.ToolTip = "将程序内主控面板的主页、返回、任务和音量键同步到列表勾选的其他设备；不是物理键盘镜像，文字请使用文本输入"; keyboard.Margin = new Thickness(0, 6, 0, 0); sync.Children.Add(keyboard);
+        DockPanel.SetDock(sync, Dock.Top); main.Children.Add(sync);
         var bottom = new StackPanel { Margin = new Thickness(0, 12, 0, 0) }; DockPanel.SetDock(bottom, Dock.Bottom); main.Children.Add(bottom);
         var keys = Toolbar(); keys.Children.Add(Button("\uE72B", "返回", () => ViewModel.KeyAsync(4), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE80F", "主页", () => ViewModel.KeyAsync(3), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE7C4", "任务", () => ViewModel.KeyAsync(187), canExecute: ViewModel.CanControlMainInput));
         foreach (var (glyph, label, key, name) in new[] { ("\uE995", "增大音量", 24, "MainVolumeUp"), ("\uE993", "减小音量", 25, "MainVolumeDown") })
@@ -154,21 +114,41 @@ public partial class MainWindow
 
     internal void SetWallViewMode(string mode)
     {
-        if (mode is not ("cards" or "screens" or "list")) throw new ArgumentException("设备视图不合法：" + mode, nameof(mode));
-        wallViewMode = mode;
-        wallCards.Visibility = mode == "cards" ? Visibility.Visible : Visibility.Collapsed;
-        wallScreens.Visibility = mode == "screens" ? Visibility.Visible : Visibility.Collapsed;
-        wallList.Visibility = mode == "list" ? Visibility.Visible : Visibility.Collapsed;
-        foreach (var choice in wallViewChoices) choice.Value.IsChecked = choice.Key == mode;
-        wallDensity.IsEnabled = mode == "screens"; wallMainToggle.IsChecked = mode == "screens"; UpdateWallMainPanel();
-        wallDensity.Visibility = wallMainToggle.Visibility = mode == "screens" ? Visibility.Visible : Visibility.Collapsed;
+        if (mode != "list") throw new ArgumentException("设备管理仅支持列表：" + mode, nameof(mode));
     }
 
-    private void UpdateWallMainPanel()
+    internal async Task OpenMainControlAsync(DeviceRow row)
     {
-        if (wallMainPanel is null || wallWorkspace is null) return;
-        var visible = wallMainToggle.IsChecked == true;
-        wallMainPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed; wallWorkspace.ColumnDefinitions[1].Width = new GridLength(visible ? 272 : 0);
+        if (!ViewModel.Devices.Contains(row) || !row.Info.Online || ViewModel.Busy) throw new DeviceException("控制目标不可用，请选择已连接设备。", 409, 1003);
+        await ViewModel.SetMainAsync(row);
+        if (!ReferenceEquals(ViewModel.MainDevice, row)) return;
+        wallMainPanel.Visibility = Visibility.Visible; wallWorkspace.ColumnDefinitions[1].Width = new GridLength(300);
+        UpdateWallSelectionToggle();
+        await CaptureTickAsync();
+    }
+
+    internal void CloseMainControl()
+    {
+        gestureStart = null; gestureDevice = null; gestureTargets = []; gestureTargetGenerations.Clear();
+        if (Mouse.Captured is Image image) image.ReleaseMouseCapture();
+        wallMainPanel.Visibility = Visibility.Collapsed; wallWorkspace.ColumnDefinitions[1].Width = new GridLength(0);
+    }
+
+    private void UpdateWallSelectionToggle()
+    {
+        if (wallSelectAll is not null)
+        {
+            var visible = unifiedDeviceView.Cast<UnifiedDeviceRow>().Where(row => row.CanSelect).ToArray();
+            var selected = visible.Count(row => row.IsSelected);
+            var hiddenSelected = unifiedDevices.Any(row => row.IsSelected && !visible.Contains(row));
+            wallSelectAll.IsChecked = visible.Length == 0 && hiddenSelected ? null : selected == 0 ? false : selected == visible.Length ? true : null;
+            wallSelectAll.IsEnabled = visible.Length != 0 || unifiedDevices.Any(row => row.IsSelected);
+        }
+        if (mainSyncSummary is not null)
+        {
+            var targets = unifiedDevices.Where(row => row.IsSelected && row.Device != ViewModel.MainDevice).ToArray();
+            mainSyncSummary.Text = $"同步目标 {targets.Length} 台" + (targets.Any(row => !row.Connected) ? " · 含未连接设备，连接前不可同步" : "");
+        }
     }
 
     private static readonly Brush WallInk = new SolidColorBrush(Color.FromRgb(24, 34, 57));
@@ -205,18 +185,6 @@ public partial class MainWindow
         var swipe = (start - end.Value).Length > 8;
         await ViewModel.SendInputAsync(new InputSnapshot { SourceSerial = row.Serial, Kind = swipe ? InputKind.Swipe : InputKind.Tap, X = (int)start.X, Y = (int)start.Y, X2 = (int)end.Value.X, Y2 = (int)end.Value.Y, DurationMs = 300, SourceWidth = (image.Source as BitmapSource)?.PixelWidth ?? row.Info.Width, SourceHeight = (image.Source as BitmapSource)?.PixelHeight ?? row.Info.Height, SourceGeneration = gestureDeviceGeneration, Generation = gestureGeneration, TargetSerials = gestureTargets }); e.Handled = true;
     }
-}
-
-public sealed class WallColumnsConverter(double minimumWidth, bool usePreferred) : IMultiValueConverter
-{
-    public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
-    {
-        var preferred = values.FirstOrDefault() is int count ? count : 5;
-        var available = values.Length > 1 && values[1] is double width && double.IsFinite(width) && width > 0 ? width : minimumWidth;
-        var responsive = Math.Max(1, (int)Math.Floor(available / minimumWidth));
-        return usePreferred ? Math.Min(preferred, responsive) : responsive;
-    }
-    public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture) => throw new NotSupportedException();
 }
 
 public sealed class WallEmptyVisibilityConverter : IValueConverter
