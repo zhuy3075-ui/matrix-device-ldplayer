@@ -161,8 +161,8 @@
   },
   {
     "Path": "docs/testing/one-click-start/REPORT.md",
-    "Bytes": 6801,
-    "Sha256": "a4b0f692e1bfa1fda77dc6a6f5160c8e7d376aea02c6109f7de82baaea841694"
+    "Bytes": 10093,
+    "Sha256": "23adda34571468c294787451de35537f1da39a339a19764f55d44ed4c87c1e7c"
   },
   {
     "Path": "docs/testing/one-click-start/TEST_LOG.md",
@@ -671,8 +671,8 @@
   },
   {
     "Path": "README.md",
-    "Bytes": 15899,
-    "Sha256": "0f51fe5e54ea5ec2ff7866dec8b480a9b62964b1b2fe6a820e6709792d721b7c"
+    "Bytes": 15782,
+    "Sha256": "ada6309ccc567867278b444c4cb7bbb96e46c505d1ce9005c5359fbcb8052ab3"
   },
   {
     "Path": "src/MatrixDevice.Cli/MatrixDevice.Cli.csproj",
@@ -951,8 +951,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/OneClickStartAcceptance.cs",
-    "Bytes": 5543,
-    "Sha256": "7a7472d36e9df6f03258d35ab070205299387d42df67be285d01bbacb51f4e2e"
+    "Bytes": 6205,
+    "Sha256": "333066bcd34ff0f4821923a4b77de4d9c2cce49a7024c1c6c730dc6e601e4cf9"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/ResponsiveColumnsConverter.cs",
@@ -986,8 +986,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UiControlAudit.cs",
-    "Bytes": 10131,
-    "Sha256": "f939a6ff1ecb3e6880f9be72b59dcb1df57fa0bcc8002b95889dc1e3f2d46320"
+    "Bytes": 11309,
+    "Sha256": "90892342ba41184e37862a8c2e11658cc28a951b8b60537723993906901f7366"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UnifiedDevicesAcceptance.cs",
@@ -996,8 +996,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UnifiedDevicesView.cs",
-    "Bytes": 32889,
-    "Sha256": "15e0fed8c2eabbbe461e66a792835dea6beb0957dc7b7e0cb67a2e6ac2c18ed0"
+    "Bytes": 30482,
+    "Sha256": "b976ff0976548e98d8323a1e5862f176246b211588b032ec668c78bb8f6ebf8e"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UnifiedDeviceTile.cs",

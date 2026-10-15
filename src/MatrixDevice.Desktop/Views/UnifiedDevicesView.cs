@@ -25,12 +25,8 @@ public partial class MainWindow
     private readonly List<AsyncCommand> launchCommands = [];
     private readonly List<ActionCommand> launchCancelCommands = [];
     private bool updatingUnifiedDirectory;
-    private bool backgroundLaunch = true;
-    private bool operationBackgroundLaunch;
     private readonly HashSet<int> coldLaunched = [];
-    private readonly Dictionary<int, Task> backgroundHides = [];
     private LdWindowVisibility? ldWindowVisibility;
-    private Exception? backgroundHideError;
     private DateTimeOffset lastGuestDiscovery;
 
     private FrameworkElement BuildDeviceModes()
@@ -126,8 +122,6 @@ public partial class MainWindow
         var tools = Toolbar();
         tools.Children.Add(LaunchButton("\uE768", "启动所选", () => ConnectLdInstancesAsync(unifiedDevices.Where(row => row.IsSelected && !row.Connected && row.Index is > 0 and < 99999).Select(row => row.Index!.Value).ToArray()), () => !ViewModel.Demo && CanStartInstances() && unifiedDevices.Any(row => row.IsSelected && !row.Connected && row.Index is > 0 and < 99999), true));
         tools.Children.Add(LaunchButton("\uE768", "一键启动全部", StartAllLdInstancesAsync, () => !ViewModel.Demo && CanStartInstances() && unifiedDevices.Any(row => !row.Connected && row.Index is > 0 and < 99999)));
-        var background = WallToggle("\uE7F4", "后台启动"); background.IsChecked = backgroundLaunch; background.ToolTip = "隐藏本次启动的模拟器窗口；并非无头模式，启动初期可能短暂显示";
-        background.Checked += (_, _) => backgroundLaunch = true; background.Unchecked += (_, _) => backgroundLaunch = false; tools.Children.Add(background);
         tools.Children.Add(LaunchButton("\uE7F4", "显示窗口", async () => { foreach (var row in unifiedDevices.Where(row => row.IsSelected).ToArray()) await ShowUnifiedWindowAsync(row); }, () => !ldBusy && unifiedDevices.Any(row => row.IsSelected && row.Index is { } index && ldWindowVisibility?.IsHidden(index) == true)));
         var stop = new ActionCommand(() => ldOperationCancellation?.Cancel(), () => ldOperationCancellation is not null);
         launchCancelCommands.Add(stop);
@@ -193,7 +187,7 @@ public partial class MainWindow
         ldBusy = true; ViewModel.SetExternalBusy(true); RefreshLdButtons();
         await StopMonitorAsync();
         using var cancellation = new CancellationTokenSource(); ldOperationCancellation = cancellation;
-        coldLaunched.Clear(); backgroundHides.Clear(); backgroundHideError = null; operationBackgroundLaunch = backgroundLaunch; RefreshLaunchCommands();
+        coldLaunched.Clear(); RefreshLaunchCommands();
         var complete = false;
         try
         {
@@ -203,20 +197,14 @@ public partial class MainWindow
             complete = true;
             ViewModel.Runtime.Log.Write("ld-workspace-complete", title);
         }
-        catch (OperationCanceledException) { SetLaunchFeedback(backgroundHideError is null ? "已停止等待及后续任务，已启动的实例保持运行。" : "后台隐藏失败：" + ViewModel.PresentError(backgroundHideError)); ViewModel.Runtime.Log.Write("ld-workspace-cancel", title); }
+        catch (OperationCanceledException) { SetLaunchFeedback("已停止等待及后续任务，已启动的实例保持运行。"); ViewModel.Runtime.Log.Write("ld-workspace-cancel", title); }
         catch (Exception ex) { SetLaunchFeedback(title + "失败：" + ViewModel.PresentError(ex)); ViewModel.Runtime.Log.Write("ld-workspace-error", ex.ToString()); }
         finally
         {
             if (!complete)
             {
-                try { await Task.WhenAll(backgroundHides.Values); } catch (Exception ex) { ViewModel.Runtime.Log.Write("ld-background-error", ex.ToString()); }
                 foreach (var index in launchPhases.Keys.ToArray())
                     if (launchPhases[index] is not ("已连接" or "启动失败")) launchPhases[index] = cancellation.IsCancellationRequested ? "已取消" : "未完成";
-                foreach (var index in coldLaunched)
-                {
-                    try { if (ldWindowVisibility is not null) await ldWindowVisibility.ShowAsync(index); }
-                    catch (Exception ex) { SetLaunchFeedback("窗口恢复失败：" + ViewModel.PresentError(ex)); }
-                }
             }
             ldOperationCancellation = null; ldBusy = false; ViewModel.SetExternalBusy(false);
             UpdateLdPlayerRows(); UpdateUnifiedDirectory(); RefreshLdButtons();
@@ -234,23 +222,9 @@ public partial class MainWindow
         var phase = progress.State switch { "checking-resources" => "检查资源", "starting" => "正在启动", "waiting" => "等待安卓就绪", "ready" or "skipped" => "等待连接", "cancelled" => "已取消", _ => "启动失败" };
         launchPhases[progress.Index] = phase;
         if (progress.State == "starting") coldLaunched.Add(progress.Index);
-        if (operationBackgroundLaunch && coldLaunched.Contains(progress.Index) && !backgroundHides.ContainsKey(progress.Index) && progress.Instance is { ProcessId: > 0, TopWindow: not 0 } instance)
-            backgroundHides[progress.Index] = HideStartedWindowAsync(instance);
         SetLaunchFeedback($"实例 {progress.Index}：{phase}");
         ViewModel.Runtime.Log.Write("ld-launch-" + progress.State, $"index={progress.Index}; {progress.Message}");
         UpdateLdPlayerRows(); UpdateUnifiedDirectory();
-    }
-
-    private async Task HideStartedWindowAsync(LdPlayerInstance instance)
-    {
-        try
-        {
-            ldWindowVisibility ??= new LdWindowVisibility(System.IO.Path.Combine(ViewModel.DataDirectory, "window-recovery"), System.IO.Path.GetDirectoryName(ViewModel.Runtime.FrozenConnectionSettings.LdConsolePath)!);
-            using var process = System.Diagnostics.Process.GetProcessById(instance.ProcessId);
-            await ldWindowVisibility.HideAsync(instance, process.StartTime.ToUniversalTime().Ticks);
-            ViewModel.Runtime.Log.Write("ld-background-hidden", $"index={instance.Index}; pid={instance.ProcessId}");
-        }
-        catch (Exception ex) { backgroundHideError = ex; ldOperationCancellation?.Cancel(); throw; }
     }
 
     internal async Task RecoverBackgroundWindowsAsync()
@@ -289,8 +263,6 @@ public partial class MainWindow
         {
             foreach (var index in indices) launchPhases[index] = "排队中";
             var started = await new LdLaunchCoordinator(service).StartAsync(indices, EnsureLaunchResourcesAsync, LaunchProgress(), ct, expectedInstances: confirmedInstances);
-            await Task.WhenAll(backgroundHides.Values);
-            if (backgroundHideError is not null) throw backgroundHideError;
             var expected = started.Select(result => result.Instance ?? throw new DeviceException("启动结果缺少实例快照。", 409, 1003)).ToArray();
             foreach (var instance in expected)
                 if (!expectedBirths.ContainsKey(instance.Index)) expectedBirths.Add(instance.Index, VBoxBirth(instance));

@@ -10,6 +10,20 @@ public partial class MainWindow
 {
     private async Task VerifyOneClickProjectionAsync()
     {
+        foreach (var page in new[] { "设备墙 / 主控", "雷电实例" })
+        {
+            NavigateTo(page);
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (VisualDescendants<TextBlock>(Shell).Any(text => text.Text == "后台启动") ||
+                VisualDescendants<FrameworkElement>(Shell).Any(control => control.ToolTip is string tip && tip.Contains("隐藏本次启动", StringComparison.Ordinal)))
+                throw new InvalidOperationException("已删除的后台启动入口仍存在：" + page);
+            var expectedActions = page == "设备墙 / 主控"
+                ? new[] { "启动所选", "一键启动全部", "取消启动" }
+                : new[] { "启动并连接", "一键启动全部", "停止等待和后续启动" };
+            foreach (var label in expectedActions)
+                if (!VisualDescendants<Button>(Shell).Any(button => button.ToolTip is string tip && tip.StartsWith(label, StringComparison.Ordinal)))
+                    throw new InvalidOperationException("删除后台启动时误删启动入口：" + page + " / " + label);
+        }
         NavigateTo("设备墙 / 主控"); UpdateUnifiedDirectory();
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         var originalDevices = ViewModel.Devices.Count;
