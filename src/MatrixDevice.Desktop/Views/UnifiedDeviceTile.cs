@@ -33,13 +33,16 @@ public sealed class UnifiedDeviceTile : Border
         var glyph = new TextBlock { FontFamily = new FontFamily("Segoe MDL2 Assets"), Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center }; glyph.SetBinding(TextBlock.TextProperty, new Binding(nameof(UnifiedDeviceRow.PrimaryGlyph)));
         var body = new StackPanel { Orientation = Orientation.Horizontal }; body.Children.Add(glyph); body.Children.Add(label);
         var start = new Button { Content = body, Command = row!.PrimaryCommand, Height = 32, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 6, 0), ToolTip = row.PrimaryLabel };
+        start.SetBinding(System.Windows.Automation.AutomationProperties.NameProperty, new Binding(nameof(UnifiedDeviceRow.PrimaryLabel)));
         start.SetResourceReference(StyleProperty, "SubtleButton"); actions.Children.Add(start);
         if (row.Connected && row.Device is not null)
         {
             var main = new Button { Content = "控制", Command = row.MainCommand, ToolTip = "打开此设备的主控面板", Height = 32, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 6, 0) };
+            System.Windows.Automation.AutomationProperties.SetName(main, "控制此设备");
             main.SetResourceReference(StyleProperty, "SubtleButton"); actions.Children.Add(main);
         }
         var show = new Button { Content = new TextBlock { Text = "\uE8A7", FontFamily = new FontFamily("Segoe MDL2 Assets") }, Command = row.ShowWindowCommand, ToolTip = "显示模拟器窗口", Visibility = row.ShowWindowCommand.CanExecute(null) ? Visibility.Visible : Visibility.Collapsed };
+        System.Windows.Automation.AutomationProperties.SetName(show, "显示模拟器窗口");
         show.SetResourceReference(StyleProperty, "IconButton"); actions.Children.Add(show);
         return actions;
     }

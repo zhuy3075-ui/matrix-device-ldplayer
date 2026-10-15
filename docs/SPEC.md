@@ -16,6 +16,8 @@
 
 最低窗口尺寸须同步修正MainWindow.xaml、App.xaml.cs的smoke参数clamp、WorkspaceViewModel.cs中SettingsEditor.Apply、Host/Persistence/SettingsStore.Normalize；新增请求尺寸与ActualWidth/Height相等、保存/重载不被放大到旧最低值的断言。设备详情的重复群控选择及隐藏状态过滤纳入A05，不合并应用独立目标。
 
+A04采用最低外窗390×640逻辑单位、保留默认1440×900；不额外承诺未测试的更小窗口。导航按外窗宽度低于700用单一导航抽屉，700至1099默认72图标栏，1100及以上默认212侧栏，并保留手工展开偏好；公共Field按自身宽度低于460改标签在上。保持同一个输入控件和绑定，不整页缩放或删内容。顶部目标窄屏换行，低频网络/更新收进可点击更多菜单，页脚/长错误有界换行与滚动。Owner-fit先同步降低弹窗旧最小值，再按Owner/工作区约束并保留确认/取消可见；原生HWND不随意套ScrollViewer。公共适配通过不等于固定双栏页面已适配，后者仍逐页完成。
+
 ## 测试和证据
 
 1. 正式单元/协议基线：tools/Build.ps1 -Verify，当前149项；新增缺陷先红后绿。

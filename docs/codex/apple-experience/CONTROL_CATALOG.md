@@ -23,9 +23,9 @@
 
 ## 页面控件键
 
-同一标签不同binding保留；同一行模板的多次实例以目标隔离用例覆盖。所有条目本轮状态NOT-RUN。
+同一标签不同binding保留；同一行模板的多次实例以目标隔离用例覆盖。所有业务条目本轮初始NOT-RUN；A03共享名称/外观另有离线结果，不代替逐项业务执行。此处保留基线标签，最新12页名见UI_SPEC及A03报告，后续用binding/AutomationId定位而非旧标签。
 
-| caseId | 页Tag | 类型 | 标签/提示 | binding | 原扫描caseId |
+| caseId | 页Tag | 类型 | 基线标签/提示 | binding | 原扫描caseId |
 |---|---|---|---|---|---|
 | C-001 | 脚本 | Button | 导入脚本包 |  | UI-04-脚本-25 |
 | C-002 | 脚本 | Button | 停止所选 |  | UI-04-脚本-27 |
@@ -153,3 +153,54 @@
 | S-16..20 | 设置的5个“浏览”实例 | 按ADB、scrcpy、监控server、FFmpeg、雷电命令行各自绑定路径分别验证选择/取消/坏路径，不能因同标签仅测一次 |
 
 本目录按实现阶段继续核对源码补漏和新增控件；未完成逐项实测前，不使用百分比或“全部控件正常”的结论。
+
+## 字段和模态细化
+
+源码基线7beea83；以下绑定/语义ID稳定，行号随重设计变化，执行以实际源码和当前控件为准。每个斜杠分隔的ID分别建立.N/.E/.B/.C/.F/.T记录，不合并成绩。表单只读值、无专用取消入口的项说明N/A；当前均NOT-RUN，不因A02守卫通过继承成功。
+
+| 语义ID | 源码/绑定或实际控件 | 特有验证 |
+|---|---|---|
+| SET-ADB.value / SET-ADB.browse | SettingsView / Settings.AdbPath | 精确回填/取消留旧值/坏路径；只编辑，不执行外部adb |
+| SET-SCRCPY.value / SET-SCRCPY.browse | Settings.ScrcpyPath | 文件有效性、取消；不自动肯定外部ADB风险 |
+| SET-SERVER.value / SET-SERVER.browse | Settings.MonitorServerPath | 正确文件筛选，版本/摘要坏值；选择不等于视频通过 |
+| SET-FFMPEG.value / SET-FFMPEG.browse | Settings.MonitorFfmpegPath | 精确回填/取消、坏路径、空值PATH回退与缺依赖分开 |
+| SET-LDCLI.value / SET-LDCLI.browse | Settings.LdConsolePath | 回填/取消；保存后不得混用新路径和旧运行时 |
+| SET-SERIALS | Settings.AdbSerialsJson | 数组/空/坏JSON/null/重复/空白；仅隔离配置，不改真实授权 |
+| SET-BINDINGS | Settings.LdBindingsJson | 非零唯一映射/非法index/空串号/重复；配置不是身份凭证 |
+| SET-AGENT-URL / SET-AGENT-SERIAL | Settings.AgentBaseUrl / AgentSerial | 配对、空值、合法地址、串号授权；只用自有loopback夹具 |
+| SET-BASIC-PORT / SET-AUTO-PORT | Settings.BasicApiPort / AutomatorApiPort | 整数1024..65535、冲突/越界；保存不创建监听，不漂移运行端口 |
+| SET-AUTO-CONNECT / SET-AUTO-API | Settings.AutoConnect / AutoStartApi | 保存回读；不后台新授权/启动；只在隔离数据和端口测试 |
+| SET-LANGUAGE | SettingsView只读简体中文 | 显示且不可编辑；非输入，其他不适用说明原因 |
+| SET-FILE-ROOT | Settings.FileRoot | 隔离绝对目录/坏路径/不可写/空值；不写用户旧目录 |
+| SET-TIMEOUT | Settings.CommandTimeoutSeconds | 整数1..600和坏值；编辑校验与实际超时分开 |
+| SET-MAIN-SIZE / SET-MAIN-FPS / SET-MAIN-BITRATE | Settings.MainMaxSize / MainMaxFps / MainBitRate | 各自范围/类型/保存回读；外部投屏参数，不是监控尺寸或实际码率/FPS证明 |
+| SET-MINI-SIZE / SET-MINI-FPS / SET-MINI-BITRATE / SET-HW-DECODE | Settings.MiniMaxSize / MiniMaxFps / MiniBitRate / ForceHardwareDecode | 当前禁用及说明、旧值保留；不能统计编码/硬解业务成功 |
+| SET-SHOW-FPS | Settings.ShowFps | 保存回读；仅scrcpy打印偏好，不是应用/游戏FPS |
+| SET-WIDTH / SET-HEIGHT | Settings.WindowWidth / WindowHeight | 分别坏值/非数/NaN、Apply→Save→新Store.Load；四处尺寸契约一致 |
+| SET-SAVE | SaveSettingsCommand | 忙/写失败/运行时冻结；无保存确认时取消为N/A |
+| SET-RECOVER-NATIVE | SettingsView恢复遗留投屏 | 自有窗口夹具、PID/birth/路径拒绝、恢复失败保留记录 |
+| APP-TARGET-CHECK[serial] | ApplicationsView / ApplicationTargetRow.IsSelected | Available、独立选择、代次变化不沿用旧目标 |
+| APP-ROW-CHECK[serial,package] | InstalledApplicationRow.IsSelected | 相同包不同设备独立冻结，虚拟行滚入不串包/串台 |
+| APP-VISIBLE-ALL / APP-SYSTEM-FILTER | 可见应用表头 / 系统应用 | 过滤与选择关系、表头状态、执行前重查系统属性；忙时计划不改变 |
+| APP-MENU-START / APP-MENU-STOP / APP-MENU-CLEAR | ApplicationsView三个MenuItem | 零选/离线/忙；启停无确认不虚构取消窗，清数据必须危险确认 |
+| APP-INSTALL-PICKER | 原生多选APK窗口 | 取消不改任务/零写；选择期间目标变化拒绝，不偷偷换新目标 |
+| APP-CONFIRM-DETAIL | 只读可滚动任务计划 | 总数、串号/包/文件及风险准确，不算可编辑输入 |
+| APP-CONFIRM-ACCEPT / APP-CONFIRM-CANCEL | 确认 / IsCancel | Enter、按钮、Esc、标题栏X分别测试；确认后重验冻结选择/身份 |
+| APP-STOP-AFTER | 停止后续 | 当前项完成后取消后项，不回滚或打断已提交项，进度/终态准确 |
+| SCAN-START-IP / SCAN-END-IP | NetworkScannerView独立输入 | 非法/反向/超大范围拒绝；仅自有loopback，不枚举未知网段 |
+| SCAN-PORT / SCAN-TIMEOUT | 端口 / 超时 | 分别整数/范围/有界等待；发现TCP不等于ADB已连 |
+| SCAN-RUN / SCAN-STOP / SCAN-WINDOW-CLOSE | 运行 / 停止 / 独立Window关闭 | 不自动开扫；运行四字段禁用；关闭Hide+cancel，重开无重入，不停共享ADB |
+| LD-MENU-CONFIG / LD-MENU-QUIT / LD-MENU-REBOOT | LdPlayerView更多菜单 | 唯一勾选、运行/完全退出、0保护、旧代次拒绝 |
+| LD-MENU-RESTORE-OLD-WINDOW | 恢复旧版隐藏窗口 | 仅明确记录、PID/birth/路径证明，失败保留记录 |
+| LD-CREATE-NAME / LD-CONFIG-NAME | UnifiedDevicesView名称框 | 前者可编辑，后者只读；坏名零add，两种表单分别测 |
+| LD-EDIT-CPU / LD-EDIT-RAM | CPU / RAM组合框 | 配置初始空，必须显式选择，不猜旧RAM |
+| LD-EDIT-WIDTH / LD-EDIT-HEIGHT / LD-EDIT-DPI | 三个独立输入 | 分别整数/边界/空值；实例DPI不是WindowsDPI；CLI返回不算效果 |
+| LD-CREATE-SUBMIT / LD-CONFIG-SUBMIT | 两种表单提交 | 坏值留窗；add成功modify失败保留新实例且不重复创建/删除 |
+| LD-EDIT-WINDOW-CLOSE / LD-EDIT-CONFIRM | 标题栏X / 表单后第二确认 | X零CLI；无Cancel按钮/IsCancel，不预记Esc通过；确认后校验同一generation |
+| API-PROTOCOL / API-METHOD / API-ROUTE / API-PAYLOAD / API-RESPONSE | ApiView的5个未绑定局部控件 | 普通/自动化/设备拥有关系、GET/POST、仅相对路径、坏JSON、实际HTTP结果；Response只读 |
+| TOOL-PROXY / TOOL-PROXY-RESULT | ExtensionsView PasswordBox / 只读输出 | 解析与无凭据导出，不部署代理；密码遮蔽、日志无凭据 |
+| TOOL-TIMEZONE / TOOL-PACKAGE / TOOL-NOTES | 时区 / 应用包名 / 备注 | 各字段坏值、取消、目标冻结/仅自有本地资料；不混淆设备恢复 |
+| TEXT-EDITOR / TEXT-PASTE / TEXT-FILE | TextInput / 粘贴 / 原生文本选择 | 独立输入与两个导入路径；剪贴板/文件坏值、取消、中文回读 |
+| CAP-MODE / MON-SCOPE | 截屏模式 / 监控范围 | 未绑定Combo各自选择，状态变化不改主控/应用授权 |
+
+此细表把相同标签和Shell外控件展开为真实行为索引，仍需在各实施阶段运行并关联当前构建结果；不声明所有行均已执行。

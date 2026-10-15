@@ -24,12 +24,13 @@ public partial class MainWindow
         var page = Page();
         var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE722", "刷新截图", ViewModel.ScreenshotCommand)); toolbar.Children.Add(Button("\uE74E", "保存 PNG", async () => await SaveImageAsync(false))); toolbar.Children.Add(Button("\uE7A8", "保存裁剪", async () => await SaveImageAsync(true)));
         screenshotMode = new ComboBox { ItemsSource = new[] { "取色", "裁剪" }, ItemTemplate = CaptionChoices(), SelectedIndex = 0, Width = 115 }; toolbar.Children.Add(screenshotMode);
-        var zoom = new Slider { Minimum = .1, Maximum = 3, Value = 1, Width = 150, VerticalAlignment = VerticalAlignment.Center, ToolTip = "缩放" }; zoom.ValueChanged += (_, _) => { screenshotScale.ScaleX = zoom.Value; screenshotScale.ScaleY = zoom.Value; }; toolbar.Children.Add(zoom); toolbar.Children.Add(Button("\uE740", "1:1", () => zoom.Value = 1));
+        var zoom = new Slider { Minimum = .1, Maximum = 3, Value = 1, Width = 150, VerticalAlignment = VerticalAlignment.Center, ToolTip = "缩放" }; zoom.ValueChanged += (_, _) => { screenshotScale.ScaleX = zoom.Value; screenshotScale.ScaleY = zoom.Value; }; toolbar.Children.Add(zoom); toolbar.Children.Add(Button("\uE740", "原始大小", () => zoom.Value = 1));
         DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
         var colors = new DataGrid { ItemsSource = ViewModel.Colors, IsReadOnly = true, Width = 300, Margin = new Thickness(10, 10, 0, 0) }; TextColumn(colors, "坐标", nameof(PixelSample.Position), 70); TextColumn(colors, "HEX", nameof(PixelSample.Hex), 80); TextColumn(colors, "RGB", nameof(PixelSample.Rgb), 140); colors.MouseDoubleClick += (_, _) => { if (colors.SelectedItem is PixelSample color) Clipboard.SetText($"{color.Hex} {color.Rgb}"); }; DockPanel.SetDock(colors, Dock.Right); page.Children.Add(colors);
-        screenshotCanvas = new Canvas { Background = new SolidColorBrush(Color.FromRgb(232, 237, 240)), LayoutTransform = screenshotScale };
+        screenshotCanvas = new Canvas { Background = ThemeBrush("CanvasBrush"), LayoutTransform = screenshotScale };
         screenshotImage = new Image { Stretch = Stretch.None }; screenshotCanvas.Children.Add(screenshotImage);
-        cropRectangle = new Rectangle { Stroke = new SolidColorBrush(Color.FromRgb(214, 69, 94)), StrokeThickness = 2, Fill = new SolidColorBrush(Color.FromArgb(35, 214, 69, 94)), Visibility = Visibility.Collapsed, IsHitTestVisible = false }; screenshotCanvas.Children.Add(cropRectangle);
+        var cropColor = ((SolidColorBrush)ThemeBrush("DangerBrush")).Color;
+        cropRectangle = new Rectangle { Stroke = ThemeBrush("DangerBrush"), StrokeThickness = 2, Fill = new SolidColorBrush(Color.FromArgb(35, cropColor.R, cropColor.G, cropColor.B)), Visibility = Visibility.Collapsed, IsHitTestVisible = false }; screenshotCanvas.Children.Add(cropRectangle);
         screenshotCanvas.MouseLeftButtonDown += ScreenshotDown; screenshotCanvas.MouseMove += ScreenshotMove; screenshotCanvas.MouseLeftButtonUp += ScreenshotUp;
         screenshotScroll = new ScrollViewer { Content = screenshotCanvas, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new Thickness(0, 10, 0, 0) }; page.Children.Add(screenshotScroll);
         return page;

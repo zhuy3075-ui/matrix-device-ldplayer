@@ -52,7 +52,7 @@ public partial class MainWindow
     }, blocksApiWrites: false);
     private FrameworkElement BuildApiPage()
     {
-        var page = Page(); var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE768", "启动两个网关", ViewModel.StartApiCommand)); toolbar.Children.Add(Button("\uE71A", "停止网关", ViewModel.StopApiCommand)); toolbar.Children.Add(Button("\uE968", "启用所选设备", ViewModel.StartDeviceApiCommand)); toolbar.Children.Add(Button("\uE711", "停止所选设备", ViewModel.StopDeviceApiCommand)); DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
+        var page = Page(); var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE768", "启动两个网关", ViewModel.StartApiCommand)); toolbar.Children.Add(Button("\uE71A", "停止网关", ViewModel.StopApiCommand)); toolbar.Children.Add(Button("\uE968", "启用设备接口", ViewModel.StartDeviceApiCommand)); toolbar.Children.Add(Button("\uE711", "停止设备接口", ViewModel.StopDeviceApiCommand)); DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
         var summary = BoundText(nameof(WorkspaceViewModel.ApiSummary), true); summary.Margin = new Thickness(0, 10, 0, 10); DockPanel.SetDock(summary, Dock.Top); page.Children.Add(summary);
         var requestPanel = new DockPanel { Margin = new Thickness(0, 10, 0, 0), Height = 260 }; DockPanel.SetDock(requestPanel, Dock.Bottom);
         var requestToolbar = Toolbar();
@@ -61,6 +61,8 @@ public partial class MainWindow
         apiRoute = new TextBox { Text = "/health", Width = 190 }; requestToolbar.Children.Add(apiRoute);
         apiResponse = new TextBox { IsReadOnly = true, AcceptsReturn = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontFamily = new FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap };
         apiPayload = new TextBox { Text = "{}", AcceptsReturn = true, Height = 60, FontFamily = new FontFamily("Consolas"), Margin = new Thickness(0, 7, 0, 7) };
+        System.Windows.Automation.AutomationProperties.SetName(apiProtocol, "接口类型"); System.Windows.Automation.AutomationProperties.SetName(apiMethod, "请求方法");
+        System.Windows.Automation.AutomationProperties.SetName(apiRoute, "请求路径"); System.Windows.Automation.AutomationProperties.SetName(apiPayload, "请求正文"); System.Windows.Automation.AutomationProperties.SetName(apiResponse, "响应结果");
         apiSend = new AsyncCommand(SendApiTestRequestAsync, () => !ViewModel.Busy && !ViewModel.Transferring && OwnsApiEndpoint());
         apiProtocol.SelectionChanged += (_, _) => apiSend.Refresh(); ViewModel.PropertyChanged += (_, _) => apiSend.Refresh();
         requestToolbar.Children.Add(Button("\uE768", "发送请求", apiSend));

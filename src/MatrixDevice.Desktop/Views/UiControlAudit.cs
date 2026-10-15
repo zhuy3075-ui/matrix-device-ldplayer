@@ -3,11 +3,73 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Threading;
+using MatrixDevice.Core;
 
 namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
+    private async Task<object> SettleIdlePageCaptureAsync(string page, IReadOnlyDictionary<DeviceRow, DeviceInfo> restoredDevices, string restoredFilter)
+    {
+        var deadline = System.Diagnostics.Stopwatch.StartNew();
+        var reason = "尚未布局";
+        while (deadline.Elapsed < TimeSpan.FromSeconds(3))
+        {
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
+            await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+            if (ViewModel.Busy || ViewModel.Transferring || ViewModel.StatusFilter != restoredFilter || restoredDevices.Any(pair => !ViewModel.Devices.Contains(pair.Key) || pair.Key.Info != pair.Value))
+                throw new InvalidOperationException("分页截图不是已恢复的idle状态：" + page);
+            try
+            {
+                var rows = page == "设备墙 / 主控" ? CaptureIdleDeviceRows() : [];
+                var connected = unifiedDevices.Count(row => row.Connected);
+                if (!workspaceCounts.Text.Contains($"已连接 {connected}", StringComparison.Ordinal)) throw new InvalidOperationException("页脚连接数未恢复。");
+                return new
+                {
+                    page, captureState = "idle", statusFilter = ViewModel.StatusFilter, busy = ViewModel.Busy, transferring = ViewModel.Transferring,
+                    restoredDevices = ViewModel.Devices.Select(row => new { row.Serial, row.Info.State, row.Info.Generation, row.Info.TransportId }).ToArray(),
+                    expectedRestoredDevices = restoredDevices.Select(pair => new { pair.Value.Serial, pair.Value.State, pair.Value.Generation, pair.Value.TransportId }).ToArray(),
+                    directoryCount = unifiedDevices.Count, filteredCount = unifiedDeviceView.Cast<UnifiedDeviceRow>().Count(), connectedCount = connected,
+                    footer = workspaceCounts.Text, actualWidth = ActualWidth, actualHeight = ActualHeight, renderedDeviceRows = rows, settledMilliseconds = deadline.ElapsedMilliseconds
+                };
+            }
+            catch (InvalidOperationException ex) { reason = ex.Message; }
+            await Task.Delay(20);
+        }
+        throw new InvalidOperationException($"分页截图布局未在3秒内恢复：{page}；{reason}");
+    }
+
+    private object[] CaptureIdleDeviceRows()
+    {
+        var grid = VisualDescendants<DataGrid>(wallList).Single();
+        var expected = unifiedDeviceView.Cast<UnifiedDeviceRow>().ToArray();
+        var viewport = new Rect(0, grid.ColumnHeaderHeight, grid.ActualWidth, Math.Max(0, grid.ActualHeight - grid.ColumnHeaderHeight));
+        var rows = new List<object>();
+        foreach (var item in expected)
+        {
+            if (grid.ItemContainerGenerator.ContainerFromItem(item) is not DataGridRow row || !row.IsVisible || row.ActualWidth <= 0 || row.ActualHeight <= 0)
+                throw new InvalidOperationException("非空目录尚未生成实际行：" + item.Name);
+            var bounds = row.TransformToAncestor(grid).TransformBounds(new Rect(row.RenderSize));
+            var visible = Rect.Intersect(bounds, viewport);
+            if (visible.IsEmpty || visible.Width <= 0 || visible.Height <= 0) throw new InvalidOperationException("设备行不在实际视口：" + item.Name);
+            bool Visible(FrameworkElement control)
+            {
+                if (!control.IsVisible || control.ActualWidth <= 0 || control.ActualHeight <= 0) return false;
+                var intersection = Rect.Intersect(control.TransformToAncestor(grid).TransformBounds(new Rect(control.RenderSize)), viewport);
+                return !intersection.IsEmpty && intersection.Width > 0 && intersection.Height > 0;
+            }
+            if (!VisualDescendants<TextBlock>(row).Any(text => text.Text == item.Name && Visible(text))) throw new InvalidOperationException("设备名称尚未呈现在视口：" + item.Name);
+            var action = VisualDescendants<Button>(row).FirstOrDefault(button => Visible(button) && VisualDescendants<TextBlock>(button).Any(text => text.Text == item.PrimaryLabel && Visible(text)))
+                ?? throw new InvalidOperationException("设备操作尚未呈现在视口：" + item.Name);
+            rows.Add(new { item.Key, item.Name, item.State, item.PrimaryLabel, row.ActualWidth, row.ActualHeight, visibleBounds = new { visible.X, visible.Y, visible.Width, visible.Height }, action = System.Windows.Automation.AutomationProperties.GetName(action) });
+        }
+        if (expected.Length != 0 && rows.Count == 0) throw new InvalidOperationException("非空目录截图没有实际设备行。");
+        return rows.ToArray();
+    }
+
     private async Task VerifyListConsoleSimplificationAsync()
     {
         NavigateTo("设备墙 / 主控");

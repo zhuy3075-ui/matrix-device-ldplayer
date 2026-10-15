@@ -91,7 +91,7 @@ public partial class MainWindow
             else if (binding.EndsWith("MonitorServerPath", StringComparison.Ordinal)) { ViewModel.Settings.MonitorServerPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.MonitorServerPath)); }
             else if (binding.EndsWith("MonitorFfmpegPath", StringComparison.Ordinal)) { ViewModel.Settings.MonitorFfmpegPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.MonitorFfmpegPath)); }
             else { ViewModel.Settings.ScrcpyPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.ScrcpyPath)); }
-        }); DockPanel.SetDock(browse, Dock.Right); row.Children.Add(browse); row.Children.Add(BoundInput(binding)); return Field(label, row);
+        }); DockPanel.SetDock(browse, Dock.Right); row.Children.Add(browse); var input = BoundInput(binding); LocalizationService.Bind(input, System.Windows.Automation.AutomationProperties.NameProperty, label); LocalizationService.Bind(browse, System.Windows.Automation.AutomationProperties.NameProperty, "浏览" + label); row.Children.Add(input); return Field(label, row);
     }
 
     private static FrameworkElement UnavailableSetting(string label, FrameworkElement control, string reason)

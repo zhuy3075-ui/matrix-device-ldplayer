@@ -80,7 +80,7 @@ public partial class MainWindow
         await Task.Delay(60);
         await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         if (applicationPage.ActualWidth <= 0 || applicationTargetPanel.ActualWidth < 180) throw new InvalidOperationException("应用管理布局为空或目标栏被挤压。");
-        var settings = VisualDescendants<Button>(Shell).Single(input => input.ToolTip as string == "环境设置");
+        var settings = VisualDescendants<Button>(Shell).Single(input => input.Name == "WorkspaceSettings");
         var settingsTop = settings.TranslatePoint(new Point(), Shell).Y;
         if (settingsTop < 0 || settingsTop + settings.ActualHeight > Shell.ActualHeight) throw new InvalidOperationException("应用页全局工具栏超出客户区。");
         if (screenshotPath is not null) SaveRender(Path.Combine(Path.GetDirectoryName(screenshotPath)!, "applications-management.png"));

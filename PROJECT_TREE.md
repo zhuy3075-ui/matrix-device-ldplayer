@@ -9,8 +9,10 @@ MatrixDevice.Reconstructed/
 |   |-- codex/
 |   |   |-- apple-experience/
 |   |   |   |-- A02_MAIN_TARGET.md
+|   |   |   |-- A03_APPEARANCE.md
 |   |   |   |-- CONTROL_CATALOG.md
 |   |   |   |-- DEFECTS.md
+|   |   |   |-- HANDOFF.md
 |   |   |   +-- TEST_MATRIX.md
 |   |   |-- device-action-dedup/
 |   |   |   +-- REPORT.md
@@ -219,6 +221,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- MainWindow.xaml
 |   |   |-- MainWindow.xaml.cs
 |   |   |-- MatrixDevice.Desktop.csproj
+|   |   |-- MotionPreferences.cs
 |   |   |-- NativeWindowHost.cs
 |   |   |-- packages.lock.json
 |   |   |-- Presentation.cs
@@ -228,6 +231,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- UnifiedDeviceRow.cs
 |   |   |-- Views/
 |   |   |   |-- ApiView.cs
+|   |   |   |-- AppleAppearanceSmoke.cs
 |   |   |   |-- ApplicationManagementSmoke.cs
 |   |   |   |-- ApplicationRows.cs
 |   |   |   |-- ApplicationsView.cs

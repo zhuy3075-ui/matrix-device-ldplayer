@@ -30,9 +30,9 @@ public partial class MainWindow
                 NavigateTo(page.Tag);
                 await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                 UpdateLayout();
-                VerifyNoRemovedShellControls(Shell, page.Label);
+                VerifyNoRemovedShellControls(Shell, LocalizationService.PageDisplayName(page.Tag));
                 if (!navigation.TryGetValue(page.Tag, out var link) || link.IsChecked != true || !link.IsVisible)
-                    throw new InvalidOperationException($"页面 {page.Label} 没有唯一有效导航入口。");
+                    throw new InvalidOperationException($"页面 {LocalizationService.PageDisplayName(page.Tag)} 没有唯一有效导航入口。");
             }
 
             NavigateTo("节点");
@@ -89,7 +89,7 @@ public partial class MainWindow
                     ViewModel.StatusFilter = previousStatus;
                 }
             }
-            if (!VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "环境设置") || !VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "设备详情"))
+            if (!VisualDescendants<Button>(Shell).Any(button => button.Name == "WorkspaceSettings") || !VisualDescendants<Button>(Shell).Any(button => button.Name == "DeviceDetails"))
                 throw new InvalidOperationException("设置或设备属性入口缺失。");
 
             ShowDeviceDirectory();

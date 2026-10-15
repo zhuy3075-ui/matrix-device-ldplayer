@@ -4610,9 +4610,18 @@ public sealed class LocalizationService : INotifyPropertyChanged
     public event EventHandler? LanguageChanged;
     public string this[string key] => Get(key);
 
+    private static readonly IReadOnlyDictionary<string, string> PageNames = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["设备墙 / 主控"] = "设备", ["实时监控"] = "监控", ["节点"] = "界面检查", ["截图 / 取色"] = "截屏",
+        ["Shell"] = "终端", ["应用"] = "应用", ["文件"] = "文件", ["文本"] = "文本",
+        ["脚本"] = "自动化", ["API"] = "接口", ["扩展"] = "工具", ["设置"] = "设置"
+    };
+
+    public static string PageDisplayName(string tag) => PageNames.TryGetValue(tag, out var name) ? name : throw new ArgumentException("未知页面：" + tag, nameof(tag));
+
     private static readonly IReadOnlyDictionary<string, string> Chinese = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        ["Shell"] = "命令终端", ["API"] = "接口服务", ["Home"] = "主页", ["serial"] = "设备序列号",
+        ["Shell"] = PageDisplayName("Shell"), ["API"] = PageDisplayName("API"), ["Home"] = "主页", ["serial"] = "设备序列号",
         ["Ready"] = "就绪", ["Offline"] = "离线", ["Unauthorized"] = "等待授权", ["Discovered"] = "已发现", ["Error"] = "异常",
         ["Idle"] = "未运行", ["Running"] = "运行中", ["Cancelling"] = "正在停止", ["Completed"] = "已完成", ["Cancelled"] = "已停止",
         ["Failed"] = "失败", ["TimedOut"] = "超时", ["Lost"] = "结果待核对", ["HEX"] = "十六进制色值", ["RGB"] = "三色值",
@@ -4730,10 +4739,11 @@ public partial class MainWindow : Window
     public MainWindow(WorkspaceViewModel viewModel)
     {
         InitializeComponent();
+        SetResourceReference(StyleProperty, typeof(Window));
         ViewModel = viewModel;
         DataContext = viewModel;
         LocalizationService.Current.SetLanguage(viewModel.Runtime.Settings.Language);
-        Shell.Background = new SolidColorBrush(Color.FromRgb(247, 249, 252));
+        Shell.Background = ThemeBrush("CanvasBrush");
         Language = System.Windows.Markup.XmlLanguage.GetLanguage(viewModel.Runtime.Settings.Language);
         Width = viewModel.Runtime.Settings.WindowWidth;
         Height = viewModel.Runtime.Settings.WindowHeight;
@@ -4797,10 +4807,10 @@ public partial class MainWindow : Window
 
     private void AddTab(string title, FrameworkElement content)
     {
-        System.Windows.Documents.TextElement.SetForeground(content, WorkspaceBrush("#182239"));
+        System.Windows.Documents.TextElement.SetForeground(content, ThemeBrush("TextBrush"));
         System.Windows.Documents.TextElement.SetFontWeight(content, FontWeights.Normal);
         var tab = new TabItem { Content = content, Tag = title };
-        LocalizationService.Bind(tab, HeaderedContentControl.HeaderProperty, title);
+        tab.Header = LocalizationService.PageDisplayName(title);
         tabs.Items.Add(tab);
     }
     private static DockPanel Page() => new() { Margin = new Thickness(14), LastChildFill = true };
@@ -4813,15 +4823,15 @@ public partial class MainWindow : Window
     }
     private static TextBlock BoundText(string binding, bool wrap = false) { var text = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap }; text.SetBinding(TextBlock.TextProperty, new Binding(binding)); return text; }
     private static Binding TwoWay(string path) => new(path) { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged, ValidatesOnExceptions = true, ValidatesOnDataErrors = true };
-    private static TextBox BoundInput(string binding, bool readOnly = false, bool multiline = false) { var input = new TextBox { IsReadOnly = readOnly, AcceptsReturn = multiline, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap, VerticalScrollBarVisibility = multiline ? ScrollBarVisibility.Auto : ScrollBarVisibility.Hidden, VerticalContentAlignment = multiline ? VerticalAlignment.Top : VerticalAlignment.Center }; input.SetBinding(TextBox.TextProperty, readOnly ? new Binding(binding) { Mode = BindingMode.OneWay } : TwoWay(binding)); return input; }
-    private static CheckBox Check(string text, string binding) { var checkbox = new CheckBox(); LocalizationService.Bind(checkbox, ContentControl.ContentProperty, text); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(binding)); return checkbox; }
+    private static TextBox BoundInput(string binding, bool readOnly = false, bool multiline = false) { var input = new TextBox { IsReadOnly = readOnly, AcceptsReturn = multiline, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap, VerticalScrollBarVisibility = multiline ? ScrollBarVisibility.Auto : ScrollBarVisibility.Hidden, VerticalContentAlignment = multiline ? VerticalAlignment.Top : VerticalAlignment.Center }; input.SetBinding(TextBox.TextProperty, readOnly ? new Binding(binding) { Mode = BindingMode.OneWay } : TwoWay(binding)); LocalizationService.Bind(input, System.Windows.Automation.AutomationProperties.NameProperty, binding switch { nameof(WorkspaceViewModel.NodeProperties) => "节点属性", nameof(WorkspaceViewModel.ShellInput) => "命令", nameof(WorkspaceViewModel.TextInput) => "文本", nameof(WorkspaceViewModel.RemotePath) => "设备路径", nameof(WorkspaceViewModel.DeviceName) => "名称", _ => "输入" }); System.Windows.Automation.AutomationProperties.SetAutomationId(input, binding); return input; }
+    private static CheckBox Check(string text, string binding) { var checkbox = new CheckBox(); LocalizationService.Bind(checkbox, ContentControl.ContentProperty, text); LocalizationService.Bind(checkbox, System.Windows.Automation.AutomationProperties.NameProperty, text); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(binding)); return checkbox; }
     private static FrameworkElement Field(string label, FrameworkElement control, double labelWidth = 155)
     {
-        var row = new Grid { Margin = new Thickness(0, 0, 0, 9) }; row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(labelWidth) }); row.ColumnDefinitions.Add(new ColumnDefinition()); var text = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap }; LocalizationService.Bind(text, TextBlock.TextProperty, label); row.Children.Add(text); Grid.SetColumn(control, 1); row.Children.Add(control); return row;
+        var row = new Grid { Margin = new Thickness(0, 0, 0, 9) }; row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(labelWidth) }); row.ColumnDefinitions.Add(new ColumnDefinition()); var text = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap }; LocalizationService.Bind(text, TextBlock.TextProperty, label); row.Children.Add(text); if (control is Control) LocalizationService.Bind(control, System.Windows.Automation.AutomationProperties.NameProperty, label); Grid.SetColumn(control, 1); row.Children.Add(control); return row;
     }
     private static Button Button(string glyph, string title, ICommand command)
     {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal }; panel.Children.Add(new TextBlock { Text = glyph, FontFamily = new FontFamily("Segoe MDL2 Assets"), Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center }); var caption = new TextBlock { VerticalAlignment = VerticalAlignment.Center }; LocalizationService.Bind(caption, TextBlock.TextProperty, title); panel.Children.Add(caption); var button = new Button { Content = panel, Command = command }; LocalizationService.Bind(button, ToolTipProperty, title); return button;
+        var panel = new StackPanel { Orientation = Orientation.Horizontal }; panel.Children.Add(new TextBlock { Text = glyph, FontFamily = new FontFamily("Segoe MDL2 Assets"), Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center }); var caption = new TextBlock { VerticalAlignment = VerticalAlignment.Center }; LocalizationService.Bind(caption, TextBlock.TextProperty, title); panel.Children.Add(caption); var button = new Button { Content = panel, Command = command }; LocalizationService.Bind(button, ToolTipProperty, title); LocalizationService.Bind(button, System.Windows.Automation.AutomationProperties.NameProperty, title); return button;
     }
     private Button Button(string glyph, string title, Action action) => Button(glyph, title, new ActionCommand(action));
     private Button Button(string glyph, string title, Func<Task> action, bool write = false, Func<bool>? canExecute = null)
@@ -4856,7 +4866,7 @@ public partial class MainWindow : Window
         Language = System.Windows.Markup.XmlLanguage.GetLanguage(LocalizationService.Current.Language);
         ViewModel.Settings.Language = LocalizationService.Current.Language;
         ViewModel.Settings.Changed(nameof(SettingsEditor.Language));
-        Title = LocalizationService.Current.Get("矩阵设备");
+        UpdateNavigation();
         foreach (var row in ViewModel.Devices) row.Changed(nameof(DeviceRow.FrameLabel));
     }
 
@@ -4955,6 +4965,7 @@ public partial class MainWindow : Window
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("启动验收仅允许显式演示模式");
         if (tabs.SelectedIndex != 0 || wallViewMode != "list") throw new InvalidOperationException("初始页面必须是统一设备列表。");
+        await VerifyAppleAppearanceAsync(screenshotPath);
         await VerifyListConsoleSimplificationAsync();
         if (screenshotPath is not null)
         {
@@ -5015,7 +5026,7 @@ public partial class MainWindow : Window
         LocalizationService.Current.SetLanguage("zh-CN");
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         var settingsTab = tabs.Items.Cast<TabItem>().Single(tab => Equals(tab.Tag, "设置"));
-        if ((tabs.Items[0] as TabItem)?.Header?.ToString() != "设备墙 / 主控" || settingsTab.Header?.ToString() != "设置") throw new InvalidOperationException("简体中文导航未生效");
+        if ((tabs.Items[0] as TabItem)?.Header?.ToString() != "设备" || settingsTab.Header?.ToString() != "设置") throw new InvalidOperationException("简体中文导航未生效");
         tabs.SelectedItem = settingsTab;
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         var labels = VisualDescendants<TextBlock>(Shell).Select(text => text.Text).ToHashSet(StringComparer.Ordinal);
@@ -5070,7 +5081,7 @@ public partial class MainWindow : Window
         {
             navigation[route.Tag].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             if (!Equals((tabs.SelectedItem as TabItem)?.Tag, route.Tag) || navigation.Count(item => item.Value.IsChecked == true) != 1 || navigation[route.Tag].IsChecked != true)
-                throw new InvalidOperationException("侧栏导航或选中态失效：" + route.Label);
+                throw new InvalidOperationException("侧栏导航或选中态失效：" + LocalizationService.PageDisplayName(route.Tag));
         }
         if (!ReferenceEquals(currentBeforeNavigation, ViewModel.CurrentDevice) || !ReferenceEquals(mainBeforeNavigation, ViewModel.MainDevice) ||
             !selectedBeforeNavigation.SequenceEqual(ViewModel.Targets().Select(device => device.Serial)) || ViewModel.ShellInput != "echo navigation-state" || ViewModel.TextInput != "跨页面保留输入" ||
@@ -5153,11 +5164,14 @@ public partial class MainWindow : Window
             await ViewModel.ExportNodesAsync(System.IO.Path.Combine(directory, "desktop-nodes.json"));
         }
         var controlStates = new List<object>();
+        var pageCaptures = new List<object>();
+        var restoredDevices = ViewModel.Devices.ToDictionary(device => device, device => device.Info);
+        var restoredFilter = ViewModel.StatusFilter;
         foreach (TabItem tab in tabs.Items)
         {
             NavigateTo(tab.Tag.ToString()!);
-            await Dispatcher.InvokeAsync(() => { UpdateLayout(); }, System.Windows.Threading.DispatcherPriority.Render);
             var pageName = tab.Tag.ToString()!;
+            await SettleIdlePageCaptureAsync(pageName, restoredDevices, restoredFilter);
             controlStates.AddRange(CaptureControlStates(pageName, "idle", Shell));
             var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var busyOperation = ViewModel.ExecuteAsync("控件忙状态检查", () => release.Task);
@@ -5184,6 +5198,8 @@ public partial class MainWindow : Window
                 var point = timezoneAction.TransformToAncestor(settingsScroll).Transform(new Point());
                 if (point.Y < 0 || point.Y + timezoneAction.ActualHeight > settingsScroll.ActualHeight + 2) throw new InvalidOperationException("扩展页时区按钮滚动后仍不可达");
             }
+            var capture = await SettleIdlePageCaptureAsync(pageName, restoredDevices, restoredFilter);
+            pageCaptures.Add(capture);
             if (screenshotPath is not null)
             {
                 if (!System.IO.Path.IsPathFullyQualified(screenshotPath)) throw new InvalidOperationException("截图输出必须为绝对路径");
@@ -5194,10 +5210,12 @@ public partial class MainWindow : Window
             }
         }
         if (screenshotPath is not null)
+        {
             await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".controls.json"), JsonSerializer.Serialize(controlStates, JsonDefaults.Options));
+            await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".captures.json"), JsonSerializer.Serialize(pageCaptures, JsonDefaults.Options));
+        }
         NavigateTo("设备墙 / 主控");
-        await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
-        await Dispatcher.InvokeAsync(() => { UpdateLayout(); }, System.Windows.Threading.DispatcherPriority.Render);
+        await SettleIdlePageCaptureAsync("设备墙 / 主控", restoredDevices, restoredFilter);
         var tiles = VisualDescendants<UnifiedDeviceTile>(Shell).Where(tile => tile.IsVisible).ToArray();
         if (screenshotPath is not null) await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".rows.json"), JsonSerializer.Serialize(tiles.Select(tile => new { view = "list", owner = tile.Owner is not null, context = tile.DataContext?.GetType().Name, child = tile.Child?.GetType().Name, tile.ActualWidth, tile.ActualHeight }), JsonDefaults.Options));
         if (!unifiedDeviceView.IsEmpty && tiles.Length == 0) throw new InvalidOperationException("非空统一目录没有生成可见列表操作行。");
@@ -5212,9 +5230,9 @@ public partial class MainWindow : Window
 
     private void SaveRender(string path)
     {
-        foreach (var label in new[] { "环境设置", "设备详情" })
+        foreach (var label in new[] { "WorkspaceSettings", "DeviceDetails" })
         {
-            var control = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == label);
+            var control = VisualDescendants<Button>(Shell).Single(button => button.Name == label);
             var position = control.TranslatePoint(new Point(), Shell);
             if (position.X < 0 || position.Y < 0 || position.X + control.ActualWidth > Shell.ActualWidth + 1 || position.Y + control.ActualHeight > Shell.ActualHeight + 1)
                 throw new InvalidOperationException("截图前全局工具栏超出客户区：" + label);
@@ -5269,6 +5287,48 @@ public sealed class DispatcherTimerAdapter
     <ProjectReference Include="../MatrixDevice.Host/MatrixDevice.Host.csproj" />
   </ItemGroup>
 </Project>
+
+```
+
+## src/MatrixDevice.Desktop/MotionPreferences.cs
+
+```csharp
+using System.ComponentModel;
+using System.Windows;
+using System.Windows.Controls.Primitives;
+
+namespace MatrixDevice.Desktop;
+
+public sealed class MotionPreferences : INotifyPropertyChanged
+{
+    public static MotionPreferences Current { get; } = new();
+    private bool? fixturePreference;
+    public bool AnimationsEnabled => fixturePreference ?? SystemParameters.ClientAreaAnimation;
+    public PopupAnimation PopupAnimation => AnimationsEnabled ? PopupAnimation.Fade : PopupAnimation.None;
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    private MotionPreferences()
+    {
+        SystemParameters.StaticPropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName != nameof(SystemParameters.ClientAreaAnimation)) return;
+            if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess()) dispatcher.BeginInvoke(Notify);
+            else Notify();
+        };
+    }
+
+    internal void SetFixturePreference(bool? enabled)
+    {
+        fixturePreference = enabled;
+        Notify();
+    }
+
+    private void Notify()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AnimationsEnabled)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PopupAnimation)));
+    }
+}
 
 ```
 
@@ -5669,21 +5729,28 @@ public sealed class TransferRow : ObservableObject
 
 ```xml
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <SolidColorBrush x:Key="AccentBrush" Color="#3274F6" />
-  <SolidColorBrush x:Key="AccentHoverBrush" Color="#2868E4" />
-  <SolidColorBrush x:Key="AccentPressedBrush" Color="#215ACE" />
-  <SolidColorBrush x:Key="AccentSoftBrush" Color="#EDF3FF" />
-  <SolidColorBrush x:Key="CanvasBrush" Color="#F5F7FB" />
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:MatrixDevice.Desktop">
+  <SolidColorBrush x:Key="AccentBrush" Color="#3769C8" />
+  <SolidColorBrush x:Key="AccentHoverBrush" Color="#2D5CB4" />
+  <SolidColorBrush x:Key="AccentPressedBrush" Color="#244D99" />
+  <LinearGradientBrush x:Key="AccentSoftBrush" StartPoint="0,0" EndPoint="0,1">
+    <GradientStop Color="#F1F4FA" Offset="0" /><GradientStop Color="#E9EFF9" Offset="1" />
+  </LinearGradientBrush>
+  <SolidColorBrush x:Key="CanvasBrush" Color="#F5F5F7" />
   <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFF" />
-  <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#F6F8FC" />
-  <SolidColorBrush x:Key="SurfacePressedBrush" Color="#EEF1F7" />
-  <SolidColorBrush x:Key="BorderBrush" Color="#E4E8F0" />
-  <SolidColorBrush x:Key="TextBrush" Color="#182239" />
-  <SolidColorBrush x:Key="MutedBrush" Color="#63718A" />
-  <SolidColorBrush x:Key="DisabledBrush" Color="#A4AEC0" />
-  <SolidColorBrush x:Key="DangerBrush" Color="#D94A5C" />
-  <SolidColorBrush x:Key="SuccessBrush" Color="#23A57A" />
+  <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#F0F0F3" />
+  <SolidColorBrush x:Key="SurfacePressedBrush" Color="#E7E7EC" />
+  <SolidColorBrush x:Key="BorderBrush" Color="#D8D8DE" />
+  <SolidColorBrush x:Key="InputBorderBrush" Color="#8A8A91" />
+  <SolidColorBrush x:Key="TextBrush" Color="#1D1D1F" />
+  <SolidColorBrush x:Key="MutedBrush" Color="#626269" />
+  <SolidColorBrush x:Key="DisabledBrush" Color="#8A8A91" />
+  <SolidColorBrush x:Key="DangerBrush" Color="#B33B45" />
+  <SolidColorBrush x:Key="SuccessBrush" Color="#237A57" />
+  <SolidColorBrush x:Key="WarningBrush" Color="#8A5B12" />
+  <SolidColorBrush x:Key="DangerSurfaceBrush" Color="#FFF2F3" />
+  <DropShadowEffect x:Key="FloatingShadow" Color="#1D1D1F" BlurRadius="14" ShadowDepth="3" Opacity="0.12" />
 
   <Style x:Key="KeyboardFocusVisual">
     <Setter Property="Control.Template">
@@ -5697,7 +5764,7 @@ public sealed class TransferRow : ObservableObject
   </Style>
 
   <Style TargetType="Window">
-    <Setter Property="FontFamily" Value="Microsoft YaHei UI, Segoe UI" />
+    <Setter Property="FontFamily" Value="Segoe UI, Microsoft YaHei UI" />
     <Setter Property="FontSize" Value="13" />
     <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
     <Setter Property="Background" Value="{StaticResource CanvasBrush}" />
@@ -5709,13 +5776,28 @@ public sealed class TransferRow : ObservableObject
   </Style>
 
   <ControlTemplate x:Key="RoundedButtonTemplate" TargetType="Button">
-    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+    <Grid>
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
             BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6"
             SnapsToDevicePixels="True">
       <ContentPresenter Margin="{TemplateBinding Padding}" RecognizesAccessKey="True"
                         HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                         VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
-    </Border>
+      </Border>
+      <Border x:Name="FocusFeedback" Background="White" CornerRadius="6" Opacity="0" IsHitTestVisible="False" />
+    </Grid>
+    <ControlTemplate.Triggers>
+      <MultiDataTrigger>
+        <MultiDataTrigger.Conditions>
+          <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="True" />
+          <Condition Binding="{Binding AnimationsEnabled, Source={x:Static local:MotionPreferences.Current}}" Value="True" />
+        </MultiDataTrigger.Conditions>
+        <MultiDataTrigger.EnterActions>
+          <BeginStoryboard x:Name="FocusFeedbackMotion"><Storyboard><DoubleAnimation Storyboard.TargetName="FocusFeedback" Storyboard.TargetProperty="Opacity" From="0" To="0.06" Duration="0:0:0.12" /></Storyboard></BeginStoryboard>
+        </MultiDataTrigger.EnterActions>
+        <MultiDataTrigger.ExitActions><RemoveStoryboard BeginStoryboardName="FocusFeedbackMotion" /></MultiDataTrigger.ExitActions>
+      </MultiDataTrigger>
+    </ControlTemplate.Triggers>
   </ControlTemplate>
   <Style TargetType="Button">
     <Setter Property="FontSize" Value="12" />
@@ -5754,13 +5836,13 @@ public sealed class TransferRow : ObservableObject
     </Style.Triggers>
   </Style>
   <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-    <Setter Property="Background" Value="{StaticResource AccentHoverBrush}" />
-    <Setter Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
+    <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
     <Setter Property="Foreground" Value="White" />
     <Style.Triggers>
       <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{StaticResource AccentPressedBrush}" />
-        <Setter Property="BorderBrush" Value="{StaticResource AccentPressedBrush}" />
+        <Setter Property="Background" Value="{StaticResource AccentHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
       </Trigger>
       <Trigger Property="IsPressed" Value="True">
         <Setter Property="Background" Value="{StaticResource AccentPressedBrush}" />
@@ -5792,12 +5874,25 @@ public sealed class TransferRow : ObservableObject
   </Style>
 
   <ControlTemplate x:Key="RoundedToggleTemplate" TargetType="ToggleButton">
-    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+    <Grid>
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
             BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
       <ContentPresenter Margin="{TemplateBinding Padding}" RecognizesAccessKey="True"
                         HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                         VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
-    </Border>
+      </Border>
+      <Border x:Name="FocusFeedback" Background="White" CornerRadius="6" Opacity="0" IsHitTestVisible="False" />
+    </Grid>
+    <ControlTemplate.Triggers>
+      <MultiDataTrigger>
+        <MultiDataTrigger.Conditions>
+          <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="True" />
+          <Condition Binding="{Binding AnimationsEnabled, Source={x:Static local:MotionPreferences.Current}}" Value="True" />
+        </MultiDataTrigger.Conditions>
+        <MultiDataTrigger.EnterActions><BeginStoryboard x:Name="FocusFeedbackMotion"><Storyboard><DoubleAnimation Storyboard.TargetName="FocusFeedback" Storyboard.TargetProperty="Opacity" From="0" To="0.06" Duration="0:0:0.12" /></Storyboard></BeginStoryboard></MultiDataTrigger.EnterActions>
+        <MultiDataTrigger.ExitActions><RemoveStoryboard BeginStoryboardName="FocusFeedbackMotion" /></MultiDataTrigger.ExitActions>
+      </MultiDataTrigger>
+    </ControlTemplate.Triggers>
   </ControlTemplate>
   <Style TargetType="ToggleButton">
     <Setter Property="FontSize" Value="12" />
@@ -5873,7 +5968,7 @@ public sealed class TransferRow : ObservableObject
     <Setter Property="FontSize" Value="13" />
     <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
     <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource InputBorderBrush}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="Padding" Value="10,6" />
     <Setter Property="MinHeight" Value="32" />
@@ -5894,7 +5989,7 @@ public sealed class TransferRow : ObservableObject
       </Setter.Value>
     </Setter>
     <Style.Triggers>
-      <Trigger Property="IsMouseOver" Value="True"><Setter Property="BorderBrush" Value="#C7D3E8" /></Trigger>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="BorderBrush" Value="{StaticResource InputBorderBrush}" /></Trigger>
       <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" /></Trigger>
       <Trigger Property="IsReadOnly" Value="True"><Setter Property="Background" Value="#FAFBFD" /></Trigger>
       <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5" /></Trigger>
@@ -5933,7 +6028,7 @@ public sealed class TransferRow : ObservableObject
     <Setter Property="FontSize" Value="13" />
     <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
     <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
-    <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource InputBorderBrush}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="MinHeight" Value="32" />
     <Setter Property="Padding" Value="10,5,30,5" />
@@ -5962,10 +6057,10 @@ public sealed class TransferRow : ObservableObject
                      Margin="{TemplateBinding Padding}" Visibility="Hidden" IsReadOnly="{TemplateBinding IsReadOnly}"
                      VerticalContentAlignment="Center" />
             <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False"
-                   IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="Fade">
+                   IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="{Binding PopupAnimation, Source={x:Static local:MotionPreferences.Current}}">
               <Border MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
                       MaxHeight="{TemplateBinding MaxDropDownHeight}" Background="White"
-                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="4" Margin="0,4,0,0">
+                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="4" Margin="0,4,0,0" Effect="{StaticResource FloatingShadow}">
                 <ScrollViewer CanContentScroll="True" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
                   <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained" />
                 </ScrollViewer>
@@ -5983,7 +6078,7 @@ public sealed class TransferRow : ObservableObject
       </Setter.Value>
     </Setter>
     <Style.Triggers>
-      <Trigger Property="IsMouseOver" Value="True"><Setter Property="BorderBrush" Value="#C7D3E8" /></Trigger>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="BorderBrush" Value="{StaticResource InputBorderBrush}" /></Trigger>
       <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" /></Trigger>
       <Trigger Property="IsDropDownOpen" Value="True"><Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" /></Trigger>
       <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5" /></Trigger>
@@ -6027,7 +6122,7 @@ public sealed class TransferRow : ObservableObject
           <Grid Background="Transparent">
             <Grid.ColumnDefinitions><ColumnDefinition Width="18" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
             <Border x:Name="CheckBorder" Width="16" Height="16" CornerRadius="4" BorderThickness="1"
-                    BorderBrush="#CCD5E4" Background="White" VerticalAlignment="Center">
+                    BorderBrush="{StaticResource InputBorderBrush}" Background="White" VerticalAlignment="Center">
               <TextBlock x:Name="CheckMark" Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="10"
                          Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed" />
             </Border>
@@ -6073,10 +6168,10 @@ public sealed class TransferRow : ObservableObject
     <Setter Property="CanUserDeleteRows" Value="False" />
     <Setter Property="HeadersVisibility" Value="Column" />
     <Setter Property="GridLinesVisibility" Value="Horizontal" />
-    <Setter Property="HorizontalGridLinesBrush" Value="#F0F2F7" />
+    <Setter Property="HorizontalGridLinesBrush" Value="#EBEBEF" />
     <Setter Property="RowHeight" Value="36" />
     <Setter Property="ColumnHeaderHeight" Value="38" />
-    <Setter Property="AlternatingRowBackground" Value="#FAFBFE" />
+    <Setter Property="AlternatingRowBackground" Value="#FAFAFC" />
     <Setter Property="RowBackground" Value="White" />
     <Setter Property="EnableRowVirtualization" Value="True" />
     <Setter Property="EnableColumnVirtualization" Value="True" />
@@ -6088,18 +6183,18 @@ public sealed class TransferRow : ObservableObject
     <Setter Property="FontSize" Value="12" />
     <Setter Property="FontWeight" Value="SemiBold" />
     <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
-    <Setter Property="Background" Value="#F8FAFD" />
+    <Setter Property="Background" Value="#F7F7F9" />
     <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
     <Setter Property="BorderThickness" Value="0,0,0,1" />
     <Setter Property="Padding" Value="10,7" />
     <Setter Property="HorizontalContentAlignment" Value="Left" />
-    <Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#F0F4FB" /></Trigger></Style.Triggers>
+    <Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{StaticResource SurfaceHoverBrush}" /></Trigger></Style.Triggers>
   </Style>
   <Style TargetType="DataGridRow">
     <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
     <Setter Property="FocusVisualStyle" Value="{x:Null}" />
     <Style.Triggers>
-      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#F5F8FE" /></Trigger>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{StaticResource SurfaceHoverBrush}" /></Trigger>
       <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="{StaticResource AccentSoftBrush}" /><Setter Property="Foreground" Value="{StaticResource TextBrush}" /></Trigger>
     </Style.Triggers>
   </Style>
@@ -6308,14 +6403,14 @@ public sealed class TransferRow : ObservableObject
     </Style.Resources>
     <Setter Property="FontSize" Value="12" />
     <Setter Property="Foreground" Value="White" />
-    <Setter Property="Background" Value="#182239" />
+    <Setter Property="Background" Value="{StaticResource TextBrush}" />
     <Setter Property="BorderThickness" Value="0" />
     <Setter Property="Padding" Value="10,7" />
     <Setter Property="MaxWidth" Value="360" />
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ToolTip">
-          <Border Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+          <Border Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}" Effect="{StaticResource FloatingShadow}">
             <ContentPresenter />
           </Border>
         </ControlTemplate>
@@ -6497,7 +6592,7 @@ public partial class MainWindow
     }, blocksApiWrites: false);
     private FrameworkElement BuildApiPage()
     {
-        var page = Page(); var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE768", "启动两个网关", ViewModel.StartApiCommand)); toolbar.Children.Add(Button("\uE71A", "停止网关", ViewModel.StopApiCommand)); toolbar.Children.Add(Button("\uE968", "启用所选设备", ViewModel.StartDeviceApiCommand)); toolbar.Children.Add(Button("\uE711", "停止所选设备", ViewModel.StopDeviceApiCommand)); DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
+        var page = Page(); var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE768", "启动两个网关", ViewModel.StartApiCommand)); toolbar.Children.Add(Button("\uE71A", "停止网关", ViewModel.StopApiCommand)); toolbar.Children.Add(Button("\uE968", "启用设备接口", ViewModel.StartDeviceApiCommand)); toolbar.Children.Add(Button("\uE711", "停止设备接口", ViewModel.StopDeviceApiCommand)); DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
         var summary = BoundText(nameof(WorkspaceViewModel.ApiSummary), true); summary.Margin = new Thickness(0, 10, 0, 10); DockPanel.SetDock(summary, Dock.Top); page.Children.Add(summary);
         var requestPanel = new DockPanel { Margin = new Thickness(0, 10, 0, 0), Height = 260 }; DockPanel.SetDock(requestPanel, Dock.Bottom);
         var requestToolbar = Toolbar();
@@ -6506,6 +6601,8 @@ public partial class MainWindow
         apiRoute = new TextBox { Text = "/health", Width = 190 }; requestToolbar.Children.Add(apiRoute);
         apiResponse = new TextBox { IsReadOnly = true, AcceptsReturn = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontFamily = new FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap };
         apiPayload = new TextBox { Text = "{}", AcceptsReturn = true, Height = 60, FontFamily = new FontFamily("Consolas"), Margin = new Thickness(0, 7, 0, 7) };
+        System.Windows.Automation.AutomationProperties.SetName(apiProtocol, "接口类型"); System.Windows.Automation.AutomationProperties.SetName(apiMethod, "请求方法");
+        System.Windows.Automation.AutomationProperties.SetName(apiRoute, "请求路径"); System.Windows.Automation.AutomationProperties.SetName(apiPayload, "请求正文"); System.Windows.Automation.AutomationProperties.SetName(apiResponse, "响应结果");
         apiSend = new AsyncCommand(SendApiTestRequestAsync, () => !ViewModel.Busy && !ViewModel.Transferring && OwnsApiEndpoint());
         apiProtocol.SelectionChanged += (_, _) => apiSend.Refresh(); ViewModel.PropertyChanged += (_, _) => apiSend.Refresh();
         requestToolbar.Children.Add(Button("\uE768", "发送请求", apiSend));
@@ -6516,6 +6613,223 @@ public partial class MainWindow
         var selectedColumn = new DataGridCheckBoxColumn { Binding = TwoWay(nameof(DeviceRow.IsSelected)), IsReadOnly = false }; LocalizationService.Bind(selectedColumn, DataGridColumn.HeaderProperty, "选中"); grid.Columns.Add(selectedColumn); TextColumn(grid, "serial", nameof(DeviceRow.Serial), 210); TextColumn(grid, "设备", nameof(DeviceRow.Name), 180); TextColumn(grid, "分组", nameof(DeviceRow.Group), 100); TextColumn(grid, "设备状态", nameof(DeviceRow.State), 120); TextColumn(grid, "普通 API 地址", nameof(DeviceRow.ApiAddress), 280); grid.MouseDoubleClick += (_, _) => { if (grid.SelectedItem is DeviceRow row && row.ApiAddress != "未启动") Clipboard.SetText(row.ApiAddress); }; page.Children.Add(grid); return page;
     }
 
+}
+
+```
+
+## src/MatrixDevice.Desktop/Views/AppleAppearanceSmoke.cs
+
+```csharp
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Threading;
+using MatrixDevice.Core;
+
+namespace MatrixDevice.Desktop;
+
+public partial class MainWindow
+{
+    private async Task VerifyAppleAppearanceAsync(string? screenshotPath)
+    {
+        if (!ViewModel.Demo) throw new InvalidOperationException("共享外观验收仅允许演示工作区。");
+        var cases = new List<string>();
+        var contrast = new List<object>();
+        void Check(bool condition, string name)
+        {
+            if (!condition) throw new InvalidOperationException("共享外观验收失败：" + name);
+            cases.Add(name);
+        }
+        void Contrast(string name, Brush foreground, Brush background, double minimum)
+        {
+            var ratio = AppearanceColors(foreground).SelectMany(front => AppearanceColors(background).Select(back => AppearanceContrast(front, back))).Min();
+            contrast.Add(new { name, ratio, minimum });
+            Check(ratio >= minimum, name + "对比度");
+        }
+        async Task Render() => await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.ApplicationIdle);
+        var expected = new Dictionary<string, string>
+        {
+            ["设备墙 / 主控"] = "设备", ["实时监控"] = "监控", ["节点"] = "界面检查", ["截图 / 取色"] = "截屏",
+            ["Shell"] = "终端", ["应用"] = "应用", ["文件"] = "文件", ["文本"] = "文本",
+            ["脚本"] = "自动化", ["API"] = "接口", ["扩展"] = "工具", ["设置"] = "设置"
+        };
+        Check(tabs.Items.Cast<TabItem>().Select(item => item.Tag as string).SequenceEqual(new[] { "设备墙 / 主控", "节点", "截图 / 取色", "Shell", "应用", "文件", "文本", "脚本", "API", "扩展", "设置", "实时监控" }), "保留12个内部Tag及原页序");
+        foreach (var (tag, caption) in expected)
+        {
+            navigation[tag].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            await Render();
+            var tab = tabs.Items.Cast<TabItem>().Single(item => Equals(item.Tag, tag));
+            Check(navigation[tag].ToolTip as string == caption && tab.Header as string == caption && Title == "矩阵设备 · " + caption + " · 演示模式", "名称、标题及页签：" + caption);
+            Check(AutomationProperties.GetName(navigation[tag]) == caption && navigation[tag].IsChecked == true, "导航选中及可访问名称：" + caption);
+            if (tag is "设备墙 / 主控" or "实时监控" or "应用")
+                Check(VisualDescendants<TextBlock>(Shell).Single(text => text.Name == "PageHeading").Text == caption, "正文标题：" + caption);
+            foreach (var button in VisualDescendants<Button>(Shell).Where(button => button.IsVisible && button.ToolTip is string))
+                Check(!string.IsNullOrWhiteSpace(AutomationProperties.GetName(button)) && AutomationProperties.GetName(button).Any(character => character is >= '\u4e00' and <= '\u9fff'), "按钮中文名称：" + button.ToolTip);
+            Contrast("选中导航“" + caption + "”", navigation[tag].Foreground, navigation[tag].Background, 4.5);
+        }
+        foreach (var (key, value) in new Dictionary<string, string>
+        {
+            ["CanvasBrush"] = "#FFF5F5F7", ["TextBrush"] = "#FF1D1D1F", ["MutedBrush"] = "#FF626269", ["AccentBrush"] = "#FF3769C8",
+            ["AccentHoverBrush"] = "#FF2D5CB4", ["AccentPressedBrush"] = "#FF244D99", ["SuccessBrush"] = "#FF237A57", ["WarningBrush"] = "#FF8A5B12", ["DangerBrush"] = "#FFB33B45"
+        }) Check(ThemeBrush(key) is SolidColorBrush brush && brush.Color.ToString() == value, "颜色token：" + key);
+        Contrast("正文", ThemeBrush("TextBrush"), ThemeBrush("SurfaceBrush"), 4.5);
+        Contrast("次级正文", ThemeBrush("MutedBrush"), ThemeBrush("CanvasBrush"), 4.5);
+        foreach (var key in new[] { "AccentBrush", "AccentHoverBrush", "AccentPressedBrush", "SuccessBrush", "WarningBrush", "DangerBrush" }) Contrast(key, ThemeBrush(key), ThemeBrush("SurfaceBrush"), 4.5);
+        Contrast("输入边界", ThemeBrush("InputBorderBrush"), ThemeBrush("SurfaceBrush"), 3);
+        Check(FontFamily.Source.Contains("Segoe UI", StringComparison.Ordinal) && FontFamily.Source.Contains("Microsoft YaHei UI", StringComparison.Ordinal), "系统无衬线字体回退");
+        NavigateTo("设置"); await Render();
+        var path = VisualDescendants<TextBox>(Shell).Single(input => BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path == "Settings.AdbPath");
+        Check(path.Focusable && AutomationProperties.GetName(path) == "ADB 路径", "路径字段可访问名称位于真实输入框");
+        foreach (var name in new[] { "WorkspaceSettings", "DeviceDetails" })
+        {
+            var tool = VisualDescendants<Button>(Shell).Single(button => button.Name == name);
+            Check(AutomationProperties.GetAutomationId(tool) == name && !string.IsNullOrWhiteSpace(AutomationProperties.GetName(tool)), "全局工具稳定ID：" + name);
+        }
+        var collapse = VisualDescendants<Button>(Shell).Single(button => button.Name == "NavigationToggle");
+        SetSidebarCollapsed(true); Check(AutomationProperties.GetName(collapse) == "展开导航", "折叠后导航动作名称更新");
+        SetSidebarCollapsed(false); Check(AutomationProperties.GetName(collapse) == "折叠导航", "展开后导航动作名称更新");
+        NavigateTo("实时监控"); await Render();
+        monitorPauseChoice.IsChecked = true; Check(AutomationProperties.GetName(monitorPauseChoice) == "恢复监控", "暂停后动作名称为恢复");
+        monitorPauseChoice.IsChecked = false; Check(AutomationProperties.GetName(monitorPauseChoice) == "暂停监控", "恢复后动作名称为暂停");
+        NavigateTo("API"); await Render();
+        Check(VisualDescendants<Button>(Shell).Any(button => AutomationProperties.GetName(button) == "停止设备接口") && !VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "停止所选设备"), "接口停止动作不误称关闭设备");
+
+        var probe = Button("\uE74E", "保存", () => Task.CompletedTask);
+        var primary = Button("\uE768", "运行", new ActionCommand(() => { })); primary.SetResourceReference(StyleProperty, "PrimaryButton");
+        var toggle = WallToggle("\uE8EA", "选择视图");
+        var input = BoundInput(nameof(WorkspaceViewModel.ShellInput));
+        var check = MainWindow.Check("同步点击滑动", nameof(WorkspaceViewModel.SyncMouse));
+        var combo = new ComboBox { ItemsSource = new[] { "标准" }, SelectedIndex = 0 };
+        AutomationProperties.SetName(combo, "界面选项");
+        var sample = new StackPanel(); sample.Children.Add(probe); sample.Children.Add(primary); sample.Children.Add(toggle); sample.Children.Add(Field("命令", input)); sample.Children.Add(check); sample.Children.Add(combo);
+        var overlay = new Border { Child = sample, Background = ThemeBrush("SurfaceBrush"), BorderBrush = ThemeBrush("BorderBrush"), BorderThickness = new Thickness(1), Padding = new Thickness(20), Width = 360, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetColumnSpan(overlay, 2); Panel.SetZIndex(overlay, 1000); Shell.Children.Add(overlay);
+        var animationMilliseconds = new List<double>();
+        var syncMouse = ViewModel.SyncMouse;
+        if (!GetAppearanceCursorPosition(out var pointer)) throw new InvalidOperationException("无法保存验收指针位置。");
+        async Task Hover(FrameworkElement control)
+        {
+            var point = control.PointToScreen(new Point(control.ActualWidth / 2, control.ActualHeight / 2));
+            if (!SetAppearanceCursorPosition((int)Math.Round(point.X), (int)Math.Round(point.Y))) throw new InvalidOperationException("无法移动验收指针。");
+            Mouse.Synchronize(); await Render(); await Task.Delay(30);
+            Check(control.IsMouseOver, "真实指针悬停：" + control.GetType().Name);
+        }
+        try
+        {
+            await Render();
+            Check(probe.IsEnabled && probe.Opacity == 1 && AutomationProperties.GetName(probe) == "保存", "普通按钮正常状态");
+            var popup = (Popup)combo.Template.FindName("PART_Popup", combo);
+            Contrast("实际普通按钮", probe.Foreground, probe.Background, 4.5);
+            Contrast("实际主要按钮", primary.Foreground, primary.Background, 4.5);
+            var originalSize = probe.RenderSize;
+            toggle.IsChecked = true; await Render();
+            Check(toggle.IsChecked == true && toggle.Background is SolidColorBrush { Color.A: 255 }, "真实分段控件选中表面可见");
+            Check(navigation["API"].Background is LinearGradientBrush, "真实选中导航使用轻微渐变"); Contrast("实际选中控件", toggle.Foreground, toggle.Background, 4.5);
+            MotionPreferences.Current.SetFixturePreference(true);
+            Activate(); probe.Focus(); Keyboard.Focus(probe); await Render();
+            Check(probe.IsKeyboardFocused && ReferenceEquals(probe.BorderBrush, ThemeBrush("AccentBrush")), "真实键盘焦点边界可见");
+            var feedback = (Border)probe.Template.FindName("FocusFeedback", probe);
+            await Task.Delay(170);
+            Check(feedback.HasAnimatedProperties && feedback.Opacity > 0 && feedback.Opacity <= .061, $"模板实例的局部淡入反馈运行（animated={feedback.HasAnimatedProperties}; opacity={feedback.Opacity}; enabled={MotionPreferences.Current.AnimationsEnabled}; focus={probe.IsKeyboardFocusWithin}）");
+            foreach (var trigger in probe.Template.Triggers.OfType<MultiDataTrigger>())
+                foreach (var begin in trigger.EnterActions.OfType<BeginStoryboard>())
+                    animationMilliseconds.AddRange(begin.Storyboard.Children.OfType<DoubleAnimation>().Select(animation => animation.Duration.TimeSpan.TotalMilliseconds));
+            Check(animationMilliseconds.Count != 0 && animationMilliseconds.All(duration => duration is >= 100 and <= 160), "动画时长在100至160毫秒");
+            Contrast("焦点可见边界", probe.BorderBrush, ThemeBrush("SurfaceBrush"), 3);
+            Check(probe.RenderSize == originalSize, "焦点与动效不改变控件尺寸");
+            Contrast("实际输入默认边界", input.BorderBrush, input.Background, 3);
+            var checkBorder = (Border)check.Template.FindName("CheckBorder", check);
+            check.IsChecked = false; await Render(); Contrast("实际复选未选边界", checkBorder.BorderBrush, checkBorder.Background, 3);
+            await Hover(input); Contrast("实际输入悬停边界", input.BorderBrush, input.Background, 3);
+            await Hover(combo); Contrast("实际选项悬停边界", combo.BorderBrush, combo.Background, 3);
+            await Hover(check); Contrast("实际复选悬停边界", checkBorder.BorderBrush, checkBorder.Background, 3);
+            check.IsChecked = true; await Render();
+            Contrast("实际复选勾选", ((TextBlock)check.Template.FindName("CheckMark", check)).Foreground, checkBorder.Background, 4.5);
+            probe.Focus(); Keyboard.Focus(probe); await Render();
+            var source = PresentationSource.FromVisual(this) ?? throw new InvalidOperationException("验收窗口未连接显示源。");
+            probe.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, Key.Space) { RoutedEvent = Keyboard.KeyDownEvent });
+            Check(probe.IsPressed, "实际Space路由按下状态");
+            Contrast("实际按下按钮", probe.Foreground, probe.Background, 4.5);
+            probe.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, Key.Space) { RoutedEvent = Keyboard.KeyUpEvent });
+            Check(!probe.IsPressed, "实际Space路由释放状态");
+            MotionPreferences.Current.SetFixturePreference(false); await Render();
+            Check(!feedback.HasAnimatedProperties && feedback.Opacity == 0 && popup.PopupAnimation == PopupAnimation.None, "减少动画立即移除局部动画和实际Popup淡入");
+            MotionPreferences.Current.SetFixturePreference(true); await Render(); await Task.Delay(170);
+            Check(feedback.HasAnimatedProperties && popup.PopupAnimation == PopupAnimation.Fade, "偏好变化后当前控件和实际Popup动态恢复动画");
+            primary.Focus(); Keyboard.Focus(primary); await Render(); await Task.Delay(170);
+            var primaryFeedback = (Border)primary.Template.FindName("FocusFeedback", primary);
+            Check(primaryFeedback.HasAnimatedProperties, "主要按钮实例反馈运行");
+            var primaryContrast = AppearanceColors(primary.Foreground).SelectMany(front => AppearanceColors(primary.Background).Select(back => AppearanceContrast(AppearanceOverlay(front, primaryFeedback.Opacity), AppearanceOverlay(back, primaryFeedback.Opacity)))).Min();
+            contrast.Add(new { name = "主要按钮白色反馈层合成", ratio = primaryContrast, minimum = 4.5, overlayOpacity = primaryFeedback.Opacity });
+            Check(primaryContrast >= 4.5, "反馈层合成后的主要按钮文字对比度");
+            toggle.Focus(); Keyboard.Focus(toggle); await Render(); await Task.Delay(170);
+            var toggleFeedback = (Border)toggle.Template.FindName("FocusFeedback", toggle);
+            Check(toggle.IsKeyboardFocused && toggleFeedback.HasAnimatedProperties && toggleFeedback.Opacity > 0, "实际Toggle模板局部反馈运行");
+            MotionPreferences.Current.SetFixturePreference(false); await Render();
+            Check(!toggleFeedback.HasAnimatedProperties && toggleFeedback.Opacity == 0 && popup.PopupAnimation == PopupAnimation.None, "减少动画同时移除Toggle与实际Popup反馈");
+            MotionPreferences.Current.SetFixturePreference(true); await Render();
+            ViewModel.SetExternalBusy(true); await Render();
+            Check(!probe.IsEnabled && probe.Opacity < .51, "真实繁忙门禁呈现禁用状态");
+            ViewModel.SetExternalBusy(false); await Render();
+            primary.IsEnabled = false; Check(primary.Opacity < .51, "主要按钮独立禁用状态");
+            primary.IsEnabled = true;
+            if (screenshotPath is not null)
+            {
+                if (!Path.IsPathFullyQualified(screenshotPath)) throw new InvalidOperationException("外观截图必须为绝对路径。");
+                Directory.CreateDirectory(Path.GetDirectoryName(screenshotPath)!);
+                SaveRender(Path.Combine(Path.GetDirectoryName(screenshotPath)!, "appearance-states.png"));
+            }
+        }
+        finally
+        {
+            ViewModel.SetExternalBusy(false); ViewModel.SyncMouse = syncMouse; MotionPreferences.Current.SetFixturePreference(null); Shell.Children.Remove(overlay);
+            SetAppearanceCursorPosition(pointer.X, pointer.Y);
+            NavigateTo("设备墙 / 主控");
+        }
+        Check(MotionPreferences.Current.AnimationsEnabled == SystemParameters.ClientAreaAnimation, "恢复并遵循真实系统动画偏好");
+        File.WriteAllText(Path.Combine(ViewModel.DataDirectory, "appearance.json"), JsonSerializer.Serialize(new
+        {
+            mode = "demo", status = "PASS-OFFLINE", cases, contrast, animationMilliseconds,
+            motionPreferenceScope = "仅模拟应用内偏好分支并恢复系统读取；未修改系统设置，未宣称实测操作系统偏好切换。",
+            requestedSystemAnimation = SystemParameters.ClientAreaAnimation
+        }, JsonDefaults.Options));
+    }
+
+    private static IEnumerable<Color> AppearanceColors(Brush brush) => brush switch
+    {
+        SolidColorBrush solid => [solid.Color], GradientBrush gradient => gradient.GradientStops.Select(stop => stop.Color),
+        _ => throw new InvalidOperationException("无法验证颜色对比的画刷：" + brush.GetType().Name)
+    };
+    private static double AppearanceContrast(Color foreground, Color background)
+    {
+        static double Luminance(Color color)
+        {
+            static double Linear(byte channel) { var value = channel / 255.0; return value <= .04045 ? value / 12.92 : Math.Pow((value + .055) / 1.055, 2.4); }
+            return .2126 * Linear(color.R) + .7152 * Linear(color.G) + .0722 * Linear(color.B);
+        }
+        var first = Luminance(foreground); var second = Luminance(background);
+        return (Math.Max(first, second) + .05) / (Math.Min(first, second) + .05);
+    }
+    private static Color AppearanceOverlay(Color color, double whiteOpacity) => Color.FromRgb(
+        (byte)Math.Round(color.R * (1 - whiteOpacity) + 255 * whiteOpacity),
+        (byte)Math.Round(color.G * (1 - whiteOpacity) + 255 * whiteOpacity),
+        (byte)Math.Round(color.B * (1 - whiteOpacity) + 255 * whiteOpacity));
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AppearancePointer { public int X; public int Y; }
+    [DllImport("user32.dll", EntryPoint = "GetCursorPos")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetAppearanceCursorPosition(out AppearancePointer pointer);
+    [DllImport("user32.dll", EntryPoint = "SetCursorPos")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetAppearanceCursorPosition(int x, int y);
 }
 
 ```
@@ -6605,7 +6919,7 @@ public partial class MainWindow
         await Task.Delay(60);
         await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         if (applicationPage.ActualWidth <= 0 || applicationTargetPanel.ActualWidth < 180) throw new InvalidOperationException("应用管理布局为空或目标栏被挤压。");
-        var settings = VisualDescendants<Button>(Shell).Single(input => input.ToolTip as string == "环境设置");
+        var settings = VisualDescendants<Button>(Shell).Single(input => input.Name == "WorkspaceSettings");
         var settingsTop = settings.TranslatePoint(new Point(), Shell).Y;
         if (settingsTop < 0 || settingsTop + settings.ActualHeight > Shell.ActualHeight) throw new InvalidOperationException("应用页全局工具栏超出客户区。");
         if (screenshotPath is not null) SaveRender(Path.Combine(Path.GetDirectoryName(screenshotPath)!, "applications-management.png"));
@@ -6715,7 +7029,7 @@ public partial class MainWindow
     {
         var page = Page(); applicationPage = page;
         var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
-        var title = Label("应用管理"); title.FontSize = 20; heading.Children.Add(title);
+        var title = Label(LocalizationService.PageDisplayName("应用")); title.Name = "PageHeading"; title.FontSize = 20; heading.Children.Add(title);
         applicationSummary = new TextBlock { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
         heading.Children.Add(applicationSummary); DockPanel.SetDock(heading, Dock.Top); page.Children.Add(heading);
         var content = new Grid(); content.ColumnDefinitions.Add(new() { Width = new GridLength(228), MinWidth = 180 });
@@ -6976,9 +7290,9 @@ public partial class MainWindow
         toolbar.Children.Add(Button("\uE8A3", "展开", () => SetExpanded(true))); toolbar.Children.Add(Button("\uE8A4", "折叠", () => SetExpanded(false)));
         DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
         var grid = new Grid { Margin = new Thickness(0, 10, 0, 0) }; grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(300) }); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(270) });
-        nodeCanvas = new Canvas { Background = new SolidColorBrush(Color.FromRgb(232, 237, 240)) };
+        nodeCanvas = new Canvas { Background = ThemeBrush("CanvasBrush") };
         var viewbox = new Viewbox { Child = nodeCanvas, Stretch = Stretch.Uniform, VerticalAlignment = VerticalAlignment.Center }; grid.Children.Add(viewbox);
-        nodeTree = new TreeView { Margin = new Thickness(8, 0, 8, 0), BorderBrush = new SolidColorBrush(Color.FromRgb(212, 221, 225)) }; nodeTree.SelectedItemChanged += (_, _) => { if (nodeTree.SelectedItem is TreeViewItem { Tag: NodeRow row }) ViewModel.SelectedNode = row; }; Grid.SetColumn(nodeTree, 1); grid.Children.Add(nodeTree);
+        nodeTree = new TreeView { Margin = new Thickness(8, 0, 8, 0), BorderBrush = ThemeBrush("BorderBrush") }; nodeTree.SelectedItemChanged += (_, _) => { if (nodeTree.SelectedItem is TreeViewItem { Tag: NodeRow row }) ViewModel.SelectedNode = row; }; Grid.SetColumn(nodeTree, 1); grid.Children.Add(nodeTree);
         var properties = new DockPanel(); var label = Label("节点属性"); DockPanel.SetDock(label, Dock.Top); properties.Children.Add(label); var text = BoundInput(nameof(WorkspaceViewModel.NodeProperties), readOnly: true, multiline: true); text.FontFamily = new FontFamily("Consolas"); properties.Children.Add(text); Grid.SetColumn(properties, 2); grid.Children.Add(properties);
         page.Children.Add(grid); return page;
     }
@@ -6996,7 +7310,7 @@ public partial class MainWindow
             if (row.Source.Bounds.Width > 0 && row.Source.Bounds.Height > 0)
             {
                 var bounds = row.Source.Bounds;
-                var rectangle = new Rectangle { Width = bounds.Width, Height = bounds.Height, Stroke = new SolidColorBrush(Color.FromArgb(170, 10, 129, 142)), StrokeThickness = 1.5, Fill = new SolidColorBrush(Color.FromArgb(1, 10, 129, 142)), Tag = row, ToolTip = $"{row.Label}\n{row.Id}\n{row.Bounds}" };
+                var rectangle = new Rectangle { Width = bounds.Width, Height = bounds.Height, Stroke = ThemeBrush("SuccessBrush"), StrokeThickness = 1.5, Fill = new SolidColorBrush(Color.FromArgb(1, 35, 122, 87)), Tag = row, ToolTip = $"{row.Label}\n{row.Id}\n{row.Bounds}" };
                 Canvas.SetLeft(rectangle, bounds.Left); Canvas.SetTop(rectangle, bounds.Top); Panel.SetZIndex(rectangle, row.Depth);
                 rectangle.MouseLeftButtonDown += (_, args) => { ViewModel.SelectedNode = row; args.Handled = true; };
                 nodeCanvas.Children.Add(rectangle); nodeRectangles[row] = rectangle;
@@ -7009,7 +7323,7 @@ public partial class MainWindow
 
     private void HighlightNode()
     {
-        foreach (var pair in nodeRectangles) { var selected = ReferenceEquals(pair.Key, ViewModel.SelectedNode); pair.Value.Stroke = selected ? new SolidColorBrush(Color.FromRgb(215, 55, 92)) : new SolidColorBrush(Color.FromArgb(170, 10, 129, 142)); pair.Value.StrokeThickness = selected ? 4 : 1.5; pair.Value.Fill = new SolidColorBrush(Color.FromArgb(selected ? (byte)35 : (byte)1, 215, 55, 92)); }
+        foreach (var pair in nodeRectangles) { var selected = ReferenceEquals(pair.Key, ViewModel.SelectedNode); pair.Value.Stroke = ThemeBrush(selected ? "DangerBrush" : "SuccessBrush"); pair.Value.StrokeThickness = selected ? 4 : 1.5; var tint = ((SolidColorBrush)pair.Value.Stroke).Color; pair.Value.Fill = new SolidColorBrush(Color.FromArgb(selected ? (byte)35 : (byte)1, tint.R, tint.G, tint.B)); }
         if (ViewModel.SelectedNode is { } node && nodeTreeItems.TryGetValue(node, out var item) && !item.IsSelected) { item.IsSelected = true; item.BringIntoView(); }
     }
     private void SetExpanded(bool expanded) { foreach (var item in nodeTreeItems.Values) item.IsExpanded = expanded; }
@@ -8124,8 +8438,8 @@ public partial class MainWindow
         var header = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
         var pause = WallToggle("\uE769", "暂停监控"); pause.Content = ShellGlyph("\uE769"); pause.Width = 34; pause.MinWidth = 0; pause.Padding = new Thickness(0);
         monitorPauseChoice = pause;
-        pause.Checked += (_, _) => { monitorPaused = true; monitorEpoch++; pause.ToolTip = "恢复监控"; pause.Content = ShellGlyph("\uE768"); monitorLastReconcile = default; MonitorTick(); };
-        pause.Unchecked += (_, _) => { monitorPaused = false; monitorEpoch++; pause.ToolTip = "暂停监控"; pause.Content = ShellGlyph("\uE769"); monitorLastReconcile = default; monitorTimer.Start(); MonitorTick(); };
+        pause.Checked += (_, _) => { monitorPaused = true; monitorEpoch++; pause.ToolTip = "恢复监控"; System.Windows.Automation.AutomationProperties.SetName(pause, "恢复监控"); pause.Content = ShellGlyph("\uE768"); monitorLastReconcile = default; MonitorTick(); };
+        pause.Unchecked += (_, _) => { monitorPaused = false; monitorEpoch++; pause.ToolTip = "暂停监控"; System.Windows.Automation.AutomationProperties.SetName(pause, "暂停监控"); pause.Content = ShellGlyph("\uE769"); monitorLastReconcile = default; monitorTimer.Start(); MonitorTick(); };
         DockPanel.SetDock(pause, Dock.Right); header.Children.Add(pause);
         var modes = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
         var wall = WallToggle("\uE8A9", "画面墙"); var list = WallToggle("\uE9D5", "资源列表"); wall.IsChecked = true;
@@ -8135,10 +8449,11 @@ public partial class MainWindow
         modes.Children.Add(wall); modes.Children.Add(list);
         var scope = new ComboBox { Width = 118, Height = 34, Margin = new Thickness(0, 0, 8, 0), ItemsSource = new[] { "已连接设备", "全部目录" }, SelectedIndex = 0 };
         monitorScopeChoice = scope;
+        System.Windows.Automation.AutomationProperties.SetName(scope, "监控范围");
         scope.SelectionChanged += (_, _) => { monitorConnectedOnly = scope.SelectedIndex == 0; monitorEpoch++; monitorLastReconcile = default; MonitorTick(); };
         modes.Children.Add(scope); DockPanel.SetDock(modes, Dock.Right); header.Children.Add(modes);
         var heading = new StackPanel();
-        heading.Children.Add(new TextBlock { Text = "实时监控", FontSize = 20, FontWeight = FontWeights.SemiBold });
+        heading.Children.Add(new TextBlock { Name = "PageHeading", Text = LocalizationService.PageDisplayName("实时监控"), FontSize = 20, FontWeight = FontWeights.SemiBold });
         monitorHost = new TextBlock { Text = "主机资源：待采样", Foreground = WallMuted, FontSize = 12, Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap };
         heading.Children.Add(monitorHost); header.Children.Add(heading);
         DockPanel.SetDock(header, Dock.Top); page.Children.Add(header);
@@ -8313,7 +8628,7 @@ public partial class MainWindow
     private void SelectMonitor(string key)
     {
         monitorSelected = key; monitorNotice = "";
-        foreach (var tile in monitorTiles.Values) tile.Surface.BorderBrush = WorkspaceBrush(tile.Key == key ? "#3274F6" : "#DFE5EE");
+        foreach (var tile in monitorTiles.Values) tile.Surface.BorderBrush = ThemeBrush(tile.Key == key ? "AccentBrush" : "BorderBrush");
         MonitorTick();
     }
 
@@ -8384,8 +8699,8 @@ public partial class MainWindow
         internal readonly TextBlock Resource = new() { Text = "CPU 待采样 · 工作集 未知", FontSize = 11, Foreground = WallMuted };
         internal readonly Button Open;
         private readonly Border videoSurface;
-        private readonly Polyline cpuLine = new() { Stroke = WorkspaceBrush("#3274F6"), StrokeThickness = 1.5 };
-        private readonly Polyline memoryLine = new() { Stroke = WorkspaceBrush("#159878"), StrokeThickness = 1.5 };
+        private readonly Polyline cpuLine = new() { Stroke = ThemeBrush("AccentBrush"), StrokeThickness = 1.5 };
+        private readonly Polyline memoryLine = new() { Stroke = ThemeBrush("SuccessBrush"), StrokeThickness = 1.5 };
         private readonly List<MonitorResourceSample> history = [];
         private WriteableBitmap? bitmap;
         internal string Signature = "";
@@ -8416,14 +8731,14 @@ public partial class MainWindow
         internal MonitorTile(string key, Action select, Func<Task> open, Func<Task> retry)
         {
             Key = key;
-            Surface = new Border { Width = 330, Height = 306, Margin = new Thickness(0, 0, 12, 12), Padding = new Thickness(9), BorderThickness = new Thickness(1), BorderBrush = WorkspaceBrush("#DFE5EE"), CornerRadius = new CornerRadius(6), Background = Brushes.White };
+            Surface = new Border { Width = 330, Height = 306, Margin = new Thickness(0, 0, 12, 12), Padding = new Thickness(9), BorderThickness = new Thickness(1), BorderBrush = ThemeBrush("BorderBrush"), CornerRadius = new CornerRadius(8), Background = ThemeBrush("SurfaceBrush") };
             var stack = new StackPanel(); Surface.Child = stack;
             var title = new DockPanel();
             Open = MonitorIcon("\uE8A7", "打开模拟器窗口", open);
             DockPanel.SetDock(Open, Dock.Right); title.Children.Add(Open);
             var again = MonitorIcon("\uE72C", "重试视频", retry); DockPanel.SetDock(again, Dock.Right); title.Children.Add(again);
             var names = new StackPanel(); names.Children.Add(Name); names.Children.Add(Subtitle); title.Children.Add(names); stack.Children.Add(title);
-            videoSurface = new Border { Height = 180, Background = WorkspaceBrush("#161B23"), Margin = new Thickness(0, 7, 0, 6), Child = Frame }; stack.Children.Add(videoSurface);
+            videoSurface = new Border { Height = 180, Background = ThemeBrush("TextBrush"), Margin = new Thickness(0, 7, 0, 6), Child = Frame }; stack.Children.Add(videoSurface);
             stack.Children.Add(State); stack.Children.Add(Resource);
             var chart = new Canvas { Height = 24, Width = 308, ClipToBounds = true, ToolTip = "最近15分钟：蓝色 CPU；绿色进程工作集（独立比例）", Margin = new Thickness(0, 5, 0, 0) };
             chart.Children.Add(cpuLine); chart.Children.Add(memoryLine); stack.Children.Add(chart);
@@ -8450,6 +8765,7 @@ public partial class MainWindow
         private static Button MonitorIcon(string glyph, string tooltip, Func<Task> action)
         {
             var button = new Button { Content = ShellGlyph(glyph, 14), Width = 29, Height = 28, MinWidth = 0, ToolTip = tooltip, Padding = new Thickness(0) };
+            System.Windows.Automation.AutomationProperties.SetName(button, tooltip);
             button.SetResourceReference(StyleProperty, "IconButton");
             button.Click += async (_, _) => { button.IsEnabled = false; try { await action(); } finally { button.IsEnabled = true; } };
             return button;
@@ -9038,12 +9354,13 @@ public partial class MainWindow
         var page = Page();
         var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE722", "刷新截图", ViewModel.ScreenshotCommand)); toolbar.Children.Add(Button("\uE74E", "保存 PNG", async () => await SaveImageAsync(false))); toolbar.Children.Add(Button("\uE7A8", "保存裁剪", async () => await SaveImageAsync(true)));
         screenshotMode = new ComboBox { ItemsSource = new[] { "取色", "裁剪" }, ItemTemplate = CaptionChoices(), SelectedIndex = 0, Width = 115 }; toolbar.Children.Add(screenshotMode);
-        var zoom = new Slider { Minimum = .1, Maximum = 3, Value = 1, Width = 150, VerticalAlignment = VerticalAlignment.Center, ToolTip = "缩放" }; zoom.ValueChanged += (_, _) => { screenshotScale.ScaleX = zoom.Value; screenshotScale.ScaleY = zoom.Value; }; toolbar.Children.Add(zoom); toolbar.Children.Add(Button("\uE740", "1:1", () => zoom.Value = 1));
+        var zoom = new Slider { Minimum = .1, Maximum = 3, Value = 1, Width = 150, VerticalAlignment = VerticalAlignment.Center, ToolTip = "缩放" }; zoom.ValueChanged += (_, _) => { screenshotScale.ScaleX = zoom.Value; screenshotScale.ScaleY = zoom.Value; }; toolbar.Children.Add(zoom); toolbar.Children.Add(Button("\uE740", "原始大小", () => zoom.Value = 1));
         DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
         var colors = new DataGrid { ItemsSource = ViewModel.Colors, IsReadOnly = true, Width = 300, Margin = new Thickness(10, 10, 0, 0) }; TextColumn(colors, "坐标", nameof(PixelSample.Position), 70); TextColumn(colors, "HEX", nameof(PixelSample.Hex), 80); TextColumn(colors, "RGB", nameof(PixelSample.Rgb), 140); colors.MouseDoubleClick += (_, _) => { if (colors.SelectedItem is PixelSample color) Clipboard.SetText($"{color.Hex} {color.Rgb}"); }; DockPanel.SetDock(colors, Dock.Right); page.Children.Add(colors);
-        screenshotCanvas = new Canvas { Background = new SolidColorBrush(Color.FromRgb(232, 237, 240)), LayoutTransform = screenshotScale };
+        screenshotCanvas = new Canvas { Background = ThemeBrush("CanvasBrush"), LayoutTransform = screenshotScale };
         screenshotImage = new Image { Stretch = Stretch.None }; screenshotCanvas.Children.Add(screenshotImage);
-        cropRectangle = new Rectangle { Stroke = new SolidColorBrush(Color.FromRgb(214, 69, 94)), StrokeThickness = 2, Fill = new SolidColorBrush(Color.FromArgb(35, 214, 69, 94)), Visibility = Visibility.Collapsed, IsHitTestVisible = false }; screenshotCanvas.Children.Add(cropRectangle);
+        var cropColor = ((SolidColorBrush)ThemeBrush("DangerBrush")).Color;
+        cropRectangle = new Rectangle { Stroke = ThemeBrush("DangerBrush"), StrokeThickness = 2, Fill = new SolidColorBrush(Color.FromArgb(35, cropColor.R, cropColor.G, cropColor.B)), Visibility = Visibility.Collapsed, IsHitTestVisible = false }; screenshotCanvas.Children.Add(cropRectangle);
         screenshotCanvas.MouseLeftButtonDown += ScreenshotDown; screenshotCanvas.MouseMove += ScreenshotMove; screenshotCanvas.MouseLeftButtonUp += ScreenshotUp;
         screenshotScroll = new ScrollViewer { Content = screenshotCanvas, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new Thickness(0, 10, 0, 0) }; page.Children.Add(screenshotScroll);
         return page;
@@ -9121,7 +9438,7 @@ public partial class MainWindow
         var grid = new Grid { Margin = new Thickness(0, 10, 0, 0) }; grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(230) }); grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); grid.RowDefinitions.Add(new RowDefinition());
         var parameters = new DataGrid { ItemsSource = ViewModel.Parameters }; TextColumn(parameters, "参数", nameof(ParameterEditor.Key), 170, true); TextColumn(parameters, "名称", nameof(ParameterEditor.Label), 180, true); TextColumn(parameters, "类型", nameof(ParameterEditor.Type), 100, true); TextColumn(parameters, "范围/单位", nameof(ParameterEditor.Range), 150, true); TextColumn(parameters, "值（JSON）", nameof(ParameterEditor.Value), 230, false); grid.Children.Add(parameters);
         var label = Label("脚本日志 · 最近 500 条"); label.Margin = new Thickness(0, 10, 0, 8); Grid.SetRow(label, 1); grid.Children.Add(label);
-        var logs = new ListBox { ItemsSource = ViewModel.ScriptLogs, FontFamily = new FontFamily("Consolas"), FontSize = 12, BorderBrush = new SolidColorBrush(Color.FromRgb(212, 221, 225)) }; Grid.SetRow(logs, 2); grid.Children.Add(logs); page.Children.Add(grid); return page;
+        var logs = new ListBox { ItemsSource = ViewModel.ScriptLogs, FontFamily = new FontFamily("Consolas"), FontSize = 12, BorderBrush = ThemeBrush("BorderBrush") }; Grid.SetRow(logs, 2); grid.Children.Add(logs); page.Children.Add(grid); return page;
     }
 
 }
@@ -9224,7 +9541,7 @@ public partial class MainWindow
             else if (binding.EndsWith("MonitorServerPath", StringComparison.Ordinal)) { ViewModel.Settings.MonitorServerPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.MonitorServerPath)); }
             else if (binding.EndsWith("MonitorFfmpegPath", StringComparison.Ordinal)) { ViewModel.Settings.MonitorFfmpegPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.MonitorFfmpegPath)); }
             else { ViewModel.Settings.ScrcpyPath = dialog.FileName; ViewModel.Settings.Changed(nameof(SettingsEditor.ScrcpyPath)); }
-        }); DockPanel.SetDock(browse, Dock.Right); row.Children.Add(browse); row.Children.Add(BoundInput(binding)); return Field(label, row);
+        }); DockPanel.SetDock(browse, Dock.Right); row.Children.Add(browse); var input = BoundInput(binding); LocalizationService.Bind(input, System.Windows.Automation.AutomationProperties.NameProperty, label); LocalizationService.Bind(browse, System.Windows.Automation.AutomationProperties.NameProperty, "浏览" + label); row.Children.Add(input); return Field(label, row);
     }
 
     private static FrameworkElement UnavailableSetting(string label, FrameworkElement control, string reason)
@@ -9273,9 +9590,9 @@ public partial class MainWindow
                 NavigateTo(page.Tag);
                 await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                 UpdateLayout();
-                VerifyNoRemovedShellControls(Shell, page.Label);
+                VerifyNoRemovedShellControls(Shell, LocalizationService.PageDisplayName(page.Tag));
                 if (!navigation.TryGetValue(page.Tag, out var link) || link.IsChecked != true || !link.IsVisible)
-                    throw new InvalidOperationException($"页面 {page.Label} 没有唯一有效导航入口。");
+                    throw new InvalidOperationException($"页面 {LocalizationService.PageDisplayName(page.Tag)} 没有唯一有效导航入口。");
             }
 
             NavigateTo("节点");
@@ -9332,7 +9649,7 @@ public partial class MainWindow
                     ViewModel.StatusFilter = previousStatus;
                 }
             }
-            if (!VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "环境设置") || !VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "设备详情"))
+            if (!VisualDescendants<Button>(Shell).Any(button => button.Name == "WorkspaceSettings") || !VisualDescendants<Button>(Shell).Any(button => button.Name == "DeviceDetails"))
                 throw new InvalidOperationException("设置或设备属性入口缺失。");
 
             ShowDeviceDirectory();
@@ -9489,11 +9806,73 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Threading;
+using MatrixDevice.Core;
 
 namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
+    private async Task<object> SettleIdlePageCaptureAsync(string page, IReadOnlyDictionary<DeviceRow, DeviceInfo> restoredDevices, string restoredFilter)
+    {
+        var deadline = System.Diagnostics.Stopwatch.StartNew();
+        var reason = "尚未布局";
+        while (deadline.Elapsed < TimeSpan.FromSeconds(3))
+        {
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
+            await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+            if (ViewModel.Busy || ViewModel.Transferring || ViewModel.StatusFilter != restoredFilter || restoredDevices.Any(pair => !ViewModel.Devices.Contains(pair.Key) || pair.Key.Info != pair.Value))
+                throw new InvalidOperationException("分页截图不是已恢复的idle状态：" + page);
+            try
+            {
+                var rows = page == "设备墙 / 主控" ? CaptureIdleDeviceRows() : [];
+                var connected = unifiedDevices.Count(row => row.Connected);
+                if (!workspaceCounts.Text.Contains($"已连接 {connected}", StringComparison.Ordinal)) throw new InvalidOperationException("页脚连接数未恢复。");
+                return new
+                {
+                    page, captureState = "idle", statusFilter = ViewModel.StatusFilter, busy = ViewModel.Busy, transferring = ViewModel.Transferring,
+                    restoredDevices = ViewModel.Devices.Select(row => new { row.Serial, row.Info.State, row.Info.Generation, row.Info.TransportId }).ToArray(),
+                    expectedRestoredDevices = restoredDevices.Select(pair => new { pair.Value.Serial, pair.Value.State, pair.Value.Generation, pair.Value.TransportId }).ToArray(),
+                    directoryCount = unifiedDevices.Count, filteredCount = unifiedDeviceView.Cast<UnifiedDeviceRow>().Count(), connectedCount = connected,
+                    footer = workspaceCounts.Text, actualWidth = ActualWidth, actualHeight = ActualHeight, renderedDeviceRows = rows, settledMilliseconds = deadline.ElapsedMilliseconds
+                };
+            }
+            catch (InvalidOperationException ex) { reason = ex.Message; }
+            await Task.Delay(20);
+        }
+        throw new InvalidOperationException($"分页截图布局未在3秒内恢复：{page}；{reason}");
+    }
+
+    private object[] CaptureIdleDeviceRows()
+    {
+        var grid = VisualDescendants<DataGrid>(wallList).Single();
+        var expected = unifiedDeviceView.Cast<UnifiedDeviceRow>().ToArray();
+        var viewport = new Rect(0, grid.ColumnHeaderHeight, grid.ActualWidth, Math.Max(0, grid.ActualHeight - grid.ColumnHeaderHeight));
+        var rows = new List<object>();
+        foreach (var item in expected)
+        {
+            if (grid.ItemContainerGenerator.ContainerFromItem(item) is not DataGridRow row || !row.IsVisible || row.ActualWidth <= 0 || row.ActualHeight <= 0)
+                throw new InvalidOperationException("非空目录尚未生成实际行：" + item.Name);
+            var bounds = row.TransformToAncestor(grid).TransformBounds(new Rect(row.RenderSize));
+            var visible = Rect.Intersect(bounds, viewport);
+            if (visible.IsEmpty || visible.Width <= 0 || visible.Height <= 0) throw new InvalidOperationException("设备行不在实际视口：" + item.Name);
+            bool Visible(FrameworkElement control)
+            {
+                if (!control.IsVisible || control.ActualWidth <= 0 || control.ActualHeight <= 0) return false;
+                var intersection = Rect.Intersect(control.TransformToAncestor(grid).TransformBounds(new Rect(control.RenderSize)), viewport);
+                return !intersection.IsEmpty && intersection.Width > 0 && intersection.Height > 0;
+            }
+            if (!VisualDescendants<TextBlock>(row).Any(text => text.Text == item.Name && Visible(text))) throw new InvalidOperationException("设备名称尚未呈现在视口：" + item.Name);
+            var action = VisualDescendants<Button>(row).FirstOrDefault(button => Visible(button) && VisualDescendants<TextBlock>(button).Any(text => text.Text == item.PrimaryLabel && Visible(text)))
+                ?? throw new InvalidOperationException("设备操作尚未呈现在视口：" + item.Name);
+            rows.Add(new { item.Key, item.Name, item.State, item.PrimaryLabel, row.ActualWidth, row.ActualHeight, visibleBounds = new { visible.X, visible.Y, visible.Width, visible.Height }, action = System.Windows.Automation.AutomationProperties.GetName(action) });
+        }
+        if (expected.Length != 0 && rows.Count == 0) throw new InvalidOperationException("非空目录截图没有实际设备行。");
+        return rows.ToArray();
+    }
+
     private async Task VerifyListConsoleSimplificationAsync()
     {
         NavigateTo("设备墙 / 主控");
@@ -9895,7 +10274,7 @@ public partial class MainWindow
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
             await Task.Delay(60);
             if (screenshot is not null) SaveRender(Path.Combine(Path.GetDirectoryName(screenshot)!, "merged-device-actions.png"));
-            var settings = VisualDescendants<Button>(Shell).Single(input => input.ToolTip as string == "环境设置");
+            var settings = VisualDescendants<Button>(Shell).Single(input => input.Name == "WorkspaceSettings");
             var settingsTop = settings.TranslatePoint(new Point(), Shell).Y;
             var listTop = wallWorkspace.TranslatePoint(new Point(), Shell).Y;
             var footer = workspace.Children.OfType<FrameworkElement>().Single(child => Grid.GetRow(child) == 3);
@@ -10485,13 +10864,16 @@ public sealed class UnifiedDeviceTile : Border
         var glyph = new TextBlock { FontFamily = new FontFamily("Segoe MDL2 Assets"), Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center }; glyph.SetBinding(TextBlock.TextProperty, new Binding(nameof(UnifiedDeviceRow.PrimaryGlyph)));
         var body = new StackPanel { Orientation = Orientation.Horizontal }; body.Children.Add(glyph); body.Children.Add(label);
         var start = new Button { Content = body, Command = row!.PrimaryCommand, Height = 32, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 6, 0), ToolTip = row.PrimaryLabel };
+        start.SetBinding(System.Windows.Automation.AutomationProperties.NameProperty, new Binding(nameof(UnifiedDeviceRow.PrimaryLabel)));
         start.SetResourceReference(StyleProperty, "SubtleButton"); actions.Children.Add(start);
         if (row.Connected && row.Device is not null)
         {
             var main = new Button { Content = "控制", Command = row.MainCommand, ToolTip = "打开此设备的主控面板", Height = 32, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 6, 0) };
+            System.Windows.Automation.AutomationProperties.SetName(main, "控制此设备");
             main.SetResourceReference(StyleProperty, "SubtleButton"); actions.Children.Add(main);
         }
         var show = new Button { Content = new TextBlock { Text = "\uE8A7", FontFamily = new FontFamily("Segoe MDL2 Assets") }, Command = row.ShowWindowCommand, ToolTip = "显示模拟器窗口", Visibility = row.ShowWindowCommand.CanExecute(null) ? Visibility.Visible : Visibility.Collapsed };
+        System.Windows.Automation.AutomationProperties.SetName(show, "显示模拟器窗口");
         show.SetResourceReference(StyleProperty, "IconButton"); actions.Children.Add(show);
         return actions;
     }
@@ -10534,7 +10916,7 @@ public partial class MainWindow
         page.SizeChanged += (_, _) => wallActionsViewport.MaxHeight = Math.Max(120, page.ActualHeight - 176);
         DockPanel.SetDock(wallActionsViewport, Dock.Top); page.Children.Add(wallActionsViewport);
         top.Children.Add(BuildDeviceSummary());
-        top.Children.Add(new TextBlock { Text = "设备管理", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, Margin = new Thickness(0, 0, 0, 14) });
+        top.Children.Add(new TextBlock { Name = "PageHeading", Text = LocalizationService.PageDisplayName("设备墙 / 主控"), FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, Margin = new Thickness(0, 0, 0, 14) });
         top.Children.Add(BuildOneClickLaunchTools());
         top.Children.Add(new Border { Height = 1, Background = WallBorder });
         wallWorkspace = new Grid { Margin = new Thickness(22, 18, 22, 18) };
@@ -10604,7 +10986,7 @@ public partial class MainWindow
         castActions.Children.Add(Button("\uE8A7", "弹出投屏窗口", RestoreScreensAsync)); cast.Content = castActions; bottom.Children.Add(cast);
         var image = new Image { Stretch = Stretch.Uniform, MinHeight = 100, Focusable = true, Cursor = Cursors.Cross };
         image.SetBinding(Image.SourceProperty, new Binding("MainDevice.Screenshot")); image.MouseLeftButtonDown += MainImageDown; image.MouseLeftButtonUp += MainImageUp;
-        var screen = new Grid { Background = new SolidColorBrush(Color.FromRgb(247, 249, 252)) }; screen.Children.Add(image);
+        var screen = new Grid { Background = ThemeBrush("CanvasBrush") }; screen.Children.Add(image);
         var empty = new TextBlock { Text = "未指定主控", Foreground = WallMuted, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         empty.SetBinding(VisibilityProperty, new Binding(nameof(WorkspaceViewModel.MainDevice)) { Converter = new WallNullVisibilityConverter() }); screen.Children.Add(empty); main.Children.Add(screen); return viewport;
     }
@@ -10655,9 +11037,9 @@ public partial class MainWindow
         }
     }
 
-    private static readonly Brush WallInk = new SolidColorBrush(Color.FromRgb(24, 34, 57));
-    private static readonly Brush WallMuted = new SolidColorBrush(Color.FromRgb(99, 113, 138));
-    private static readonly Brush WallBorder = new SolidColorBrush(Color.FromRgb(228, 232, 240));
+    private static Brush WallInk => ThemeBrush("TextBrush");
+    private static Brush WallMuted => ThemeBrush("MutedBrush");
+    private static Brush WallBorder => ThemeBrush("BorderBrush");
     private static TextBlock WallGlyph(string glyph) => new() { Text = glyph, FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 14, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
     private Button WallButton(string glyph, string title, ICommand command, bool primary = false)
     {
@@ -10668,6 +11050,7 @@ public partial class MainWindow
     {
         var content = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center }; content.Children.Add(WallGlyph(glyph)); content.Children.Add(new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(7, 0, 0, 0) });
         var toggle = new ToggleButton { Content = content, ToolTip = title, Height = 34, Padding = new Thickness(11, 0, 11, 0), Margin = new Thickness(0, 0, 8, 6) };
+        System.Windows.Automation.AutomationProperties.SetName(toggle, title);
         if (TryFindResource("SegmentedToggle") is Style style) toggle.Style = style; return toggle;
     }
 
@@ -10730,18 +11113,16 @@ public partial class MainWindow
     private bool sidebarCollapsed;
     private FrameworkElement singleTargetLabel = null!;
     private FrameworkElement singleTargetChoice = null!;
-    private static readonly (string Tag, string Label, string Icon)[] WorkspacePages =
+    private static readonly (string Tag, string Icon)[] WorkspacePages =
     [
-        ("设备墙 / 主控", "设备管理", "\uE8EA"),
-        ("实时监控", "实时监控", "\uE9D9"),
-        ("节点", "节点调试", "\uE8A5"), ("截图 / 取色", "截图取色", "\uE722"),
-        ("Shell", "命令终端", "\uE756"), ("应用", "应用管理", "\uE71D"),
-        ("文件", "文件传输", "\uE8B7"), ("文本", "文本输入", "\uE8D2"),
-        ("脚本", "脚本管理", "\uE8A5"), ("API", "接口服务", "\uE9D9"),
-        ("扩展", "扩展工具", "\uE713"), ("设置", "环境设置", "\uE713")
+        ("设备墙 / 主控", "\uE8EA"), ("实时监控", "\uE9D9"),
+        ("节点", "\uE8A5"), ("截图 / 取色", "\uE722"), ("Shell", "\uE756"), ("应用", "\uE71D"),
+        ("文件", "\uE8B7"), ("文本", "\uE8D2"), ("脚本", "\uE8A5"), ("API", "\uE9D9"),
+        ("扩展", "\uE713"), ("设置", "\uE713")
     ];
 
     private static Brush WorkspaceBrush(string value) => (Brush)new BrushConverter().ConvertFromString(value)!;
+    private static Brush ThemeBrush(string key) => (Brush)Application.Current.FindResource(key);
     private static TextBlock ShellGlyph(string value, double size = 17) => new()
     {
         Text = value, FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = size,
@@ -10762,13 +11143,13 @@ public partial class MainWindow
         Grid.SetColumn(workspace, 1); Shell.Children.Add(workspace);
         workspace.Children.Add(BuildWorkspaceToolbar());
 
-        var notice = new Border { Background = WorkspaceBrush("#FFF4F2"), Padding = new Thickness(20, 9, 20, 9) };
-        var error = BoundText(nameof(WorkspaceViewModel.Error), true); error.Foreground = WorkspaceBrush("#AE3F39"); notice.Child = error;
+        var notice = new Border { Background = ThemeBrush("DangerSurfaceBrush"), Padding = new Thickness(20, 9, 20, 9) };
+        var error = BoundText(nameof(WorkspaceViewModel.Error), true); error.Foreground = ThemeBrush("DangerBrush"); notice.Child = error;
         notice.SetBinding(VisibilityProperty, new Binding(nameof(WorkspaceViewModel.Error)) { Converter = new NonEmptyVisibilityConverter() });
         Grid.SetRow(notice, 1); workspace.Children.Add(notice);
         var footer = new Grid { Margin = new Thickness(20, 8, 20, 10) };
         footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition());
-        workspaceCounts = BoundText(nameof(WorkspaceViewModel.Counts)); workspaceCounts.FontSize = 11; workspaceCounts.Foreground = WorkspaceBrush("#63718A"); footer.Children.Add(workspaceCounts);
+        workspaceCounts = BoundText(nameof(WorkspaceViewModel.Counts)); workspaceCounts.FontSize = 11; workspaceCounts.Foreground = ThemeBrush("MutedBrush"); footer.Children.Add(workspaceCounts);
         var status = BoundText(nameof(WorkspaceViewModel.Status)); status.FontSize = 11; status.TextAlignment = TextAlignment.Right;
         status.TextTrimming = TextTrimming.CharacterEllipsis; status.SetBinding(ToolTipProperty, new Binding(nameof(WorkspaceViewModel.Status)));
         Grid.SetColumn(status, 1); footer.Children.Add(status); Grid.SetRow(footer, 3); workspace.Children.Add(footer);
@@ -10776,15 +11157,15 @@ public partial class MainWindow
 
     private Border BuildNavigation()
     {
-        var sidebar = new Border { Background = Brushes.White, BorderBrush = WorkspaceBrush("#E4E8F0"), BorderThickness = new Thickness(0, 0, 1, 0) };
+        var sidebar = new Border { Background = ThemeBrush("SurfaceBrush"), BorderBrush = ThemeBrush("BorderBrush"), BorderThickness = new Thickness(0, 0, 1, 0) };
         var dock = new DockPanel(); sidebar.Child = dock;
         var brand = new Grid { Margin = new Thickness(18, 24, 12, 22) };
         brand.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) }); brand.ColumnDefinitions.Add(new ColumnDefinition());
-        var mark = new Border { Width = 36, Height = 36, CornerRadius = new CornerRadius(8), Background = WorkspaceBrush("#3274F6") };
+        var mark = new Border { Width = 36, Height = 36, CornerRadius = new CornerRadius(8), Background = ThemeBrush("AccentBrush") };
         var icon = ShellGlyph("\uE80A", 20); icon.Foreground = Brushes.White; mark.Child = icon; brand.Children.Add(mark);
         var identity = new StackPanel { Margin = new Thickness(9, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         identity.Children.Add(new TextBlock { Text = "矩阵设备", FontSize = 19, FontWeight = FontWeights.SemiBold });
-        identity.Children.Add(new TextBlock { Text = "Android 设备工作台", FontSize = 11, Foreground = WorkspaceBrush("#63718A"), Margin = new Thickness(0, 4, 0, 0) });
+        identity.Children.Add(new TextBlock { Text = "Android 设备工作台", FontSize = 11, Foreground = ThemeBrush("MutedBrush"), Margin = new Thickness(0, 4, 0, 0) });
         Grid.SetColumn(identity, 1); brand.Children.Add(identity); sidebarCaptions.Add(identity);
         DockPanel.SetDock(brand, Dock.Top); dock.Children.Add(brand);
 
@@ -10794,23 +11175,28 @@ public partial class MainWindow
         var collapseText = new TextBlock { Text = "折叠侧栏", Margin = new Thickness(9, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         collapseContent.Children.Add(collapseText); sidebarCaptions.Add(collapseText);
         var collapse = new Button { Content = collapseContent, ToolTip = "展开或折叠导航", Margin = new Thickness(12, 4, 12, 12), HorizontalContentAlignment = HorizontalAlignment.Left };
+        collapse.Name = "NavigationToggle";
+        System.Windows.Automation.AutomationProperties.SetAutomationId(collapse, collapse.Name);
+        System.Windows.Automation.AutomationProperties.SetName(collapse, "折叠导航");
         collapse.SetResourceReference(StyleProperty, "SubtleButton"); collapse.Click += (_, _) => SetSidebarCollapsed(!sidebarCollapsed); bottom.Children.Add(collapse);
         var statistics = new StackPanel { Margin = new Thickness(18, 15, 14, 16) };
         statistics.Children.Add(new TextBlock { Text = "本机工作区", FontWeight = FontWeights.SemiBold, FontSize = 12 });
-        var mode = BoundText(nameof(WorkspaceViewModel.ModeLabel), true); mode.Foreground = WorkspaceBrush("#63718A"); mode.FontSize = 11; mode.Margin = new Thickness(0, 7, 0, 5); statistics.Children.Add(mode);
-        var summary = BoundText(nameof(WorkspaceViewModel.ApiSummary), true); summary.FontSize = 11; summary.Foreground = WorkspaceBrush("#63718A"); statistics.Children.Add(summary);
-        sidebarStatistics = new Border { BorderBrush = WorkspaceBrush("#E4E8F0"), BorderThickness = new Thickness(0, 1, 0, 0), Child = statistics }; bottom.Children.Add(sidebarStatistics);
+        var mode = BoundText(nameof(WorkspaceViewModel.ModeLabel), true); mode.Foreground = ThemeBrush("MutedBrush"); mode.FontSize = 11; mode.Margin = new Thickness(0, 7, 0, 5); statistics.Children.Add(mode);
+        var summary = BoundText(nameof(WorkspaceViewModel.ApiSummary), true); summary.FontSize = 11; summary.Foreground = ThemeBrush("MutedBrush"); statistics.Children.Add(summary);
+        sidebarStatistics = new Border { BorderBrush = ThemeBrush("BorderBrush"), BorderThickness = new Thickness(0, 1, 0, 0), Child = statistics }; bottom.Children.Add(sidebarStatistics);
 
         var links = new StackPanel { Margin = new Thickness(10, 0, 10, 8) };
         foreach (var item in WorkspacePages)
         {
+            var label = LocalizationService.PageDisplayName(item.Tag);
             var content = new StackPanel { Orientation = Orientation.Horizontal };
             var glyph = ShellGlyph(item.Icon); glyph.Width = 28; content.Children.Add(glyph);
-            var caption = new TextBlock { Text = item.Label, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            var caption = new TextBlock { Text = label, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
             content.Children.Add(caption); sidebarCaptions.Add(caption);
-            var link = new ToggleButton { Content = content, ToolTip = item.Label, Margin = new Thickness(0, 2, 0, 2), MinHeight = 40, HorizontalContentAlignment = HorizontalAlignment.Left };
+            var link = new ToggleButton { Content = content, ToolTip = label, Margin = new Thickness(0, 2, 0, 2), MinHeight = 40, HorizontalContentAlignment = HorizontalAlignment.Left };
             link.SetResourceReference(StyleProperty, "NavigationButton");
-            System.Windows.Automation.AutomationProperties.SetName(link, item.Label);
+            System.Windows.Automation.AutomationProperties.SetName(link, label);
+            System.Windows.Automation.AutomationProperties.SetAutomationId(link, "Navigation." + item.Tag);
             link.Click += (_, _) => NavigateTo(item.Tag);
             navigation.Add(item.Tag, link); links.Children.Add(link);
         }
@@ -10820,21 +11206,23 @@ public partial class MainWindow
 
     private FrameworkElement BuildWorkspaceToolbar()
     {
-        var surface = new Border { Background = Brushes.White, BorderBrush = WorkspaceBrush("#E4E8F0"), BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(20, 10, 20, 10) };
+        var surface = new Border { Background = ThemeBrush("SurfaceBrush"), BorderBrush = ThemeBrush("BorderBrush"), BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(20, 10, 20, 10) };
         var row = new Grid(); surface.Child = row;
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         row.ColumnDefinitions.Add(new ColumnDefinition());
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var targetLabel = new TextBlock { Text = "单设备目标", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 10, 0), Foreground = WorkspaceBrush("#63718A") };
+        var targetLabel = new TextBlock { Text = "单设备目标", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 10, 0), Foreground = ThemeBrush("MutedBrush") };
         singleTargetLabel = targetLabel;
         row.Children.Add(targetLabel);
         var target = new ComboBox { Name = "SingleDeviceTarget", ItemsSource = new ListCollectionView(ViewModel.Devices), ItemTemplate = OperationTargetTemplate(), IsSynchronizedWithCurrentItem = false, MinHeight = 38, MaxWidth = 520, HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 0, 10, 0), ToolTip = "节点、截图、命令等单设备操作目标" };
         singleTargetChoice = target;
         target.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.CurrentDevice)));
         System.Windows.Automation.AutomationProperties.SetName(target, "单设备目标"); Grid.SetColumn(target, 1); row.Children.Add(target);
-        var details = new Button { Content = ShellGlyph("\uE8A7"), ToolTip = "设备详情", MinHeight = 38, Margin = new Thickness(0, 0, 5, 0) };
+        var details = new Button { Name = "DeviceDetails", Content = ShellGlyph("\uE8A7"), ToolTip = "设备详情", MinHeight = 38, Margin = new Thickness(0, 0, 5, 0) };
+        System.Windows.Automation.AutomationProperties.SetName(details, "设备详情"); System.Windows.Automation.AutomationProperties.SetAutomationId(details, details.Name);
         details.SetResourceReference(StyleProperty, "IconButton"); details.Click += (_, _) => ShowDeviceDirectory(); Grid.SetColumn(details, 2); row.Children.Add(details);
-        var settings = new Button { Content = ShellGlyph("\uE713"), ToolTip = "环境设置", MinHeight = 38 };
+        var settings = new Button { Name = "WorkspaceSettings", Content = ShellGlyph("\uE713"), ToolTip = "设置", MinHeight = 38 };
+        System.Windows.Automation.AutomationProperties.SetName(settings, "设置"); System.Windows.Automation.AutomationProperties.SetAutomationId(settings, settings.Name);
         settings.SetResourceReference(StyleProperty, "IconButton"); settings.Click += (_, _) => NavigateTo("设置"); Grid.SetColumn(settings, 3); row.Children.Add(settings);
         var advanced = new ContextMenu();
         var network = new MenuItem { Header = "网络连接（高级）" }; network.Click += (_, _) => ShowScanner(); advanced.Items.Add(network);
@@ -10881,7 +11269,7 @@ public partial class MainWindow
         singleTargetLabel.Visibility = singleTargetChoice.Visibility = targetVisibility;
         foreach (var item in navigation) item.Value.IsChecked = item.Key == selected;
         if (selected is not null && navigation.TryGetValue(selected, out var active) && active.IsLoaded) active.BringIntoView();
-        var label = WorkspacePages.FirstOrDefault(page => page.Tag == selected).Label ?? "设备管理";
+        var label = LocalizationService.PageDisplayName(selected ?? "设备墙 / 主控");
         Title = "矩阵设备 · " + label + (ViewModel.Demo ? " · 演示模式" : "");
     }
 
@@ -10891,6 +11279,7 @@ public partial class MainWindow
         foreach (var caption in sidebarCaptions) caption.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
         sidebarStatistics.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
         collapseGlyph.Text = collapsed ? "\uE76C" : "\uE76B";
+        if (collapseGlyph.Parent is StackPanel { Parent: Button collapse }) System.Windows.Automation.AutomationProperties.SetName(collapse, collapsed ? "展开导航" : "折叠导航");
     }
 
     private void ShowDeviceDirectory()

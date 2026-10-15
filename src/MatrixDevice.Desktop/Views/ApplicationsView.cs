@@ -40,7 +40,7 @@ public partial class MainWindow
     {
         var page = Page(); applicationPage = page;
         var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
-        var title = Label("应用管理"); title.FontSize = 20; heading.Children.Add(title);
+        var title = Label(LocalizationService.PageDisplayName("应用")); title.Name = "PageHeading"; title.FontSize = 20; heading.Children.Add(title);
         applicationSummary = new TextBlock { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
         heading.Children.Add(applicationSummary); DockPanel.SetDock(heading, Dock.Top); page.Children.Add(heading);
         var content = new Grid(); content.ColumnDefinitions.Add(new() { Width = new GridLength(228), MinWidth = 180 });

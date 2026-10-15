@@ -30,7 +30,7 @@ public partial class MainWindow
         page.SizeChanged += (_, _) => wallActionsViewport.MaxHeight = Math.Max(120, page.ActualHeight - 176);
         DockPanel.SetDock(wallActionsViewport, Dock.Top); page.Children.Add(wallActionsViewport);
         top.Children.Add(BuildDeviceSummary());
-        top.Children.Add(new TextBlock { Text = "设备管理", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, Margin = new Thickness(0, 0, 0, 14) });
+        top.Children.Add(new TextBlock { Name = "PageHeading", Text = LocalizationService.PageDisplayName("设备墙 / 主控"), FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, Margin = new Thickness(0, 0, 0, 14) });
         top.Children.Add(BuildOneClickLaunchTools());
         top.Children.Add(new Border { Height = 1, Background = WallBorder });
         wallWorkspace = new Grid { Margin = new Thickness(22, 18, 22, 18) };
@@ -100,7 +100,7 @@ public partial class MainWindow
         castActions.Children.Add(Button("\uE8A7", "弹出投屏窗口", RestoreScreensAsync)); cast.Content = castActions; bottom.Children.Add(cast);
         var image = new Image { Stretch = Stretch.Uniform, MinHeight = 100, Focusable = true, Cursor = Cursors.Cross };
         image.SetBinding(Image.SourceProperty, new Binding("MainDevice.Screenshot")); image.MouseLeftButtonDown += MainImageDown; image.MouseLeftButtonUp += MainImageUp;
-        var screen = new Grid { Background = new SolidColorBrush(Color.FromRgb(247, 249, 252)) }; screen.Children.Add(image);
+        var screen = new Grid { Background = ThemeBrush("CanvasBrush") }; screen.Children.Add(image);
         var empty = new TextBlock { Text = "未指定主控", Foreground = WallMuted, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         empty.SetBinding(VisibilityProperty, new Binding(nameof(WorkspaceViewModel.MainDevice)) { Converter = new WallNullVisibilityConverter() }); screen.Children.Add(empty); main.Children.Add(screen); return viewport;
     }
@@ -151,9 +151,9 @@ public partial class MainWindow
         }
     }
 
-    private static readonly Brush WallInk = new SolidColorBrush(Color.FromRgb(24, 34, 57));
-    private static readonly Brush WallMuted = new SolidColorBrush(Color.FromRgb(99, 113, 138));
-    private static readonly Brush WallBorder = new SolidColorBrush(Color.FromRgb(228, 232, 240));
+    private static Brush WallInk => ThemeBrush("TextBrush");
+    private static Brush WallMuted => ThemeBrush("MutedBrush");
+    private static Brush WallBorder => ThemeBrush("BorderBrush");
     private static TextBlock WallGlyph(string glyph) => new() { Text = glyph, FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 14, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
     private Button WallButton(string glyph, string title, ICommand command, bool primary = false)
     {
@@ -164,6 +164,7 @@ public partial class MainWindow
     {
         var content = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center }; content.Children.Add(WallGlyph(glyph)); content.Children.Add(new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(7, 0, 0, 0) });
         var toggle = new ToggleButton { Content = content, ToolTip = title, Height = 34, Padding = new Thickness(11, 0, 11, 0), Margin = new Thickness(0, 0, 8, 6) };
+        System.Windows.Automation.AutomationProperties.SetName(toggle, title);
         if (TryFindResource("SegmentedToggle") is Style style) toggle.Style = style; return toggle;
     }
 

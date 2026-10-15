@@ -119,7 +119,7 @@ public partial class MainWindow
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
             await Task.Delay(60);
             if (screenshot is not null) SaveRender(Path.Combine(Path.GetDirectoryName(screenshot)!, "merged-device-actions.png"));
-            var settings = VisualDescendants<Button>(Shell).Single(input => input.ToolTip as string == "环境设置");
+            var settings = VisualDescendants<Button>(Shell).Single(input => input.Name == "WorkspaceSettings");
             var settingsTop = settings.TranslatePoint(new Point(), Shell).Y;
             var listTop = wallWorkspace.TranslatePoint(new Point(), Shell).Y;
             var footer = workspace.Children.OfType<FrameworkElement>().Single(child => Grid.GetRow(child) == 3);

@@ -52,8 +52,8 @@ public partial class MainWindow
         var header = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
         var pause = WallToggle("\uE769", "暂停监控"); pause.Content = ShellGlyph("\uE769"); pause.Width = 34; pause.MinWidth = 0; pause.Padding = new Thickness(0);
         monitorPauseChoice = pause;
-        pause.Checked += (_, _) => { monitorPaused = true; monitorEpoch++; pause.ToolTip = "恢复监控"; pause.Content = ShellGlyph("\uE768"); monitorLastReconcile = default; MonitorTick(); };
-        pause.Unchecked += (_, _) => { monitorPaused = false; monitorEpoch++; pause.ToolTip = "暂停监控"; pause.Content = ShellGlyph("\uE769"); monitorLastReconcile = default; monitorTimer.Start(); MonitorTick(); };
+        pause.Checked += (_, _) => { monitorPaused = true; monitorEpoch++; pause.ToolTip = "恢复监控"; System.Windows.Automation.AutomationProperties.SetName(pause, "恢复监控"); pause.Content = ShellGlyph("\uE768"); monitorLastReconcile = default; MonitorTick(); };
+        pause.Unchecked += (_, _) => { monitorPaused = false; monitorEpoch++; pause.ToolTip = "暂停监控"; System.Windows.Automation.AutomationProperties.SetName(pause, "暂停监控"); pause.Content = ShellGlyph("\uE769"); monitorLastReconcile = default; monitorTimer.Start(); MonitorTick(); };
         DockPanel.SetDock(pause, Dock.Right); header.Children.Add(pause);
         var modes = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
         var wall = WallToggle("\uE8A9", "画面墙"); var list = WallToggle("\uE9D5", "资源列表"); wall.IsChecked = true;
@@ -63,10 +63,11 @@ public partial class MainWindow
         modes.Children.Add(wall); modes.Children.Add(list);
         var scope = new ComboBox { Width = 118, Height = 34, Margin = new Thickness(0, 0, 8, 0), ItemsSource = new[] { "已连接设备", "全部目录" }, SelectedIndex = 0 };
         monitorScopeChoice = scope;
+        System.Windows.Automation.AutomationProperties.SetName(scope, "监控范围");
         scope.SelectionChanged += (_, _) => { monitorConnectedOnly = scope.SelectedIndex == 0; monitorEpoch++; monitorLastReconcile = default; MonitorTick(); };
         modes.Children.Add(scope); DockPanel.SetDock(modes, Dock.Right); header.Children.Add(modes);
         var heading = new StackPanel();
-        heading.Children.Add(new TextBlock { Text = "实时监控", FontSize = 20, FontWeight = FontWeights.SemiBold });
+        heading.Children.Add(new TextBlock { Name = "PageHeading", Text = LocalizationService.PageDisplayName("实时监控"), FontSize = 20, FontWeight = FontWeights.SemiBold });
         monitorHost = new TextBlock { Text = "主机资源：待采样", Foreground = WallMuted, FontSize = 12, Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap };
         heading.Children.Add(monitorHost); header.Children.Add(heading);
         DockPanel.SetDock(header, Dock.Top); page.Children.Add(header);
@@ -241,7 +242,7 @@ public partial class MainWindow
     private void SelectMonitor(string key)
     {
         monitorSelected = key; monitorNotice = "";
-        foreach (var tile in monitorTiles.Values) tile.Surface.BorderBrush = WorkspaceBrush(tile.Key == key ? "#3274F6" : "#DFE5EE");
+        foreach (var tile in monitorTiles.Values) tile.Surface.BorderBrush = ThemeBrush(tile.Key == key ? "AccentBrush" : "BorderBrush");
         MonitorTick();
     }
 
@@ -312,8 +313,8 @@ public partial class MainWindow
         internal readonly TextBlock Resource = new() { Text = "CPU 待采样 · 工作集 未知", FontSize = 11, Foreground = WallMuted };
         internal readonly Button Open;
         private readonly Border videoSurface;
-        private readonly Polyline cpuLine = new() { Stroke = WorkspaceBrush("#3274F6"), StrokeThickness = 1.5 };
-        private readonly Polyline memoryLine = new() { Stroke = WorkspaceBrush("#159878"), StrokeThickness = 1.5 };
+        private readonly Polyline cpuLine = new() { Stroke = ThemeBrush("AccentBrush"), StrokeThickness = 1.5 };
+        private readonly Polyline memoryLine = new() { Stroke = ThemeBrush("SuccessBrush"), StrokeThickness = 1.5 };
         private readonly List<MonitorResourceSample> history = [];
         private WriteableBitmap? bitmap;
         internal string Signature = "";
@@ -344,14 +345,14 @@ public partial class MainWindow
         internal MonitorTile(string key, Action select, Func<Task> open, Func<Task> retry)
         {
             Key = key;
-            Surface = new Border { Width = 330, Height = 306, Margin = new Thickness(0, 0, 12, 12), Padding = new Thickness(9), BorderThickness = new Thickness(1), BorderBrush = WorkspaceBrush("#DFE5EE"), CornerRadius = new CornerRadius(6), Background = Brushes.White };
+            Surface = new Border { Width = 330, Height = 306, Margin = new Thickness(0, 0, 12, 12), Padding = new Thickness(9), BorderThickness = new Thickness(1), BorderBrush = ThemeBrush("BorderBrush"), CornerRadius = new CornerRadius(8), Background = ThemeBrush("SurfaceBrush") };
             var stack = new StackPanel(); Surface.Child = stack;
             var title = new DockPanel();
             Open = MonitorIcon("\uE8A7", "打开模拟器窗口", open);
             DockPanel.SetDock(Open, Dock.Right); title.Children.Add(Open);
             var again = MonitorIcon("\uE72C", "重试视频", retry); DockPanel.SetDock(again, Dock.Right); title.Children.Add(again);
             var names = new StackPanel(); names.Children.Add(Name); names.Children.Add(Subtitle); title.Children.Add(names); stack.Children.Add(title);
-            videoSurface = new Border { Height = 180, Background = WorkspaceBrush("#161B23"), Margin = new Thickness(0, 7, 0, 6), Child = Frame }; stack.Children.Add(videoSurface);
+            videoSurface = new Border { Height = 180, Background = ThemeBrush("TextBrush"), Margin = new Thickness(0, 7, 0, 6), Child = Frame }; stack.Children.Add(videoSurface);
             stack.Children.Add(State); stack.Children.Add(Resource);
             var chart = new Canvas { Height = 24, Width = 308, ClipToBounds = true, ToolTip = "最近15分钟：蓝色 CPU；绿色进程工作集（独立比例）", Margin = new Thickness(0, 5, 0, 0) };
             chart.Children.Add(cpuLine); chart.Children.Add(memoryLine); stack.Children.Add(chart);
@@ -378,6 +379,7 @@ public partial class MainWindow
         private static Button MonitorIcon(string glyph, string tooltip, Func<Task> action)
         {
             var button = new Button { Content = ShellGlyph(glyph, 14), Width = 29, Height = 28, MinWidth = 0, ToolTip = tooltip, Padding = new Thickness(0) };
+            System.Windows.Automation.AutomationProperties.SetName(button, tooltip);
             button.SetResourceReference(StyleProperty, "IconButton");
             button.Click += async (_, _) => { button.IsEnabled = false; try { await action(); } finally { button.IsEnabled = true; } };
             return button;

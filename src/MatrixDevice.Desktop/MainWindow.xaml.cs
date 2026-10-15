@@ -54,10 +54,11 @@ public partial class MainWindow : Window
     public MainWindow(WorkspaceViewModel viewModel)
     {
         InitializeComponent();
+        SetResourceReference(StyleProperty, typeof(Window));
         ViewModel = viewModel;
         DataContext = viewModel;
         LocalizationService.Current.SetLanguage(viewModel.Runtime.Settings.Language);
-        Shell.Background = new SolidColorBrush(Color.FromRgb(247, 249, 252));
+        Shell.Background = ThemeBrush("CanvasBrush");
         Language = System.Windows.Markup.XmlLanguage.GetLanguage(viewModel.Runtime.Settings.Language);
         Width = viewModel.Runtime.Settings.WindowWidth;
         Height = viewModel.Runtime.Settings.WindowHeight;
@@ -121,10 +122,10 @@ public partial class MainWindow : Window
 
     private void AddTab(string title, FrameworkElement content)
     {
-        System.Windows.Documents.TextElement.SetForeground(content, WorkspaceBrush("#182239"));
+        System.Windows.Documents.TextElement.SetForeground(content, ThemeBrush("TextBrush"));
         System.Windows.Documents.TextElement.SetFontWeight(content, FontWeights.Normal);
         var tab = new TabItem { Content = content, Tag = title };
-        LocalizationService.Bind(tab, HeaderedContentControl.HeaderProperty, title);
+        tab.Header = LocalizationService.PageDisplayName(title);
         tabs.Items.Add(tab);
     }
     private static DockPanel Page() => new() { Margin = new Thickness(14), LastChildFill = true };
@@ -137,15 +138,15 @@ public partial class MainWindow : Window
     }
     private static TextBlock BoundText(string binding, bool wrap = false) { var text = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap }; text.SetBinding(TextBlock.TextProperty, new Binding(binding)); return text; }
     private static Binding TwoWay(string path) => new(path) { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged, ValidatesOnExceptions = true, ValidatesOnDataErrors = true };
-    private static TextBox BoundInput(string binding, bool readOnly = false, bool multiline = false) { var input = new TextBox { IsReadOnly = readOnly, AcceptsReturn = multiline, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap, VerticalScrollBarVisibility = multiline ? ScrollBarVisibility.Auto : ScrollBarVisibility.Hidden, VerticalContentAlignment = multiline ? VerticalAlignment.Top : VerticalAlignment.Center }; input.SetBinding(TextBox.TextProperty, readOnly ? new Binding(binding) { Mode = BindingMode.OneWay } : TwoWay(binding)); return input; }
-    private static CheckBox Check(string text, string binding) { var checkbox = new CheckBox(); LocalizationService.Bind(checkbox, ContentControl.ContentProperty, text); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(binding)); return checkbox; }
+    private static TextBox BoundInput(string binding, bool readOnly = false, bool multiline = false) { var input = new TextBox { IsReadOnly = readOnly, AcceptsReturn = multiline, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap, VerticalScrollBarVisibility = multiline ? ScrollBarVisibility.Auto : ScrollBarVisibility.Hidden, VerticalContentAlignment = multiline ? VerticalAlignment.Top : VerticalAlignment.Center }; input.SetBinding(TextBox.TextProperty, readOnly ? new Binding(binding) { Mode = BindingMode.OneWay } : TwoWay(binding)); LocalizationService.Bind(input, System.Windows.Automation.AutomationProperties.NameProperty, binding switch { nameof(WorkspaceViewModel.NodeProperties) => "节点属性", nameof(WorkspaceViewModel.ShellInput) => "命令", nameof(WorkspaceViewModel.TextInput) => "文本", nameof(WorkspaceViewModel.RemotePath) => "设备路径", nameof(WorkspaceViewModel.DeviceName) => "名称", _ => "输入" }); System.Windows.Automation.AutomationProperties.SetAutomationId(input, binding); return input; }
+    private static CheckBox Check(string text, string binding) { var checkbox = new CheckBox(); LocalizationService.Bind(checkbox, ContentControl.ContentProperty, text); LocalizationService.Bind(checkbox, System.Windows.Automation.AutomationProperties.NameProperty, text); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(binding)); return checkbox; }
     private static FrameworkElement Field(string label, FrameworkElement control, double labelWidth = 155)
     {
-        var row = new Grid { Margin = new Thickness(0, 0, 0, 9) }; row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(labelWidth) }); row.ColumnDefinitions.Add(new ColumnDefinition()); var text = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap }; LocalizationService.Bind(text, TextBlock.TextProperty, label); row.Children.Add(text); Grid.SetColumn(control, 1); row.Children.Add(control); return row;
+        var row = new Grid { Margin = new Thickness(0, 0, 0, 9) }; row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(labelWidth) }); row.ColumnDefinitions.Add(new ColumnDefinition()); var text = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap }; LocalizationService.Bind(text, TextBlock.TextProperty, label); row.Children.Add(text); if (control is Control) LocalizationService.Bind(control, System.Windows.Automation.AutomationProperties.NameProperty, label); Grid.SetColumn(control, 1); row.Children.Add(control); return row;
     }
     private static Button Button(string glyph, string title, ICommand command)
     {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal }; panel.Children.Add(new TextBlock { Text = glyph, FontFamily = new FontFamily("Segoe MDL2 Assets"), Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center }); var caption = new TextBlock { VerticalAlignment = VerticalAlignment.Center }; LocalizationService.Bind(caption, TextBlock.TextProperty, title); panel.Children.Add(caption); var button = new Button { Content = panel, Command = command }; LocalizationService.Bind(button, ToolTipProperty, title); return button;
+        var panel = new StackPanel { Orientation = Orientation.Horizontal }; panel.Children.Add(new TextBlock { Text = glyph, FontFamily = new FontFamily("Segoe MDL2 Assets"), Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center }); var caption = new TextBlock { VerticalAlignment = VerticalAlignment.Center }; LocalizationService.Bind(caption, TextBlock.TextProperty, title); panel.Children.Add(caption); var button = new Button { Content = panel, Command = command }; LocalizationService.Bind(button, ToolTipProperty, title); LocalizationService.Bind(button, System.Windows.Automation.AutomationProperties.NameProperty, title); return button;
     }
     private Button Button(string glyph, string title, Action action) => Button(glyph, title, new ActionCommand(action));
     private Button Button(string glyph, string title, Func<Task> action, bool write = false, Func<bool>? canExecute = null)
@@ -180,7 +181,7 @@ public partial class MainWindow : Window
         Language = System.Windows.Markup.XmlLanguage.GetLanguage(LocalizationService.Current.Language);
         ViewModel.Settings.Language = LocalizationService.Current.Language;
         ViewModel.Settings.Changed(nameof(SettingsEditor.Language));
-        Title = LocalizationService.Current.Get("矩阵设备");
+        UpdateNavigation();
         foreach (var row in ViewModel.Devices) row.Changed(nameof(DeviceRow.FrameLabel));
     }
 
@@ -279,6 +280,7 @@ public partial class MainWindow : Window
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("启动验收仅允许显式演示模式");
         if (tabs.SelectedIndex != 0 || wallViewMode != "list") throw new InvalidOperationException("初始页面必须是统一设备列表。");
+        await VerifyAppleAppearanceAsync(screenshotPath);
         await VerifyListConsoleSimplificationAsync();
         if (screenshotPath is not null)
         {
@@ -339,7 +341,7 @@ public partial class MainWindow : Window
         LocalizationService.Current.SetLanguage("zh-CN");
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         var settingsTab = tabs.Items.Cast<TabItem>().Single(tab => Equals(tab.Tag, "设置"));
-        if ((tabs.Items[0] as TabItem)?.Header?.ToString() != "设备墙 / 主控" || settingsTab.Header?.ToString() != "设置") throw new InvalidOperationException("简体中文导航未生效");
+        if ((tabs.Items[0] as TabItem)?.Header?.ToString() != "设备" || settingsTab.Header?.ToString() != "设置") throw new InvalidOperationException("简体中文导航未生效");
         tabs.SelectedItem = settingsTab;
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         var labels = VisualDescendants<TextBlock>(Shell).Select(text => text.Text).ToHashSet(StringComparer.Ordinal);
@@ -394,7 +396,7 @@ public partial class MainWindow : Window
         {
             navigation[route.Tag].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             if (!Equals((tabs.SelectedItem as TabItem)?.Tag, route.Tag) || navigation.Count(item => item.Value.IsChecked == true) != 1 || navigation[route.Tag].IsChecked != true)
-                throw new InvalidOperationException("侧栏导航或选中态失效：" + route.Label);
+                throw new InvalidOperationException("侧栏导航或选中态失效：" + LocalizationService.PageDisplayName(route.Tag));
         }
         if (!ReferenceEquals(currentBeforeNavigation, ViewModel.CurrentDevice) || !ReferenceEquals(mainBeforeNavigation, ViewModel.MainDevice) ||
             !selectedBeforeNavigation.SequenceEqual(ViewModel.Targets().Select(device => device.Serial)) || ViewModel.ShellInput != "echo navigation-state" || ViewModel.TextInput != "跨页面保留输入" ||
@@ -477,11 +479,14 @@ public partial class MainWindow : Window
             await ViewModel.ExportNodesAsync(System.IO.Path.Combine(directory, "desktop-nodes.json"));
         }
         var controlStates = new List<object>();
+        var pageCaptures = new List<object>();
+        var restoredDevices = ViewModel.Devices.ToDictionary(device => device, device => device.Info);
+        var restoredFilter = ViewModel.StatusFilter;
         foreach (TabItem tab in tabs.Items)
         {
             NavigateTo(tab.Tag.ToString()!);
-            await Dispatcher.InvokeAsync(() => { UpdateLayout(); }, System.Windows.Threading.DispatcherPriority.Render);
             var pageName = tab.Tag.ToString()!;
+            await SettleIdlePageCaptureAsync(pageName, restoredDevices, restoredFilter);
             controlStates.AddRange(CaptureControlStates(pageName, "idle", Shell));
             var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var busyOperation = ViewModel.ExecuteAsync("控件忙状态检查", () => release.Task);
@@ -508,6 +513,8 @@ public partial class MainWindow : Window
                 var point = timezoneAction.TransformToAncestor(settingsScroll).Transform(new Point());
                 if (point.Y < 0 || point.Y + timezoneAction.ActualHeight > settingsScroll.ActualHeight + 2) throw new InvalidOperationException("扩展页时区按钮滚动后仍不可达");
             }
+            var capture = await SettleIdlePageCaptureAsync(pageName, restoredDevices, restoredFilter);
+            pageCaptures.Add(capture);
             if (screenshotPath is not null)
             {
                 if (!System.IO.Path.IsPathFullyQualified(screenshotPath)) throw new InvalidOperationException("截图输出必须为绝对路径");
@@ -518,10 +525,12 @@ public partial class MainWindow : Window
             }
         }
         if (screenshotPath is not null)
+        {
             await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".controls.json"), JsonSerializer.Serialize(controlStates, JsonDefaults.Options));
+            await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".captures.json"), JsonSerializer.Serialize(pageCaptures, JsonDefaults.Options));
+        }
         NavigateTo("设备墙 / 主控");
-        await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
-        await Dispatcher.InvokeAsync(() => { UpdateLayout(); }, System.Windows.Threading.DispatcherPriority.Render);
+        await SettleIdlePageCaptureAsync("设备墙 / 主控", restoredDevices, restoredFilter);
         var tiles = VisualDescendants<UnifiedDeviceTile>(Shell).Where(tile => tile.IsVisible).ToArray();
         if (screenshotPath is not null) await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".rows.json"), JsonSerializer.Serialize(tiles.Select(tile => new { view = "list", owner = tile.Owner is not null, context = tile.DataContext?.GetType().Name, child = tile.Child?.GetType().Name, tile.ActualWidth, tile.ActualHeight }), JsonDefaults.Options));
         if (!unifiedDeviceView.IsEmpty && tiles.Length == 0) throw new InvalidOperationException("非空统一目录没有生成可见列表操作行。");
@@ -536,9 +545,9 @@ public partial class MainWindow : Window
 
     private void SaveRender(string path)
     {
-        foreach (var label in new[] { "环境设置", "设备详情" })
+        foreach (var label in new[] { "WorkspaceSettings", "DeviceDetails" })
         {
-            var control = VisualDescendants<Button>(Shell).Single(button => button.ToolTip as string == label);
+            var control = VisualDescendants<Button>(Shell).Single(button => button.Name == label);
             var position = control.TranslatePoint(new Point(), Shell);
             if (position.X < 0 || position.Y < 0 || position.X + control.ActualWidth > Shell.ActualWidth + 1 || position.Y + control.ActualHeight > Shell.ActualHeight + 1)
                 throw new InvalidOperationException("截图前全局工具栏超出客户区：" + label);

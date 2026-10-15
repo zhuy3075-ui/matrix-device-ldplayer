@@ -27,7 +27,7 @@ public partial class MainWindow
         var grid = new Grid { Margin = new Thickness(0, 10, 0, 0) }; grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(230) }); grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); grid.RowDefinitions.Add(new RowDefinition());
         var parameters = new DataGrid { ItemsSource = ViewModel.Parameters }; TextColumn(parameters, "参数", nameof(ParameterEditor.Key), 170, true); TextColumn(parameters, "名称", nameof(ParameterEditor.Label), 180, true); TextColumn(parameters, "类型", nameof(ParameterEditor.Type), 100, true); TextColumn(parameters, "范围/单位", nameof(ParameterEditor.Range), 150, true); TextColumn(parameters, "值（JSON）", nameof(ParameterEditor.Value), 230, false); grid.Children.Add(parameters);
         var label = Label("脚本日志 · 最近 500 条"); label.Margin = new Thickness(0, 10, 0, 8); Grid.SetRow(label, 1); grid.Children.Add(label);
-        var logs = new ListBox { ItemsSource = ViewModel.ScriptLogs, FontFamily = new FontFamily("Consolas"), FontSize = 12, BorderBrush = new SolidColorBrush(Color.FromRgb(212, 221, 225)) }; Grid.SetRow(logs, 2); grid.Children.Add(logs); page.Children.Add(grid); return page;
+        var logs = new ListBox { ItemsSource = ViewModel.ScriptLogs, FontFamily = new FontFamily("Consolas"), FontSize = 12, BorderBrush = ThemeBrush("BorderBrush") }; Grid.SetRow(logs, 2); grid.Children.Add(logs); page.Children.Add(grid); return page;
     }
 
 }
