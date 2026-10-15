@@ -30,6 +30,8 @@ internal static class ScreenVideoTests
         test("video backend disposal drains owned video streams", DisposalAsync);
         test("video stalled cleanup signals only the session PID after birth verification", OwnedCleanupAsync);
         test("video mismatched cleanup proof blocks another stream on the same serial", CleanupRefusalAsync);
+        test("video cleanup confirms process disappearance during snapshot signal and exit recheck", CleanupDisappearanceAsync);
+        test("video cleanup preserves permission failures when the owned PID still exists", CleanupReadFailureAsync);
         test("video cancellation during startup OKAY handshake blocks unproven retry and preserves its artifact", StartupCancellationAsync);
         test("video disconnect after startup OKAY never releases an unproven session for retry", StartupDisconnectAsync);
         if (FindFfmpeg() is not null) test("video local official components decode H264 frames and dispose the owned decoder", DecoderIntegrationAsync);
@@ -254,6 +256,43 @@ internal static class ScreenVideoTests
         await AssertUnprovenStartupAsync(server, backend, video);
     }
 
+    private static async Task CleanupDisappearanceAsync()
+    {
+        foreach (var stage in new[] { "snapshot", "signal", "recheck" })
+        {
+            await using var server = new FakeScreenVideoServer { StallAfterDisconnect = true, ProcessDisappearsAt = stage };
+            await using var backend = Backend(server);
+            backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+            await backend.DiscoverAsync();
+            using var stop = new CancellationTokenSource();
+            var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null, stop.Token);
+            await server.VideoEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            stop.Cancel(); await Canceled(video);
+            Assert(server.Requests.Any(request => request.Contains("MATRIX_VIDEO_PID_12345_ABSENT", StringComparison.Ordinal)), "Disappeared process was accepted without an explicit second absence check: " + stage);
+            Assert(server.Requests.Any(request => request.StartsWith("shell,v2,raw:rm -f", StringComparison.Ordinal)), "Confirmed exited process retained its owned artifact: " + stage);
+            server.EndImmediately = true;
+            await Expect(503, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null).WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+    }
+
+    private static async Task CleanupReadFailureAsync()
+    {
+        foreach (var stage in new[] { "snapshot", "signal", "recheck" })
+        {
+            await using var server = new FakeScreenVideoServer { StallAfterDisconnect = true, ProcessReadFailsAt = stage };
+            await using var backend = Backend(server);
+            backend.RegisterIdentityGuard("allowed", _ => Task.CompletedTask);
+            await backend.DiscoverAsync();
+            using var stop = new CancellationTokenSource();
+            var video = backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null, stop.Token);
+            await server.VideoEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            stop.Cancel(); await Expect(409, () => video.WaitAsync(TimeSpan.FromSeconds(6)));
+            var count = server.Requests.Count;
+            await Expect(409, () => backend.StreamScreenVideoAsync("allowed", 32, 32, Stream.Null));
+            Assert(server.Requests.Count == count && server.Requests.All(request => !request.StartsWith("shell,v2,raw:rm -f", StringComparison.Ordinal)), "Still-existing process read failure was treated as a successful exit: " + stage);
+        }
+    }
+
     private static async Task StartupDisconnectAsync()
     {
         await using var server = new FakeScreenVideoServer { DisconnectAfterServerOkay = true };
@@ -347,6 +386,8 @@ internal sealed class FakeScreenVideoServer : IAsyncDisposable
     public bool ChangedProcessBirth { get; set; }
     public bool HoldServerOkay { get; set; }
     public bool DisconnectAfterServerOkay { get; set; }
+    public string? ProcessDisappearsAt { get; set; }
+    public string? ProcessReadFailsAt { get; set; }
     public TaskCompletionSource ServerRequestEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _processAlive = true;
     private string _processCommandLine = "";
@@ -417,6 +458,7 @@ internal sealed class FakeScreenVideoServer : IAsyncDisposable
                     {
                         var active = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                         _activeServer = active;
+                        _processAlive = true;
                         var marker = Regex.Match(request, @"MATRIX_VIDEO_[0-9a-f]{32}:").Value;
                         var nonce = Regex.Match(request, @"matrix\.video\.session=([0-9a-f]{32})").Groups[1].Value;
                         var scid = Regex.Match(request, @"scid=([0-9a-f]{8})").Groups[1].Value;
@@ -427,8 +469,26 @@ internal sealed class FakeScreenVideoServer : IAsyncDisposable
                     }
                     var command = request[13..];
                     string text;
-                    if (command.Contains("kill -TERM 12345", StringComparison.Ordinal)) { _processAlive = false; _activeServer?.TrySetResult(); text = ""; }
-                    else if (command.Contains("/proc/12345/stat", StringComparison.Ordinal)) text = !_processAlive ? "" : Stat(ChangedProcessBirth) + (command.Contains("cmdline", StringComparison.Ordinal) ? "\n" + _processCommandLine : "");
+                    var stage = command.Contains("kill -TERM 12345", StringComparison.Ordinal) ? "signal" : command.Contains("cmdline", StringComparison.Ordinal) ? "snapshot" : command == "cat /proc/12345/stat" ? "recheck" : null;
+                    if (stage is not null && (ProcessDisappearsAt == stage || ProcessReadFailsAt == stage))
+                    {
+                        var disappeared = ProcessDisappearsAt == stage;
+                        if (disappeared) { _processAlive = false; _activeServer?.TrySetResult(); }
+                        await PacketAsync(stream, 2, Encoding.UTF8.GetBytes(disappeared ? "cat: /proc/12345/stat: No such file or directory" : "cat: /proc/12345/stat: Permission denied"));
+                        await PacketAsync(stream, 3, [1]); return;
+                    }
+                    if (command.Contains("MATRIX_VIDEO_PID_12345_ABSENT", StringComparison.Ordinal)) text = _processAlive ? "" : "MATRIX_VIDEO_PID_12345_ABSENT";
+                    else if (command.Contains("kill -TERM 12345", StringComparison.Ordinal))
+                    {
+                        _processAlive = ProcessDisappearsAt == "recheck" || ProcessReadFailsAt == "recheck";
+                        if (!_processAlive) _activeServer?.TrySetResult();
+                        text = "";
+                    }
+                    else if (command.Contains("/proc/12345/stat", StringComparison.Ordinal))
+                    {
+                        if (!_processAlive) { await PacketAsync(stream, 2, "cat: /proc/12345/stat: No such file or directory"u8.ToArray()); await PacketAsync(stream, 3, [1]); return; }
+                        text = Stat(ChangedProcessBirth) + (command.Contains("cmdline", StringComparison.Ordinal) ? "\n" + _processCommandLine : "");
+                    }
                     else text = command switch { "getprop" => "[ro.product.model]: [Fixture]\n", "wm size" => "Physical size: 32x32\n", "dumpsys input" => "SurfaceOrientation: 0\n", _ => "fixture\n" };
                     await PacketAsync(stream, 1, Encoding.UTF8.GetBytes(text));
                     await PacketAsync(stream, 3, [0]); return;

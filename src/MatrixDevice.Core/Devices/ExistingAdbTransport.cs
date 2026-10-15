@@ -262,8 +262,9 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
         await verifyIdentity(ct).ConfigureAwait(false);
         await RunPinnedAsync(serial, transport, async token =>
         {
-            var snapshot = Encoding.UTF8.GetString(await ExecuteAsync(serial, ["shell", $"if [ -e /proc/{identity.ProcessId}/stat ]; then cat /proc/{identity.ProcessId}/stat; printf '\\n'; cat /proc/{identity.ProcessId}/cmdline; fi"], token).ConfigureAwait(false));
-            if (snapshot.Length == 0) return true;
+            var snapshot = await ExecuteOwnedProcessCommandAsync(serial, identity.ProcessId,
+                $"cat /proc/{identity.ProcessId}/stat && printf '\\n' && cat /proc/{identity.ProcessId}/cmdline", token).ConfigureAwait(false);
+            if (snapshot is null) return true;
             var lineEnd = snapshot.IndexOf('\n');
             if (lineEnd < 0 || ParseProcessIdentity(snapshot[..lineEnd]) != identity)
                 throw new DeviceException($"视频服务 PID 已变化，拒绝清理其他进程：serial={serial}, pid={identity.ProcessId}。", 409, 1003);
@@ -275,15 +276,31 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
                 throw new DeviceException($"无法核验本次视频进程命令行，拒绝终止：serial={serial}, pid={identity.ProcessId}, scid={scid}。", 409, 1003);
             // Recheck birth immediately in the same shell before signalling this numeric PID.
             var kill = FormattableString.Invariant($"record=$(cat /proc/{identity.ProcessId}/stat) || exit 41; fields=${{record##*) }}; set -- $fields; shift 19; [ \"$1\" = \"{identity.StartedTicks}\" ] || exit 42; kill -TERM {identity.ProcessId}");
-            await ExecuteAsync(serial, ["shell", kill], token).ConfigureAwait(false);
+            if (await ExecuteOwnedProcessCommandAsync(serial, identity.ProcessId, kill, token).ConfigureAwait(false) is null) return true;
             for (var attempt = 0; attempt < 10; attempt++)
             {
-                var after = Encoding.UTF8.GetString(await ExecuteAsync(serial, ["shell", $"if [ -e /proc/{identity.ProcessId}/stat ]; then cat /proc/{identity.ProcessId}/stat; fi"], token).ConfigureAwait(false)).Trim();
-                if (after.Length == 0 || ParseProcessIdentity(after) != identity) return true;
+                var after = await ExecuteOwnedProcessCommandAsync(serial, identity.ProcessId, $"cat /proc/{identity.ProcessId}/stat", token).ConfigureAwait(false);
+                if (after is null) return true;
+                var observed = ParseProcessIdentity(after.Trim()) ?? throw new IOException($"Malformed owned video process stat: pid={identity.ProcessId}.");
+                if (observed != identity) return true;
                 await Task.Delay(100, token).ConfigureAwait(false);
             }
             throw new DeviceException($"本次视频进程终止未确认，请停止重连并检查实例：serial={serial}, pid={identity.ProcessId}。", 409, 1003);
         }, ct).ConfigureAwait(false);
+    }
+
+    private async Task<string?> ExecuteOwnedProcessCommandAsync(string serial, int processId, string command, CancellationToken ct)
+    {
+        try { return Encoding.UTF8.GetString(await ExecuteAsync(serial, ["shell", command], ct).ConfigureAwait(false)); }
+        catch (DeviceException error) when (error.Status == 503)
+        {
+            // The process may exit between any /proc read or signal. Only a second absence check confirms this case.
+            var marker = "MATRIX_VIDEO_PID_" + processId.ToString(CultureInfo.InvariantCulture) + "_ABSENT";
+            var recheck = $"if [ ! -d /proc/{processId} ]; then printf '{marker}'; fi";
+            var result = Encoding.UTF8.GetString(await ExecuteAsync(serial, ["shell", recheck], ct).ConfigureAwait(false));
+            if (result == marker) return null;
+            throw;
+        }
     }
 
     private static VideoProcessIdentity? ParseProcessIdentity(string stat)
