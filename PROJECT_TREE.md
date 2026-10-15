@@ -9,11 +9,14 @@ MatrixDevice.Reconstructed/
 |   |-- codex/
 |   |   |-- launch-memory-policy/
 |   |   |   +-- REPORT.md
-|   |   +-- realtime-monitoring/
-|   |       |-- goal-prompt.md
-|   |       |-- HANDOFF.md
+|   |   |-- realtime-monitoring/
+|   |   |   |-- goal-prompt.md
+|   |   |   |-- HANDOFF.md
+|   |   |   |-- plan.md
+|   |   |   +-- requirements.md
+|   |   +-- unified-console-ui/
 |   |       |-- plan.md
-|   |       +-- requirements.md
+|   |       +-- REPORT.md
 |   |-- COVERAGE.md
 |   |-- IMPLEMENTATION.md
 |   |-- LDPLAYER_INTEGRATION.md
@@ -209,6 +212,8 @@ MatrixDevice.Reconstructed/
 |   |   |-- UnifiedDeviceRow.cs
 |   |   |-- Views/
 |   |   |   |-- ApiView.cs
+|   |   |   |-- ApplicationManagementSmoke.cs
+|   |   |   |-- ApplicationRows.cs
 |   |   |   |-- ApplicationsView.cs
 |   |   |   |-- DebugView.cs
 |   |   |   |-- DirectoryView.cs
@@ -227,9 +232,11 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- ScreenshotView.cs
 |   |   |   |-- ScriptsView.cs
 |   |   |   |-- SettingsView.cs
+|   |   |   |-- ShellSimplificationSmoke.cs
 |   |   |   |-- ShellView.cs
 |   |   |   |-- TextView.cs
 |   |   |   |-- UiControlAudit.cs
+|   |   |   |-- UnifiedDeviceActionsSmoke.cs
 |   |   |   |-- UnifiedDevicesAcceptance.cs
 |   |   |   |-- UnifiedDevicesView.cs
 |   |   |   |-- UnifiedDeviceTile.cs
@@ -239,6 +246,7 @@ MatrixDevice.Reconstructed/
 |   |   +-- WorkspaceViewModel.cs
 |   |-- MatrixDevice.Features/
 |   |   |-- Applications/
+|   |   |   |-- ApplicationBatch.cs
 |   |   |   +-- ApplicationService.cs
 |   |   |-- Automation/
 |   |   |   |-- AutomationService.cs
@@ -277,6 +285,7 @@ MatrixDevice.Reconstructed/
 |           +-- SettingsStore.cs
 |-- tests/
 |   +-- MatrixDevice.Tests/
+|       |-- ApplicationBatchTests.cs
 |       |-- ExistingAdbTests.cs
 |       |-- LdLaunchMemoryTests.cs
 |       |-- LdRunningWindowTests.cs

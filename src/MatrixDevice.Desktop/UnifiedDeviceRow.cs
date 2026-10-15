@@ -10,6 +10,7 @@ public sealed class UnifiedDeviceRow : ObservableObject
     public DeviceRow? Device { get; private set; }
     public bool Connected { get; private set; }
     private string phase = "";
+    private string? configuredSerial;
     public int? Index => Instance?.Index;
     public string Number => Index?.ToString() ?? "-";
     public string Name => Device?.Name ?? Instance?.Name ?? "";
@@ -20,6 +21,13 @@ public sealed class UnifiedDeviceRow : ObservableObject
     public string Serial => Device?.Serial ?? "-";
     public string Resolution => Device?.Resolution ?? (Instance?.Width is { } width && Instance.Height is { } height ? $"{width} × {height}" : "-");
     public string Group => Device?.Group ?? "未分组";
+    public string ActionCaption => Instance is null ? $"{Name} · {Serial}" : $"实例 {Number} · {Name}";
+    public string AndroidState => Instance is null ? "-" : Instance.AndroidStarted ? "已启动" : "未启动";
+    public string ProcessId => Instance?.ProcessId is > 0 ? Instance.ProcessId.ToString() : "-";
+    public string VBoxProcessId => Instance?.VBoxProcessId is > 0 ? Instance.VBoxProcessId.ToString() : "-";
+    public string Dpi => Instance?.Dpi?.ToString() ?? "-";
+    public string Generation => Instance?.Generation.ToString() ?? "-";
+    public string Binding => Instance is null ? "-" : Connected ? Serial + "（已核验）" : string.IsNullOrWhiteSpace(configuredSerial) ? "尚未绑定" : configuredSerial + "（配置绑定，尚未核验）";
     public bool CanSelect => Index is not (0 or 99999);
     public bool IsSelected
     {
@@ -40,10 +48,10 @@ public sealed class UnifiedDeviceRow : ObservableObject
         MainCommand = new AsyncCommand(() => setMain(this), () => Connected && Device is not null && canActivate(this));
     }
 
-    public void Update(LdPlayerInstance? instance, DeviceRow? device, bool connected, string operationPhase)
+    public void Update(LdPlayerInstance? instance, DeviceRow? device, bool connected, string operationPhase, string? configuredBinding = null)
     {
         var retained = IsSelected;
-        Instance = instance; Device = device; Connected = connected; phase = operationPhase;
+        Instance = instance; Device = device; Connected = connected; phase = operationPhase; configuredSerial = configuredBinding;
         if (CanSelect && retained && device is not null && !device.IsSelected) device.IsSelected = true;
         selected = retained; Changed(""); RefreshCommands();
     }

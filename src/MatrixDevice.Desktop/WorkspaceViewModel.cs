@@ -21,7 +21,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     private CancellationTokenSource? transferCancellation;
     private DeviceRow? currentDevice;
     private DeviceRow? mainDevice;
-    private string search = "";
     private string groupFilter = "全部分组";
     private string statusFilter = "全部状态";
     private bool busy;
@@ -33,13 +32,11 @@ public sealed class WorkspaceViewModel : ObservableObject
     private BitmapSource? debugImage;
     private AndroidNode? nodeRoot;
     private NodeRow? selectedNode;
-    private string nodeSearch = "";
     private string shellInput = "";
     private string textInput = "";
     private string remotePath = "/sdcard/MatrixExchange/";
     private bool transferring;
     private bool showSystemApps;
-    private string appSearch = "";
     private AppInfo? selectedApp;
     private ScriptPackage? package;
     private bool syncMouse;
@@ -62,7 +59,6 @@ public sealed class WorkspaceViewModel : ObservableObject
         DeviceView = CollectionViewSource.GetDefaultView(Devices);
         DeviceView.Filter = item => item is DeviceRow row && Matches(row);
         AppsView = CollectionViewSource.GetDefaultView(Apps);
-        AppsView.Filter = item => item is AppInfo app && (string.IsNullOrWhiteSpace(AppSearch) || app.PackageName.Contains(AppSearch, StringComparison.OrdinalIgnoreCase) || (app.Name?.Contains(AppSearch, StringComparison.OrdinalIgnoreCase) ?? false));
         RefreshCommand = Async(RefreshDevicesAsync, () => !Busy);
         ScreenshotCommand = Async(() => CaptureAsync(), CanUseDevice);
         WallRefreshCommand = Async(RefreshWallAsync, () => !Busy && Devices.Any(row => row.Info.Online));
@@ -154,7 +150,6 @@ public sealed class WorkspaceViewModel : ObservableObject
     public DeviceRow? MainDevice { get => mainDevice; private set { Set(ref mainDevice, value); Changed(nameof(MainContext)); WallChanged?.Invoke(); } }
     public string DeviceContext => CurrentDevice is { } row ? $"{row.Name} · {row.Serial} · {LocalizationService.Current.Get(row.State)}" : LocalizationService.Current.Get("未选择设备");
     public string MainContext => MainDevice is { } row ? $"{LocalizationService.Current.Get("主控")}: {row.Name} · {row.Serial}" : $"{LocalizationService.Current.Get("主控")}: {LocalizationService.Current.Get("未指定")}";
-    public string Search { get => search; set { Set(ref search, value); RefreshFilter(); } }
     public string GroupFilter { get => groupFilter; set { Set(ref groupFilter, value); RefreshFilter(); } }
     public string StatusFilter { get => statusFilter; set { Set(ref statusFilter, value); RefreshFilter(); } }
     public bool Busy { get => busy || externalBusy; private set { Set(ref busy, value); SyncApiWriteGuard(); RefreshCommands(); } }
@@ -167,14 +162,12 @@ public sealed class WorkspaceViewModel : ObservableObject
     public BitmapSource? DebugImage { get => debugImage; private set => Set(ref debugImage, value); }
     public NodeRow? SelectedNode { get => selectedNode; set { Set(ref selectedNode, value); Changed(nameof(NodeProperties)); NodeSelectionChanged?.Invoke(); } }
     public string NodeProperties => SelectedNode is { } row ? JsonSerializer.Serialize(row.Source with { ChildNodeList = [] }, JsonDefaults.Options) : "未选中节点";
-    public string NodeSearch { get => nodeSearch; set { Set(ref nodeSearch, value); NodesChanged?.Invoke(); } }
     public string ShellInput { get => shellInput; set { Set(ref shellInput, value); RefreshCommands(); } }
     public string TextInput { get => textInput; set { Set(ref textInput, value); RefreshCommands(); } }
     public string RemotePath { get => remotePath; set => Set(ref remotePath, value); }
     public bool Transferring { get => transferring; private set { Set(ref transferring, value); SyncApiWriteGuard(); RefreshCommands(); } }
     public double OverallProgress => Transfers.Count == 0 ? 0 : Transfers.Average(row => row.Progress);
     public bool ShowSystemApps { get => showSystemApps; set => Set(ref showSystemApps, value); }
-    public string AppSearch { get => appSearch; set { Set(ref appSearch, value); AppsView.Refresh(); } }
     public AppInfo? SelectedApp { get => selectedApp; set { Set(ref selectedApp, value); RefreshCommands(); } }
     public string PackageSummary => package is { } value ? $"{value.Manifest.Name} · {value.Manifest.Version}\n{value.Manifest.Description}" : LocalizationService.Current.Get("未导入脚本");
     public bool SyncMouse { get => syncMouse; set => Set(ref syncMouse, value); }
@@ -205,7 +198,7 @@ public sealed class WorkspaceViewModel : ObservableObject
     private ActionCommand Action(Action action, Func<bool> canExecute) { var command = new ActionCommand(action, canExecute); commands.Add(command); return command; }
     private void RefreshCommands() { foreach (var command in commands) { if (command is AsyncCommand asyncCommand) asyncCommand.Refresh(); else if (command is ActionCommand actionCommand) actionCommand.Refresh(); } Changed(nameof(TargetContext)); }
     private bool ScriptBusy(string serial) => runtime.Scripts.GetStatus(serial).State.ToString() is "Running" or "Cancelling";
-    private bool Matches(DeviceRow row) => (string.IsNullOrWhiteSpace(Search) || row.Name.Contains(Search, StringComparison.OrdinalIgnoreCase) || row.Serial.Contains(Search, StringComparison.OrdinalIgnoreCase)) && (GroupFilter == "全部分组" || row.Group == GroupFilter) && (StatusFilter == "全部状态" || row.Info.State == StatusFilter);
+    private bool Matches(DeviceRow row) => (GroupFilter == "全部分组" || row.Group == GroupFilter) && (StatusFilter == "全部状态" || row.Info.State == StatusFilter);
     private void RefreshFilter() { DeviceView.Refresh(); Changed(nameof(Counts)); WallChanged?.Invoke(); }
     public void SelectFiltered(bool selected) { foreach (var row in DeviceView.Cast<DeviceRow>()) row.IsSelected = selected; UpdateSelection(); }
     public void UpdateSelection() { Changed(nameof(Counts)); RefreshCommands(); }

@@ -72,6 +72,7 @@ LdWorkspaceTests.Register(Test);
 LdLaunchMemoryTests.Register(Test);
 MonitorResourceTests.Register(Test);
 LdRunningWindowTests.Register(Test);
+ApplicationBatchTests.Register(Test);
 Test("LD admission applies only unique explicit local proofs and never mutates old authorization", async () =>
 {
     var original = new AppSettings { AdbAllowedSerials = ["emulator-5556"], LdSerialBindings = new() { [1] = "emulator-5556" } };

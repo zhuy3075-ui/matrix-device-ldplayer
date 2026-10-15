@@ -17,7 +17,6 @@ public partial class MainWindow
     private Task? directoryOperation;
     private CancellationTokenSource? ldOperationCancellation;
     private readonly List<TextBlock> deviceSummaries = [];
-    private readonly List<(string Tag, ToggleButton Button)> deviceModes = [];
     private readonly ObservableCollection<UnifiedDeviceRow> unifiedDevices = [];
     private ICollectionView unifiedDeviceView = null!;
     private readonly Dictionary<int, string> launchPhases = [];
@@ -29,28 +28,20 @@ public partial class MainWindow
     private LdWindowVisibility? ldWindowVisibility;
     private DateTimeOffset lastGuestDiscovery;
 
-    private FrameworkElement BuildDeviceModes()
+    private FrameworkElement BuildDeviceSummary()
     {
-        var row = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
-        foreach (var (tag, glyph, label) in new[] { ("设备墙 / 主控", "\uE8A9", "全部设备"), ("雷电实例", "\uE7F4", "高级管理") })
-        {
-            var choice = WallToggle(glyph, label);
-            choice.Click += (_, _) => NavigateTo(tag);
-            deviceModes.Add((tag, choice)); row.Children.Add(choice);
-        }
-        var summary = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Foreground = WallMuted, Margin = new Thickness(8, 0, 0, 6), TextWrapping = TextWrapping.Wrap };
-        deviceSummaries.Add(summary); row.Children.Add(summary);
-        return row;
+        var summary = new TextBlock { Foreground = WallMuted, Margin = new Thickness(0, 0, 0, 10), TextWrapping = TextWrapping.Wrap };
+        deviceSummaries.Add(summary);
+        return summary;
     }
 
     private void InitializeUnifiedDevices()
     {
         unifiedDeviceView = CollectionViewSource.GetDefaultView(unifiedDevices);
         unifiedDeviceView.Filter = item => item is UnifiedDeviceRow row
-            && (string.IsNullOrWhiteSpace(ViewModel.Search) || row.Name.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) || row.Instance?.Name.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) == true || row.Serial.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase) || row.Number.Contains(ViewModel.Search, StringComparison.OrdinalIgnoreCase))
             && (ViewModel.GroupFilter == "全部分组" || row.Group == ViewModel.GroupFilter)
             && (ViewModel.StatusFilter == "全部状态" || row.Device?.Info.State == ViewModel.StatusFilter);
-        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts) or nameof(WorkspaceViewModel.Search) or nameof(WorkspaceViewModel.GroupFilter) or nameof(WorkspaceViewModel.StatusFilter)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
+        ViewModel.PropertyChanged += (_, args) => { if (args.PropertyName is nameof(WorkspaceViewModel.Counts) or nameof(WorkspaceViewModel.GroupFilter) or nameof(WorkspaceViewModel.StatusFilter)) UpdateUnifiedDirectory(); RefreshLaunchCommands(); };
     }
 
     internal void UpdateUnifiedDirectory()
@@ -61,7 +52,6 @@ public partial class MainWindow
         {
         var instances = ViewModel.Runtime.LdPlayer?.Instances ?? [];
         var admitted = instances.Count(instance => ViewModel.Runtime.Settings.LdSerialBindings.ContainsKey(instance.Index));
-        foreach (var mode in deviceModes) mode.Button.IsChecked = Equals((tabs.SelectedItem as TabItem)?.Tag, mode.Tag);
         var expected = new HashSet<string>(StringComparer.Ordinal);
         var boundSerials = new HashSet<string>(StringComparer.Ordinal);
         foreach (var instance in instances)
@@ -73,6 +63,7 @@ public partial class MainWindow
         }
         foreach (var device in ViewModel.Devices.Where(row => !boundSerials.Contains(row.Serial))) Upsert("device:" + device.Serial, null, device, device.Info.Online);
         foreach (var stale in unifiedDevices.Where(row => !expected.Contains(row.Key)).ToArray()) unifiedDevices.Remove(stale);
+        SelectUnifiedInstance(instanceActionRow);
         foreach (var summary in deviceSummaries) summary.Text = $"本机 {instances.Count} 台 · 已接入 {admitted} 台 · 已连接 {unifiedDevices.Count(row => row.Connected)} 台";
         unifiedDeviceView.Refresh(); SynchronizeUnifiedSelection();
         void Upsert(string key, LdPlayerInstance? instance, DeviceRow? device, bool connected)
@@ -82,10 +73,11 @@ public partial class MainWindow
             if (row is null)
             {
                 row = new UnifiedDeviceRow(key, ActivateUnifiedRowAsync, CanActivateUnifiedRow, ShowUnifiedWindowAsync, item => !ldBusy && !ViewModel.Busy && item.Index is { } index && ldWindowVisibility?.IsHidden(index) == true, item => item.Device is null ? Task.CompletedTask : ViewModel.SetMainAsync(item.Device));
-                row.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(UnifiedDeviceRow.IsSelected)) SynchronizeUnifiedSelection(); };
+                row.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(UnifiedDeviceRow.IsSelected)) SynchronizeUnifiedSelection(true); };
                 unifiedDevices.Add(row);
             }
-            row.Update(instance, device, connected, instance is not null && launchPhases.TryGetValue(instance.Index, out var phase) ? phase : "");
+            row.Update(instance, device, connected, instance is not null && launchPhases.TryGetValue(instance.Index, out var phase) ? phase : "",
+                instance is null ? null : ViewModel.Runtime.Settings.LdSerialBindings.GetValueOrDefault(instance.Index));
         }
         }
         finally { updatingUnifiedDirectory = false; }
@@ -108,8 +100,13 @@ public partial class MainWindow
         catch (Exception ex) { SetLaunchFeedback("显示窗口失败：" + ViewModel.PresentError(ex)); }
     }
     private void SetLaunchFeedback(string text) { if (ldFeedback is not null) ldFeedback.Text = text; foreach (var feedback in launchFeedback) feedback.Text = text; }
-    private void SynchronizeUnifiedSelection()
+    private void SynchronizeUnifiedSelection(bool changed = false)
     {
+        if (changed)
+        {
+            var selected = unifiedDevices.Where(row => row.IsSelected).ToArray();
+            SelectUnifiedInstance(selected.Length == 1 ? selected[0] : null);
+        }
         ViewModel.SetPendingLaunchSelection(unifiedDevices.Count(row => row.IsSelected && !row.Connected));
         workspaceCounts.Text = $"目录 {unifiedDevices.Count} · 已连接 {unifiedDevices.Count(row => row.Connected)} · 筛选 {unifiedDeviceView.Cast<UnifiedDeviceRow>().Count()} · 已选 {unifiedDevices.Count(row => row.IsSelected)}";
         RefreshLaunchCommands();
@@ -128,7 +125,7 @@ public partial class MainWindow
         var stopButton = WallButton("\uE71A", "取消启动", stop); stopButton.Content = WallGlyph("\uE71A"); stopButton.Width = 34; stopButton.MinWidth = 0; stopButton.Padding = new Thickness(0); tools.Children.Add(stopButton);
         ViewModel.PropertyChanged += (_, _) => stop.Refresh();
         section.Children.Add(tools);
-        var feedback = new TextBlock { Foreground = WallMuted, TextWrapping = TextWrapping.Wrap, MinHeight = 19, Margin = new Thickness(0, 0, 0, 4) }; launchFeedback.Add(feedback); section.Children.Add(feedback);
+        var feedback = new TextBlock { Foreground = WallMuted, TextWrapping = TextWrapping.Wrap, MinHeight = 19, Margin = new Thickness(0, 0, 0, 4) }; ldFeedback = feedback; launchFeedback.Add(feedback); section.Children.Add(feedback);
         return section;
     }
     private Button LaunchButton(string glyph, string label, Func<Task> operation, Func<bool> enabled, bool primary = false)

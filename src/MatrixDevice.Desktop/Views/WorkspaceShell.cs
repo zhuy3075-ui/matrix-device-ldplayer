@@ -18,9 +18,11 @@ public partial class MainWindow
     private Window? directoryWindow;
     private Window? scannerWindow;
     private bool sidebarCollapsed;
+    private FrameworkElement singleTargetLabel = null!;
+    private FrameworkElement singleTargetChoice = null!;
     private static readonly (string Tag, string Label, string Icon)[] WorkspacePages =
     [
-        ("设备墙 / 主控", "设备管理", "\uE8EA"), ("雷电实例", "雷电实例", "\uE7F4"),
+        ("设备墙 / 主控", "设备管理", "\uE8EA"),
         ("实时监控", "实时监控", "\uE9D9"),
         ("节点", "节点调试", "\uE8A5"), ("截图 / 取色", "截图取色", "\uE722"),
         ("Shell", "命令终端", "\uE756"), ("应用", "应用管理", "\uE71D"),
@@ -45,23 +47,21 @@ public partial class MainWindow
         workspace = new Grid();
         workspace.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         workspace.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        workspace.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         workspace.RowDefinitions.Add(new RowDefinition());
         workspace.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         Grid.SetColumn(workspace, 1); Shell.Children.Add(workspace);
-        workspace.Children.Add(BuildSearchBar());
+        workspace.Children.Add(BuildWorkspaceToolbar());
 
         var notice = new Border { Background = WorkspaceBrush("#FFF4F2"), Padding = new Thickness(20, 9, 20, 9) };
         var error = BoundText(nameof(WorkspaceViewModel.Error), true); error.Foreground = WorkspaceBrush("#AE3F39"); notice.Child = error;
         notice.SetBinding(VisibilityProperty, new Binding(nameof(WorkspaceViewModel.Error)) { Converter = new NonEmptyVisibilityConverter() });
         Grid.SetRow(notice, 1); workspace.Children.Add(notice);
-        var context = BuildWorkspaceContext(); Grid.SetRow(context, 2); workspace.Children.Add(context);
         var footer = new Grid { Margin = new Thickness(20, 8, 20, 10) };
         footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition());
         workspaceCounts = BoundText(nameof(WorkspaceViewModel.Counts)); workspaceCounts.FontSize = 11; workspaceCounts.Foreground = WorkspaceBrush("#63718A"); footer.Children.Add(workspaceCounts);
         var status = BoundText(nameof(WorkspaceViewModel.Status)); status.FontSize = 11; status.TextAlignment = TextAlignment.Right;
         status.TextTrimming = TextTrimming.CharacterEllipsis; status.SetBinding(ToolTipProperty, new Binding(nameof(WorkspaceViewModel.Status)));
-        Grid.SetColumn(status, 1); footer.Children.Add(status); Grid.SetRow(footer, 4); workspace.Children.Add(footer);
+        Grid.SetColumn(status, 1); footer.Children.Add(status); Grid.SetRow(footer, 3); workspace.Children.Add(footer);
     }
 
     private Border BuildNavigation()
@@ -94,7 +94,6 @@ public partial class MainWindow
         var links = new StackPanel { Margin = new Thickness(10, 0, 10, 8) };
         foreach (var item in WorkspacePages)
         {
-            if (item.Tag == "雷电实例") continue;
             var content = new StackPanel { Orientation = Orientation.Horizontal };
             var glyph = ShellGlyph(item.Icon); glyph.Width = 28; content.Children.Add(glyph);
             var caption = new TextBlock { Text = item.Label, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
@@ -109,24 +108,25 @@ public partial class MainWindow
         return sidebar;
     }
 
-    private FrameworkElement BuildSearchBar()
+    private FrameworkElement BuildWorkspaceToolbar()
     {
-        var surface = new Border { Background = Brushes.White, BorderBrush = WorkspaceBrush("#E4E8F0"), BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(20, 15, 20, 15) };
+        var surface = new Border { Background = Brushes.White, BorderBrush = WorkspaceBrush("#E4E8F0"), BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(20, 10, 20, 10) };
         var row = new Grid(); surface.Child = row;
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(158) }); row.ColumnDefinitions.Add(new ColumnDefinition());
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(158) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition());
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var group = new ComboBox { ItemsSource = ViewModel.Groups, ItemTemplate = CaptionChoices(), ToolTip = "设备分组", Margin = new Thickness(0, 0, 12, 0), MinHeight = 38 };
         group.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.GroupFilter))); row.Children.Add(group);
-
-        var search = new Grid { Margin = new Thickness(0, 0, 12, 0) };
-        var input = BoundInput(nameof(WorkspaceViewModel.Search)); input.MinHeight = 38; input.Padding = new Thickness(33, 6, 30, 6);
-        input.ToolTip = "搜索设备名称或序列号"; System.Windows.Automation.AutomationProperties.SetName(input, "搜索设备"); search.Children.Add(input);
-        var searchIcon = ShellGlyph("\uE721", 14); searchIcon.Margin = new Thickness(12, 0, 0, 0); searchIcon.HorizontalAlignment = HorizontalAlignment.Left;
-        searchIcon.Foreground = WorkspaceBrush("#8B96AB"); searchIcon.IsHitTestVisible = false; search.Children.Add(searchIcon);
-        var hint = new TextBlock { Text = "搜索设备名称、序列号", Foreground = WorkspaceBrush("#63718A"), Margin = new Thickness(33, 0, 28, 0), VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false, TextTrimming = TextTrimming.CharacterEllipsis };
-        search.Children.Add(hint); input.TextChanged += (_, _) => hint.Visibility = input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        hint.Visibility = input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        Grid.SetColumn(search, 1); row.Children.Add(search);
+        var targetLabel = new TextBlock { Text = "单设备目标", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 10, 0), Foreground = WorkspaceBrush("#63718A") };
+        singleTargetLabel = targetLabel;
+        Grid.SetColumn(targetLabel, 1); row.Children.Add(targetLabel);
+        var target = new ComboBox { Name = "SingleDeviceTarget", ItemsSource = new ListCollectionView(ViewModel.Devices), ItemTemplate = OperationTargetTemplate(), IsSynchronizedWithCurrentItem = false, MinHeight = 38, MaxWidth = 520, HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 0, 10, 0), ToolTip = "节点、截图、命令等单设备操作目标" };
+        singleTargetChoice = target;
+        target.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.CurrentDevice)));
+        System.Windows.Automation.AutomationProperties.SetName(target, "单设备目标"); Grid.SetColumn(target, 2); row.Children.Add(target);
+        var details = new Button { Content = ShellGlyph("\uE8A7"), ToolTip = "设备详情与分组", MinHeight = 38, Margin = new Thickness(0, 0, 5, 0) };
+        details.SetResourceReference(StyleProperty, "IconButton"); details.Click += (_, _) => ShowDeviceDirectory(); Grid.SetColumn(details, 3); row.Children.Add(details);
         var settings = new Button { Content = ShellGlyph("\uE713"), ToolTip = "环境设置", MinHeight = 38 };
         settings.SetResourceReference(StyleProperty, "IconButton"); settings.Click += (_, _) => NavigateTo("设置"); Grid.SetColumn(settings, 4); row.Children.Add(settings);
         var advanced = new ContextMenu();
@@ -136,22 +136,14 @@ public partial class MainWindow
         return surface;
     }
 
-    private FrameworkElement BuildWorkspaceContext()
+    private static DataTemplate OperationTargetTemplate()
     {
-        var surface = new Border { Background = Brushes.White, BorderBrush = WorkspaceBrush("#E4E8F0"), BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(20, 10, 20, 10) };
-        var row = new Grid(); surface.Child = row;
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star) }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star) });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        foreach (var (label, path, index) in new[] { ("当前设备", nameof(WorkspaceViewModel.DeviceContext), 0), ("主控设备", nameof(WorkspaceViewModel.MainContext), 1), ("操作目标", nameof(WorkspaceViewModel.TargetContext), 2) })
-        {
-            var content = new StackPanel { Margin = new Thickness(0, 0, 15, 0) };
-            content.Children.Add(new TextBlock { Text = label, FontSize = 11, Foreground = WorkspaceBrush("#63718A"), Margin = new Thickness(0, 0, 0, 4) });
-            var value = BoundText(path); value.FontSize = 12; value.TextTrimming = TextTrimming.CharacterEllipsis; value.SetBinding(ToolTipProperty, new Binding(path)); content.Children.Add(value);
-            Grid.SetColumn(content, index); row.Children.Add(content);
-        }
-        var details = new Button { Content = ShellGlyph("\uE8A7"), ToolTip = "设备详情与分组", VerticalAlignment = VerticalAlignment.Center };
-        details.SetResourceReference(StyleProperty, "IconButton"); details.Click += (_, _) => ShowDeviceDirectory(); Grid.SetColumn(details, 3); row.Children.Add(details);
-        return surface;
+        var text = new FrameworkElementFactory(typeof(TextBlock));
+        text.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+        var caption = new MultiBinding { StringFormat = "{0} · {1}" };
+        caption.Bindings.Add(new Binding(nameof(DeviceRow.Name))); caption.Bindings.Add(new Binding(nameof(DeviceRow.Serial)));
+        text.SetBinding(TextBlock.TextProperty, caption);
+        return new DataTemplate { VisualTree = text };
     }
 
     private static ControlTemplate WorkspaceContentTemplate()
@@ -165,7 +157,7 @@ public partial class MainWindow
 
     private void AttachWorkspacePages()
     {
-        Grid.SetRow(tabs, 3); workspace.Children.Add(tabs); UpdateNavigation();
+        Grid.SetRow(tabs, 2); workspace.Children.Add(tabs); UpdateNavigation();
     }
 
     internal void NavigateTo(string tag)
@@ -178,10 +170,10 @@ public partial class MainWindow
     private void UpdateNavigation()
     {
         var selected = (tabs.SelectedItem as TabItem)?.Tag?.ToString();
-        var activeTag = selected == "雷电实例" ? "设备墙 / 主控" : selected;
-        foreach (var item in navigation) item.Value.IsChecked = item.Key == activeTag;
-        foreach (var mode in deviceModes) mode.Button.IsChecked = mode.Tag == selected;
-        if (activeTag is not null && navigation.TryGetValue(activeTag, out var active) && active.IsLoaded) active.BringIntoView();
+        var targetVisibility = selected is "节点" or "截图 / 取色" or "Shell" or "文件" or "文本" or "脚本" or "API" or "扩展" ? Visibility.Visible : Visibility.Collapsed;
+        singleTargetLabel.Visibility = singleTargetChoice.Visibility = targetVisibility;
+        foreach (var item in navigation) item.Value.IsChecked = item.Key == selected;
+        if (selected is not null && navigation.TryGetValue(selected, out var active) && active.IsLoaded) active.BringIntoView();
         var label = WorkspacePages.FirstOrDefault(page => page.Tag == selected).Label ?? "设备管理";
         Title = "矩阵设备 · " + label + (ViewModel.Demo ? " · 演示模式" : "");
     }

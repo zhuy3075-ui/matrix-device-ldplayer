@@ -81,7 +81,7 @@ public partial class MainWindow
         monitorTimer.Tick += (_, _) => MonitorTick();
         ViewModel.PropertyChanged += (_, args) =>
         {
-            if (args.PropertyName is nameof(WorkspaceViewModel.Search) or nameof(WorkspaceViewModel.GroupFilter) or nameof(WorkspaceViewModel.Counts)) { monitorEpoch++; monitorLastReconcile = default; }
+            if (args.PropertyName is nameof(WorkspaceViewModel.GroupFilter) or nameof(WorkspaceViewModel.Counts)) { monitorEpoch++; monitorLastReconcile = default; }
         };
         return page;
     }

@@ -24,7 +24,7 @@ public partial class MainWindow
         var page = Page();
         var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE72C", "刷新截图和节点", ViewModel.DumpCommand)); toolbar.Children.Add(Button("\uE74E", "导出 JSON", async () => { var dialog = new SaveFileDialog { Filter = "JSON|*.json", FileName = "ui-tree.json" }; if (dialog.ShowDialog(this) == true) await ViewModel.ExportNodesAsync(dialog.FileName); }));
         toolbar.Children.Add(Button("\uE8A3", "展开", () => SetExpanded(true))); toolbar.Children.Add(Button("\uE8A4", "折叠", () => SetExpanded(false)));
-        var search = BoundInput(nameof(WorkspaceViewModel.NodeSearch)); search.Width = 170; search.ToolTip = "按文本、资源 ID 或类名过滤"; toolbar.Children.Add(search); DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
+        DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
         var grid = new Grid { Margin = new Thickness(0, 10, 0, 0) }; grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(300) }); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(270) });
         nodeCanvas = new Canvas { Background = new SolidColorBrush(Color.FromRgb(232, 237, 240)) };
         var viewbox = new Viewbox { Child = nodeCanvas, Stretch = Stretch.Uniform, VerticalAlignment = VerticalAlignment.Center }; grid.Children.Add(viewbox);
@@ -39,13 +39,11 @@ public partial class MainWindow
         nodeTree.Items.Clear(); nodeCanvas.Children.Clear(); nodeTreeItems.Clear(); nodeRectangles.Clear();
         if (ViewModel.DebugImage is { } screenshot) { nodeCanvas.Width = screenshot.PixelWidth; nodeCanvas.Height = screenshot.PixelHeight; nodeCanvas.Children.Add(new Image { Source = screenshot, Width = screenshot.PixelWidth, Height = screenshot.PixelHeight }); }
         else { nodeCanvas.Width = 1; nodeCanvas.Height = 1; }
-        bool Matches(NodeRow row) => string.IsNullOrWhiteSpace(ViewModel.NodeSearch) || new[] { row.Source.Text, row.Source.ResourceId, row.Source.ClassName, row.Source.ContentDesc }.Any(value => value?.Contains(ViewModel.NodeSearch, StringComparison.OrdinalIgnoreCase) == true);
-        TreeViewItem? Build(NodeRow row)
+        TreeViewItem Build(NodeRow row)
         {
-            var children = row.Children.Select(Build).Where(item => item is not null).Cast<TreeViewItem>().ToList();
-            if (!Matches(row) && children.Count == 0) return null;
+            var children = row.Children.Select(Build).ToList();
             var item = new TreeViewItem { Header = $"{row.Label}   {row.Id}", Tag = row, IsExpanded = true, ToolTip = row.Bounds }; nodeTreeItems[row] = item; foreach (var child in children) item.Items.Add(child);
-            if (Matches(row) && row.Source.Bounds.Width > 0 && row.Source.Bounds.Height > 0)
+            if (row.Source.Bounds.Width > 0 && row.Source.Bounds.Height > 0)
             {
                 var bounds = row.Source.Bounds;
                 var rectangle = new Rectangle { Width = bounds.Width, Height = bounds.Height, Stroke = new SolidColorBrush(Color.FromArgb(170, 10, 129, 142)), StrokeThickness = 1.5, Fill = new SolidColorBrush(Color.FromArgb(1, 10, 129, 142)), Tag = row, ToolTip = $"{row.Label}\n{row.Id}\n{row.Bounds}" };
@@ -55,7 +53,7 @@ public partial class MainWindow
             }
             return item;
         }
-        foreach (var node in ViewModel.Nodes) if (Build(node) is { } item) nodeTree.Items.Add(item);
+        foreach (var node in ViewModel.Nodes) nodeTree.Items.Add(Build(node));
         HighlightNode();
     }
 

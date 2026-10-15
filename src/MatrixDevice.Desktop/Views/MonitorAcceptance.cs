@@ -87,7 +87,6 @@ public partial class MainWindow
                     if (response.Contains("Error", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("打开系统设置失败：" + response);
                 }
             });
-            ViewModel.Search = "MatrixAcceptance";
             NavigateTo("实时监控");
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
             await Record("two-cards-no-selection", async () =>
@@ -156,7 +155,7 @@ public partial class MainWindow
             });
             await Record("all-directory-two-authorized-videos-45s", async () =>
             {
-                ViewModel.Search = ""; monitorScopeChoice.SelectedIndex = 1;
+                monitorScopeChoice.SelectedIndex = 1;
                 await ReconcileNowAsync(); await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
                 var watch = Stopwatch.StartNew();
                 var round = nextMotionRound;

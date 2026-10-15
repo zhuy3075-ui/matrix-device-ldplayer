@@ -24,14 +24,12 @@ public partial class MainWindow
         var panel = new DockPanel { Margin = new Thickness(12, 0, 8, 0) };
         var filters = new StackPanel(); DockPanel.SetDock(filters, Dock.Top);
         filters.Children.Add(Label("设备目录"));
-        var search = BoundInput(nameof(WorkspaceViewModel.Search)); search.ToolTip = "按名称或 serial 搜索"; search.Margin = new Thickness(0, 0, 0, 7); filters.Children.Add(search);
         var group = new ComboBox { ItemsSource = ViewModel.Groups, ItemTemplate = CaptionChoices() }; group.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.GroupFilter))); group.Margin = new Thickness(0, 0, 0, 7); filters.Children.Add(group);
         var state = new ComboBox { ItemsSource = new[] { "全部状态", "Ready", "Offline", "Unauthorized", "Discovered", "Error" }, ItemTemplate = CaptionChoices() }; state.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.StatusFilter))); state.Margin = new Thickness(0, 0, 0, 7); filters.Children.Add(state);
         var selection = Toolbar(); selection.Children.Add(Button("\uE73A", "全选筛选", () => ViewModel.SelectFiltered(true))); selection.Children.Add(Button("\uE711", "清空", ClearWallSelection)); filters.Children.Add(selection);
         panel.Children.Add(filters);
 
         var edit = new StackPanel { Margin = new Thickness(0, 10, 0, 8) }; DockPanel.SetDock(edit, Dock.Bottom);
-        edit.Children.Add(Label("当前设备")); edit.Children.Add(BoundText(nameof(WorkspaceViewModel.DeviceContext), wrap: true));
         foreach (var (label, property) in new[] { ("画面", nameof(DeviceRow.ScreenState)), ("节点", nameof(DeviceRow.AutomationState)), ("脚本", nameof(DeviceRow.ScriptState)), ("API", nameof(DeviceRow.ApiAddress)) })
         {
             var status = BoundText("CurrentDevice." + property, true);

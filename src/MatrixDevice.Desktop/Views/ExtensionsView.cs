@@ -30,7 +30,7 @@ public partial class MainWindow
         }));
         proxyPanel.Children.Add(proxyActions); proxyPanel.Children.Add(output);
         var proxyBoundary = new TextBlock { Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 10) }; LocalizationService.Bind(proxyBoundary, TextBlock.TextProperty, "代理运行器与 ROM 路由规则：未恢复，连接能力不可用"); proxyPanel.Children.Add(proxyBoundary);
-        proxyPanel.Children.Add(Button("\uE72E", "核验当前设备 root", async () => await ViewModel.ExecuteAsync("核验 root", async () =>
+        proxyPanel.Children.Add(Button("\uE72E", "核验 root", async () => await ViewModel.ExecuteAsync("核验 root", async () =>
         {
             var row = ViewModel.CurrentDevice ?? throw new InvalidOperationException("未选择设备");
             if (ViewModel.Demo) throw new InvalidOperationException("演示结果不能作为真实 root 证据");

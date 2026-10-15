@@ -94,7 +94,6 @@ public partial class MainWindow : Window
         tabs = new TabControl { Background = Brushes.White, BorderThickness = new Thickness(0), Template = WorkspaceContentTemplate() };
         InitializeUnifiedDevices();
         AddTab("设备墙 / 主控", BuildWallPage());
-        AddTab("雷电实例", BuildLdPlayerPage());
         AddTab("节点", BuildNodesPage());
         AddTab("截图 / 取色", BuildScreenshotPage());
         AddTab("Shell", BuildShellPage());
@@ -208,7 +207,7 @@ public partial class MainWindow : Window
 
     private async Task CaptureTickAsync()
     {
-        if (!autoCapture || captureInProgress || closing || ldBusy || ViewModel.HasActiveOperations || directoryOperation is { IsCompleted: false } || tabs.SelectedIndex != 0 || !IsActive) return;
+        if (!autoCapture || captureInProgress || closing || ldBusy || ViewModel.HasActiveOperations || directoryOperation is { IsCompleted: false } || !Equals((tabs.SelectedItem as TabItem)?.Tag, "设备墙 / 主控") || !IsActive) return;
         var rows = ViewModel.DeviceView.Cast<DeviceRow>().Where(row => row.Info.Online).ToArray();
         if (rows.Length == 0) return;
         var targets = rows.Skip(captureCursor % rows.Length).Concat(rows.Take(captureCursor % rows.Length)).Take(4).Select(row => row.Serial).ToArray();
@@ -222,7 +221,7 @@ public partial class MainWindow : Window
 
     private async Task EnsureDebugLoadedAsync()
     {
-        if (ViewModel.Demo || closing || ViewModel.HasActiveOperations || tabs?.SelectedIndex != 2 || ViewModel.CurrentDevice?.Info.Online != true || ViewModel.Nodes.Count != 0) return;
+        if (ViewModel.Demo || closing || ViewModel.HasActiveOperations || !Equals((tabs?.SelectedItem as TabItem)?.Tag, "节点") || ViewModel.CurrentDevice?.Info.Online != true || ViewModel.Nodes.Count != 0) return;
         if (debugAutoLoading || ViewModel.Busy) { debugAutoPending = true; return; }
         var requested = ViewModel.CurrentDevice;
         debugAutoPending = false;
@@ -290,6 +289,7 @@ public partial class MainWindow : Window
         }
         await ViewModel.RefreshWallAsync();
         if (ViewModel.CurrentDevice is { } row) await ViewModel.SetMainAsync(row);
+        await VerifyShellSimplificationAsync();
         await ViewModel.LoadNodesAsync();
         ViewModel.SelectedNode = ViewModel.FlattenNodes().FirstOrDefault(node => node.Source.Clickable);
         await ViewModel.CaptureAsync();
@@ -306,6 +306,7 @@ public partial class MainWindow : Window
         await ViewModel.LoadAppsAsync();
         await VerifyOperationGatesAsync();
         await VerifyOneClickProjectionAsync();
+        await VerifyApplicationManagementAsync(screenshotPath);
         await VerifyLaunchMemoryUiAsync();
         await LdWindowVisibilitySmoke.VerifyAsync(System.IO.Path.Combine(ViewModel.DataDirectory, "window-visibility-smoke"));
         ViewModel.SamplePixel(10, 10);
@@ -338,8 +339,7 @@ public partial class MainWindow : Window
         LocalizationService.Current.SetLanguage("zh-CN");
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         var settingsTab = tabs.Items.Cast<TabItem>().Single(tab => Equals(tab.Tag, "设置"));
-        var ldTab = tabs.Items.Cast<TabItem>().Single(tab => Equals(tab.Tag, "雷电实例"));
-        if ((tabs.Items[0] as TabItem)?.Header?.ToString() != "设备墙 / 主控" || settingsTab.Header?.ToString() != "设置" || ldTab.Header?.ToString() != "雷电实例") throw new InvalidOperationException("简体中文导航未生效");
+        if ((tabs.Items[0] as TabItem)?.Header?.ToString() != "设备墙 / 主控" || settingsTab.Header?.ToString() != "设置") throw new InvalidOperationException("简体中文导航未生效");
         tabs.SelectedItem = settingsTab;
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         var labels = VisualDescendants<TextBlock>(Shell).Select(text => text.Text).ToHashSet(StringComparer.Ordinal);
@@ -352,16 +352,16 @@ public partial class MainWindow : Window
         await RefreshLdPlayerUiAsync();
         if (ldRows.Count != 2) throw new InvalidOperationException("演示雷电实例目录不完整");
         if (tabs.Items.Count != WorkspacePages.Length) throw new InvalidOperationException("桌面页面数量不完整");
-        if (navigation.Count != WorkspacePages.Length - 1 || navigation.ContainsKey("雷电实例") || deviceModes.Count != 4) throw new InvalidOperationException("设备管理统一入口不完整");
+        if (navigation.Count != WorkspacePages.Length || navigation.ContainsKey("雷电实例") || deviceSummaries.Count != 1 || tabs.Items.Cast<TabItem>().Any(item => Equals(item.Tag, "雷电实例"))) throw new InvalidOperationException("设备管理统一入口不完整");
         await VerifyMonitorProjectionAsync(screenshotPath);
         NavigateTo("设备墙 / 主控");
         var removedLabels = new[] { "刷新设备", "扫描设备", "刷新截图" };
         if (VisualDescendants<TextBlock>(Shell).Any(text => removedLabels.Contains(text.Text))) throw new InvalidOperationException("旧重复刷新入口仍可见");
         ldPackage.Text = "com.example.demo"; ldText.Text = "中文演示";
-        ldGrid.SelectedItem = ldRows.Single(row => !row.Instance.AndroidStarted);
+        SelectUnifiedInstance(unifiedDevices.Single(row => row.Index == ldRows.Single(item => !item.Instance.AndroidStarted).Index));
         var runningOnly = new[] { "启动应用", "停止应用", "安装应用", "发送文字", "主页", "返回", "增大音量", "减小音量" };
         if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的操作状态不正确");
-        ldGrid.SelectedItem = ldRows.Single(row => row.Instance.AndroidStarted);
+        SelectUnifiedInstance(unifiedDevices.Single(row => row.Index == ldRows.Single(item => item.Instance.AndroidStarted).Index));
         if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的连接入口或操作状态不正确");
         ldBusy = true; ldFeedback.Text = "正在执行所选实例命令…"; RefreshLdButtons();
         if (ldCommands.Any(command => command.CanExecute(null)) || !ldFeedback.Text.Contains("正在执行", StringComparison.Ordinal)) throw new InvalidOperationException("雷电忙状态未锁定操作");
@@ -377,7 +377,8 @@ public partial class MainWindow : Window
         finally { ViewModel.Confirm = originalConfirm; }
         if (confirmationCount != 2 || ldSelection.Generation != beforeConfirmation || !ldSelection.Instance.AndroidStarted || ldFeedback.Text != "操作已取消，未发送命令。") throw new InvalidOperationException("雷电关闭或重启的取消确认未生效");
         UpdateLdPlayerRows();
-        if (!ldContext.Text.Contains("当前实例", StringComparison.Ordinal)) throw new InvalidOperationException("雷电实例选择上下文缺失");
+        if (!ldContext.Text.Contains("实例操作", StringComparison.Ordinal)) throw new InvalidOperationException("实例操作目标缺失");
+        await VerifyUnifiedDeviceActionsAsync(screenshotPath);
         var currentBeforeNavigation = ViewModel.CurrentDevice;
         var mainBeforeNavigation = ViewModel.MainDevice;
         ViewModel.ShellInput = "echo navigation-state"; ViewModel.TextInput = "跨页面保留输入";
@@ -386,10 +387,8 @@ public partial class MainWindow : Window
         cropRectangle.Width = cropRectangle.Height = 40; Canvas.SetLeft(cropRectangle, 10); Canvas.SetTop(cropRectangle, 10);
         foreach (var route in WorkspacePages)
         {
-            if (route.Tag == "雷电实例") deviceModes.First(mode => mode.Tag == route.Tag).Button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-            else navigation[route.Tag].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-            var sidebarTag = route.Tag == "雷电实例" ? "设备墙 / 主控" : route.Tag;
-            if (!Equals((tabs.SelectedItem as TabItem)?.Tag, route.Tag) || navigation.Count(item => item.Value.IsChecked == true) != 1 || navigation[sidebarTag].IsChecked != true)
+            navigation[route.Tag].RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            if (!Equals((tabs.SelectedItem as TabItem)?.Tag, route.Tag) || navigation.Count(item => item.Value.IsChecked == true) != 1 || navigation[route.Tag].IsChecked != true)
                 throw new InvalidOperationException("侧栏导航或选中态失效：" + route.Label);
         }
         if (!ReferenceEquals(currentBeforeNavigation, ViewModel.CurrentDevice) || !ReferenceEquals(mainBeforeNavigation, ViewModel.MainDevice) ||
@@ -402,32 +401,38 @@ public partial class MainWindow : Window
         SetSidebarCollapsed(false);
         foreach (var rowToSelect in ViewModel.Devices) rowToSelect.IsSelected = true;
         ViewModel.UpdateSelection();
+        var filteredDevice = ViewModel.Devices[1];
+        var originalFilteredInfo = filteredDevice.Info;
+        const string testGroup = "离线筛选测试";
+        const string emptyGroup = "离线空目录测试";
+        ViewModel.Groups.Add(testGroup); ViewModel.Groups.Add(emptyGroup);
+        filteredDevice.Info = originalFilteredInfo with { GroupId = testGroup };
         foreach (var mode in new[] { "cards", "screens", "list" })
         {
-            ViewModel.Search = "";
+            ViewModel.GroupFilter = "全部分组";
             SetWallViewMode(mode);
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
-            foreach (var search in new[] { ViewModel.Devices[1].Serial, "不存在的演示设备", "" })
+            foreach (var group in new[] { testGroup, emptyGroup, "全部分组" })
             {
-                ViewModel.Search = search;
+                ViewModel.GroupFilter = group;
                 await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
                 if (!ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation) || ViewModel.Targets().Count != 2)
-                    throw new InvalidOperationException($"激活视图筛选改变了上下文：视图={mode}，筛选={search}，当前={ViewModel.CurrentDevice?.Serial}，主控={ViewModel.MainDevice?.Serial}，目标={ViewModel.Targets().Count}");
+                    throw new InvalidOperationException($"激活视图筛选改变了上下文：视图={mode}，分组={group}，目标={ViewModel.Targets().Count}");
             }
         }
         SetWallViewMode("cards");
-        ViewModel.Search = ViewModel.Devices[1].Serial;
+        ViewModel.GroupFilter = testGroup;
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (ViewModel.DeviceView.Cast<DeviceRow>().Count() != 1 || ViewModel.Targets().Count != 2 || !ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation))
             throw new InvalidOperationException($"筛选改变了上下文：可见={ViewModel.DeviceView.Cast<DeviceRow>().Count()}，目标={ViewModel.Targets().Count}，当前={ViewModel.CurrentDevice?.Serial ?? "未选择"}，主控={ViewModel.MainDevice?.Serial ?? "未指定"}");
         ClearWallSelection();
         if (ViewModel.Devices.Any(device => device.IsSelected)) throw new InvalidOperationException("清空没有取消隐藏设备的选择");
-        ViewModel.Search = "不存在的演示设备";
+        ViewModel.GroupFilter = emptyGroup;
         SetWallViewMode("cards");
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (ViewModel.DeviceView.Cast<DeviceRow>().Any()) throw new InvalidOperationException("空目录筛选失效");
         if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-empty.png"));
-        ViewModel.Search = "";
+        ViewModel.GroupFilter = "全部分组";
         if (ViewModel.DebugImage is not { PixelWidth: > 0 }) throw new InvalidOperationException("视图筛选丢失了当前截图");
         foreach (var mode in new[] { "cards", "screens", "list" })
         {
@@ -453,10 +458,11 @@ public partial class MainWindow : Window
         if (ViewModel.GroupFilter != "未分组") throw new InvalidOperationException("分组下拉绑定失效");
         groupChoice.IsDropDownOpen = false; groupChoice.SelectedItem = "全部分组";
         ShowDeviceDirectory();
-        ViewModel.Search = ViewModel.Devices[1].Serial;
+        ViewModel.GroupFilter = testGroup;
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (!ReferenceEquals(ViewModel.CurrentDevice, currentBeforeNavigation) || !ReferenceEquals(ViewModel.MainDevice, mainBeforeNavigation)) throw new InvalidOperationException("设备目录筛选改变了当前设备或主控");
-        ViewModel.Search = ""; directoryWindow!.Hide();
+        ViewModel.GroupFilter = "全部分组"; directoryWindow!.Hide();
+        filteredDevice.Info = originalFilteredInfo; ViewModel.Groups.Remove(testGroup); ViewModel.Groups.Remove(emptyGroup);
         ShowScanner();
         await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
         if (screenshotPath is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshotPath)!, System.IO.Path.GetFileNameWithoutExtension(screenshotPath) + "-scanner.png"), (FrameworkElement)scannerWindow!.Content);
@@ -526,7 +532,14 @@ public partial class MainWindow : Window
         if (screenshotPath is not null) await File.WriteAllTextAsync(System.IO.Path.ChangeExtension(screenshotPath, ".json"), report);
     }
 
-    private void SaveRender(string path) => SaveRender(path, Shell);
+    private void SaveRender(string path)
+    {
+        var group = VisualDescendants<ComboBox>(Shell).Single(input => input.ToolTip as string == "设备分组");
+        var position = group.TranslatePoint(new Point(), Shell);
+        if (position.Y < 0 || position.Y + group.ActualHeight > Shell.ActualHeight)
+            throw new InvalidOperationException("截图前全局分组工具栏超出客户区。");
+        SaveRender(path, Shell);
+    }
     private static void SaveRender(string path, FrameworkElement surface)
     {
         var bitmap = new RenderTargetBitmap(Math.Max(1, (int)Math.Ceiling(surface.ActualWidth)), Math.Max(1, (int)Math.Ceiling(surface.ActualHeight)), 96, 96, PixelFormats.Pbgra32);

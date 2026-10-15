@@ -21,6 +21,7 @@ public partial class MainWindow
     private FrameworkElement wallMainPanel = null!;
     private FrameworkElement wallDensity = null!;
     private ToggleButton wallMainToggle = null!;
+    private ScrollViewer wallActionsViewport = null!;
 
     internal string WallViewMode => wallViewMode;
 
@@ -28,8 +29,10 @@ public partial class MainWindow
     {
         var page = new DockPanel { LastChildFill = true, Background = Brushes.White };
         var top = new StackPanel { Margin = new Thickness(22, 18, 22, 0) };
-        DockPanel.SetDock(top, Dock.Top); page.Children.Add(top);
-        top.Children.Add(BuildDeviceModes());
+        wallActionsViewport = new ScrollViewer { Content = top, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        page.SizeChanged += (_, _) => wallActionsViewport.MaxHeight = Math.Max(120, page.ActualHeight - 176);
+        DockPanel.SetDock(wallActionsViewport, Dock.Top); page.Children.Add(wallActionsViewport);
+        top.Children.Add(BuildDeviceSummary());
         var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 18) };
         var modes = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var modeFrame = new Border { Child = modes, Background = new SolidColorBrush(Color.FromRgb(245, 247, 251)), CornerRadius = new CornerRadius(6), Padding = new Thickness(3) }; DockPanel.SetDock(modeFrame, Dock.Right); heading.Children.Add(modeFrame);
@@ -39,9 +42,10 @@ public partial class MainWindow
             choice.Click += (_, _) => SetWallViewMode(mode);
             wallViewChoices.Add(mode, choice); modes.Children.Add(choice);
         }
-        heading.Children.Add(new TextBlock { Text = "设备群控", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, VerticalAlignment = VerticalAlignment.Center });
+        heading.Children.Add(new TextBlock { Text = "设备管理", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = WallInk, VerticalAlignment = VerticalAlignment.Center });
         top.Children.Add(heading);
         top.Children.Add(BuildOneClickLaunchTools());
+        top.Children.Add(BuildInstanceActions());
         var tools = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
         var select = WallButton("\uE73A", "全选", new ActionCommand(() => { foreach (var row in unifiedDeviceView.Cast<UnifiedDeviceRow>().ToArray()) row.IsSelected = true; RefreshLaunchCommands(); })); select.ToolTip = "选择当前筛选中的全部设备"; tools.Children.Add(select);
         tools.Children.Add(WallButton("\uE711", "清空", new ActionCommand(ClearWallSelection)));
@@ -105,6 +109,10 @@ public partial class MainWindow
         grid.Columns.Add(new DataGridTemplateColumn { Header = "操作", Width = 214, CellTemplate = new DataTemplate { VisualTree = actions } });
         TextColumn(grid, "型号", nameof(UnifiedDeviceRow.Model), 145); TextColumn(grid, "品牌", nameof(UnifiedDeviceRow.Brand), 110); TextColumn(grid, "安卓", nameof(UnifiedDeviceRow.Android), 80);
         TextColumn(grid, "设备序列号", nameof(UnifiedDeviceRow.Serial), 185); TextColumn(grid, "分辨率", nameof(UnifiedDeviceRow.Resolution), 120); TextColumn(grid, "分组", nameof(UnifiedDeviceRow.Group), 110);
+        TextColumn(grid, "安卓状态", nameof(UnifiedDeviceRow.AndroidState), 100);
+        TextColumn(grid, "播放器进程", nameof(UnifiedDeviceRow.ProcessId), 105); TextColumn(grid, "虚拟机进程", nameof(UnifiedDeviceRow.VBoxProcessId), 105);
+        TextColumn(grid, "密度", nameof(UnifiedDeviceRow.Dpi), 75); TextColumn(grid, "会话代次", nameof(UnifiedDeviceRow.Generation), 175);
+        TextColumn(grid, "设备绑定", nameof(UnifiedDeviceRow.Binding), 240);
         var page = new Grid(); page.Children.Add(grid);
         var empty = new TextBlock { Text = "当前筛选没有设备", Foreground = WallMuted, FontSize = 14, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         empty.SetBinding(VisibilityProperty, new Binding(nameof(ItemsControl.HasItems)) { Source = grid, Converter = new WallEmptyVisibilityConverter() }); page.Children.Add(empty); return page;
@@ -118,7 +126,7 @@ public partial class MainWindow
         var heading = BoundText(nameof(WorkspaceViewModel.MainContext), true); heading.FontWeight = FontWeights.SemiBold; heading.Foreground = WallInk; heading.Margin = new Thickness(0, 0, 0, 12); DockPanel.SetDock(heading, Dock.Top); main.Children.Add(heading);
         var bottom = new StackPanel { Margin = new Thickness(0, 12, 0, 0) }; DockPanel.SetDock(bottom, Dock.Bottom); main.Children.Add(bottom);
         var keys = Toolbar(); keys.Children.Add(Button("\uE72B", "返回", () => ViewModel.KeyAsync(4), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE80F", "主页", () => ViewModel.KeyAsync(3), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE7C4", "任务", () => ViewModel.KeyAsync(187), canExecute: ViewModel.CanControlMainInput)); bottom.Children.Add(keys);
-        var cast = new Expander { Header = "当前设备投屏", Margin = new Thickness(0, 8, 0, 0) };
+        var cast = new Expander { Header = "设备投屏", Margin = new Thickness(0, 8, 0, 0) };
         var castActions = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
         castActions.Children.Add(Button("\uE714", "启动 scrcpy 投屏", OpenScreenAsync, canExecute: CanLaunchScrcpy));
         castActions.Children.Add(Button("\uE8F2", "嵌入自有投屏窗口", EmbedScreenAsync, canExecute: CanEmbedScrcpy));

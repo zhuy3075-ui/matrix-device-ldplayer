@@ -56,7 +56,7 @@ public partial class MainWindow
         var summary = BoundText(nameof(WorkspaceViewModel.ApiSummary), true); summary.Margin = new Thickness(0, 10, 0, 10); DockPanel.SetDock(summary, Dock.Top); page.Children.Add(summary);
         var requestPanel = new DockPanel { Margin = new Thickness(0, 10, 0, 0), Height = 260 }; DockPanel.SetDock(requestPanel, Dock.Bottom);
         var requestToolbar = Toolbar();
-        apiProtocol = new ComboBox { ItemsSource = new[] { "普通 API", "Automator API", "当前设备 API" }, ItemTemplate = CaptionChoices(), SelectedIndex = 0, Width = 165 }; requestToolbar.Children.Add(apiProtocol);
+        apiProtocol = new ComboBox { ItemsSource = new[] { "普通 API", "Automator API", "设备接口" }, ItemTemplate = CaptionChoices(), SelectedIndex = 0, Width = 165 }; requestToolbar.Children.Add(apiProtocol);
         apiMethod = new ComboBox { ItemsSource = new[] { "GET", "POST" }, SelectedIndex = 0, Width = 85 }; requestToolbar.Children.Add(apiMethod);
         apiRoute = new TextBox { Text = "/health", Width = 190 }; requestToolbar.Children.Add(apiRoute);
         apiResponse = new TextBox { IsReadOnly = true, AcceptsReturn = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontFamily = new FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap };
