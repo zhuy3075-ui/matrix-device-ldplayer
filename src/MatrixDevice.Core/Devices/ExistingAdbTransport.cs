@@ -200,14 +200,7 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
                 using var cancellation = copying.Token.Register(video.Dispose);
                 using var stream = video.Socket.GetStream();
                 copy = CopyH264Async(stream, output, copying.Token);
-                var completed = await Task.WhenAny(copy, server).ConfigureAwait(false);
-                if (completed == server)
-                {
-                    var code = await server.ConfigureAwait(false);
-                    throw new DeviceException($"Video server exited: serial={serial}, code={code}, {log.Snapshot}", 503, 2000);
-                }
-                await copy.ConfigureAwait(false);
-                throw new DeviceException($"Video connection closed: serial={serial}, {log.Snapshot}", 503, 2000);
+                await AwaitVideoCompletionAsync(copy, server, serial, () => log.Snapshot, ct).ConfigureAwait(false);
             }
             finally
             {
@@ -252,6 +245,20 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
         {
             throw new DeviceException($"Existing ADB video stream failed: serial={serial}: {ex.Message}", 503, 2000);
         }
+    }
+
+    internal static async Task AwaitVideoCompletionAsync(Task copy, Task<int> server, string serial, Func<string> readLog, CancellationToken ct)
+    {
+        var completed = await Task.WhenAny(copy, server).ConfigureAwait(false);
+        if (completed == server)
+        {
+            var code = await server.ConfigureAwait(false);
+            if (code == 0) ct.ThrowIfCancellationRequested();
+            throw new DeviceException($"Video server exited: serial={serial}, code={code}, {readLog()}", 503, 2000);
+        }
+        await copy.ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        throw new DeviceException($"Video connection closed: serial={serial}, {readLog()}", 503, 2000);
     }
 
     private async Task StopOwnedVideoServerAsync(string serial, uint transport, string scid, string nonce, VideoServerLog log, Func<CancellationToken, Task> verifyIdentity)

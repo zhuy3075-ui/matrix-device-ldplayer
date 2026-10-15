@@ -18,6 +18,8 @@ internal static class ScreenVideoTests
         test("video decoder publishes complete timestamped frames and rejects truncation without synthetic FPS", FramesAsync);
         test("video decoder process arguments force H264 BGRA passthrough with no shell", DecoderArgumentsAsync);
         test("video decoder preserves cleanup failures through wrapped cancellation errors", CleanupClassificationAsync);
+        test("video local cancellation returns cancellation when normal server exit wins before copy", CompletionCancellationAsync);
+        test("video completion keeps identity cleanup and abnormal exit failures during local cancellation", CompletionFailuresAsync);
         if (FindServer() is null)
         {
             Console.WriteLine("SKIP video component integration fixtures: set MATRIX_TEST_SCRCPY_SERVER to official scrcpy-server 3.3.4.");
@@ -77,6 +79,37 @@ internal static class ScreenVideoTests
         foreach (var size in new[] { (0, 32), (31, 32), (32, 33), (1922, 32), (1920, 1920) })
             await Expect(400, () => backend.StreamScreenVideoAsync("allowed", size.Item1, size.Item2, Stream.Null));
         Assert(server.Requests.IsEmpty, "Invalid video admission reached ADB.");
+    }
+
+    private static async Task CompletionCancellationAsync()
+    {
+        using var stop = new CancellationTokenSource();
+        stop.Cancel();
+        var pendingCopy = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await Canceled(ExistingAdbTransport.AwaitVideoCompletionAsync(pendingCopy.Task, Task.FromResult(0), "allowed", () => "normal exit", stop.Token));
+        Assert(!pendingCopy.Task.IsCompleted, "The regression must force server exit to win before the copy completes.");
+        var pendingServer = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await Canceled(ExistingAdbTransport.AwaitVideoCompletionAsync(Task.CompletedTask, pendingServer.Task, "allowed", () => "EOF", stop.Token));
+    }
+
+    private static async Task CompletionFailuresAsync()
+    {
+        using var stop = new CancellationTokenSource(); stop.Cancel();
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await Expect(503, () => ExistingAdbTransport.AwaitVideoCompletionAsync(pending.Task, Task.FromResult(0), "allowed", () => "unexpected exit", CancellationToken.None));
+        await Expect(503, () => ExistingAdbTransport.AwaitVideoCompletionAsync(pending.Task, Task.FromResult(7), "allowed", () => "encoder failed", stop.Token));
+        var identity = new DeviceException("Bound device identity changed.", 409, 1003);
+        var cleanup = new DeviceException("Owned video process exit unconfirmed.", 409, 1003); cleanup.Data["VideoCleanupUnconfirmed"] = true;
+        foreach (var failure in new Exception[] { identity, cleanup, new IOException("Wrapped cleanup failure.", cleanup) })
+        {
+            foreach (var serverWins in new[] { true, false })
+            {
+                var copy = serverWins ? pending.Task : Task.FromException(failure);
+                var server = serverWins ? Task.FromException<int>(failure) : new TaskCompletionSource<int>().Task;
+                try { await ExistingAdbTransport.AwaitVideoCompletionAsync(copy, server, "allowed", () => "fault", stop.Token); throw new Exception("Video completion swallowed a fault."); }
+                catch (Exception actual) when (ReferenceEquals(actual, failure)) { }
+            }
+        }
     }
 
     private static async Task StreamingAsync()
