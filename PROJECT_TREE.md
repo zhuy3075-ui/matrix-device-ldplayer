@@ -7,6 +7,8 @@ MatrixDevice.Reconstructed/
 |-- docs/
 |   |-- ASSUMPTIONS.md
 |   |-- codex/
+|   |   |-- device-action-dedup/
+|   |   |   +-- REPORT.md
 |   |   |-- launch-memory-policy/
 |   |   |   +-- REPORT.md
 |   |   |-- launch-resource-confirmation/

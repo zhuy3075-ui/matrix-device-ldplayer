@@ -306,6 +306,7 @@ public partial class MainWindow : Window
         await ViewModel.LoadAppsAsync();
         await VerifyOperationGatesAsync();
         await VerifyOneClickProjectionAsync();
+        await VerifyCanonicalDeviceActionsAsync(screenshotPath);
         await VerifyApplicationManagementAsync(screenshotPath);
         await VerifyLaunchMemoryUiAsync();
         await LdWindowVisibilitySmoke.VerifyAsync(System.IO.Path.Combine(ViewModel.DataDirectory, "window-visibility-smoke"));
@@ -357,12 +358,11 @@ public partial class MainWindow : Window
         NavigateTo("设备墙 / 主控");
         var removedLabels = new[] { "刷新设备", "扫描设备", "刷新截图" };
         if (VisualDescendants<TextBlock>(Shell).Any(text => removedLabels.Contains(text.Text))) throw new InvalidOperationException("旧重复刷新入口仍可见");
-        ldPackage.Text = "com.example.demo"; ldText.Text = "中文演示";
         SelectUnifiedInstance(unifiedDevices.Single(row => row.Index == ldRows.Single(item => !item.Instance.AndroidStarted).Index));
-        var runningOnly = new[] { "启动应用", "停止应用", "安装应用", "发送文字", "主页", "返回", "增大音量", "减小音量" };
-        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的操作状态不正确");
+        var runningOnly = new[] { "关闭实例", "重启实例" };
+        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || !ldCommandsByLabel["资源配置"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的生命周期操作状态不正确");
         SelectUnifiedInstance(unifiedDevices.Single(row => row.Index == ldRows.Single(item => item.Instance.AndroidStarted).Index));
-        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的连接入口或操作状态不正确");
+        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || ldCommandsByLabel["资源配置"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的连接入口或生命周期操作状态不正确");
         ldBusy = true; ldFeedback.Text = "正在执行所选实例命令…"; RefreshLdButtons();
         if (ldCommands.Any(command => command.CanExecute(null)) || !ldFeedback.Text.Contains("正在执行", StringComparison.Ordinal)) throw new InvalidOperationException("雷电忙状态未锁定操作");
         ldBusy = false; RefreshLdButtons();
@@ -377,7 +377,8 @@ public partial class MainWindow : Window
         finally { ViewModel.Confirm = originalConfirm; }
         if (confirmationCount != 2 || ldSelection.Generation != beforeConfirmation || !ldSelection.Instance.AndroidStarted || ldFeedback.Text != "操作已取消，未发送命令。") throw new InvalidOperationException("雷电关闭或重启的取消确认未生效");
         UpdateLdPlayerRows();
-        if (!ldContext.Text.Contains("实例操作", StringComparison.Ordinal)) throw new InvalidOperationException("实例操作目标缺失");
+        if (instanceActionChoice.SelectedItem is not UnifiedDeviceRow selectedInstance || selectedInstance.Index != ldSelection.Index || selectedInstance.Instance?.Generation != ldSelection.Generation)
+            throw new InvalidOperationException("实例操作下拉与真实命令目标不一致");
         await VerifyUnifiedDeviceActionsAsync(screenshotPath);
         var currentBeforeNavigation = ViewModel.CurrentDevice;
         var mainBeforeNavigation = ViewModel.MainDevice;

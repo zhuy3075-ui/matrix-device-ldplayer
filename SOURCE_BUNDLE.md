@@ -4982,6 +4982,7 @@ public partial class MainWindow : Window
         await ViewModel.LoadAppsAsync();
         await VerifyOperationGatesAsync();
         await VerifyOneClickProjectionAsync();
+        await VerifyCanonicalDeviceActionsAsync(screenshotPath);
         await VerifyApplicationManagementAsync(screenshotPath);
         await VerifyLaunchMemoryUiAsync();
         await LdWindowVisibilitySmoke.VerifyAsync(System.IO.Path.Combine(ViewModel.DataDirectory, "window-visibility-smoke"));
@@ -5033,12 +5034,11 @@ public partial class MainWindow : Window
         NavigateTo("设备墙 / 主控");
         var removedLabels = new[] { "刷新设备", "扫描设备", "刷新截图" };
         if (VisualDescendants<TextBlock>(Shell).Any(text => removedLabels.Contains(text.Text))) throw new InvalidOperationException("旧重复刷新入口仍可见");
-        ldPackage.Text = "com.example.demo"; ldText.Text = "中文演示";
         SelectUnifiedInstance(unifiedDevices.Single(row => row.Index == ldRows.Single(item => !item.Instance.AndroidStarted).Index));
-        var runningOnly = new[] { "启动应用", "停止应用", "安装应用", "发送文字", "主页", "返回", "增大音量", "减小音量" };
-        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的操作状态不正确");
+        var runningOnly = new[] { "关闭实例", "重启实例" };
+        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || !ldCommandsByLabel["资源配置"].CanExecute(null) || runningOnly.Any(label => ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("未启动实例的生命周期操作状态不正确");
         SelectUnifiedInstance(unifiedDevices.Single(row => row.Index == ldRows.Single(item => item.Instance.AndroidStarted).Index));
-        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的连接入口或操作状态不正确");
+        if (!ldCommandsByLabel["启动并连接"].CanExecute(null) || ldCommandsByLabel["资源配置"].CanExecute(null) || runningOnly.Any(label => !ldCommandsByLabel[label].CanExecute(null))) throw new InvalidOperationException("已启动实例的连接入口或生命周期操作状态不正确");
         ldBusy = true; ldFeedback.Text = "正在执行所选实例命令…"; RefreshLdButtons();
         if (ldCommands.Any(command => command.CanExecute(null)) || !ldFeedback.Text.Contains("正在执行", StringComparison.Ordinal)) throw new InvalidOperationException("雷电忙状态未锁定操作");
         ldBusy = false; RefreshLdButtons();
@@ -5053,7 +5053,8 @@ public partial class MainWindow : Window
         finally { ViewModel.Confirm = originalConfirm; }
         if (confirmationCount != 2 || ldSelection.Generation != beforeConfirmation || !ldSelection.Instance.AndroidStarted || ldFeedback.Text != "操作已取消，未发送命令。") throw new InvalidOperationException("雷电关闭或重启的取消确认未生效");
         UpdateLdPlayerRows();
-        if (!ldContext.Text.Contains("实例操作", StringComparison.Ordinal)) throw new InvalidOperationException("实例操作目标缺失");
+        if (instanceActionChoice.SelectedItem is not UnifiedDeviceRow selectedInstance || selectedInstance.Index != ldSelection.Index || selectedInstance.Instance?.Generation != ldSelection.Generation)
+            throw new InvalidOperationException("实例操作下拉与真实命令目标不一致");
         await VerifyUnifiedDeviceActionsAsync(screenshotPath);
         var currentBeforeNavigation = ViewModel.CurrentDevice;
         var mainBeforeNavigation = ViewModel.MainDevice;
@@ -7234,9 +7235,7 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
-using System.Windows.Media;
 using MatrixDevice.Core;
-using Microsoft.Win32;
 
 namespace MatrixDevice.Desktop;
 
@@ -7248,12 +7247,8 @@ public partial class MainWindow
     private LdInstanceRow? ldSelection;
     private bool ldBusy;
     private TextBlock ldFeedback = null!;
-    private TextBlock ldContext = null!;
-    private TextBox ldPackage = null!;
-    private TextBox ldText = null!;
     private ComboBox instanceActionChoice = null!;
     private UnifiedDeviceRow? instanceActionRow;
-    private Expander instanceQuickActions = null!;
 
     private FrameworkElement BuildInstanceActions()
     {
@@ -7270,30 +7265,6 @@ public partial class MainWindow
         toolbar.Children.Add(LdButton("\uE71A", "关闭实例", () => ExecuteLdPlayerAsync("quit"), requireProcess: true));
         toolbar.Children.Add(LdButton("\uE777", "重启实例", () => ExecuteLdPlayerAsync("reboot"), requireProcess: true));
         page.Children.Add(toolbar);
-        var actions = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
-        ldContext = new TextBlock { Text = "实例操作：未选择", FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) }; actions.Children.Add(ldContext);
-        var packageRow = Toolbar(); packageRow.Children.Add(new TextBlock { Text = "应用包名", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
-        ldPackage = new TextBox { Width = 300, Margin = new Thickness(0, 0, 8, 0) }; ldPackage.TextChanged += (_, _) => RefreshLdButtons(); packageRow.Children.Add(ldPackage);
-        packageRow.Children.Add(LdButton("\uE768", "启动应用", () => ExecuteLdPlayerAsync("runapp", new JsonObject { ["packageName"] = ldPackage.Text.Trim() }), requirePackage: true, requireStarted: true));
-        packageRow.Children.Add(LdButton("\uE71A", "停止应用", () => ExecuteLdPlayerAsync("killapp", new JsonObject { ["packageName"] = ldPackage.Text.Trim() }), requirePackage: true, requireStarted: true));
-        packageRow.Children.Add(LdButton("\uE898", "安装应用", async () =>
-        {
-            var dialog = new OpenFileDialog { Filter = "安卓应用|*.apk" };
-            if (dialog.ShowDialog(this) == true) await ExecuteLdPlayerAsync("installapp", new JsonObject { ["file"] = dialog.FileName });
-        }, requireStarted: true));
-        actions.Children.Add(packageRow);
-        var textRow = Toolbar(); textRow.Margin = new Thickness(0, 8, 0, 8); textRow.Children.Add(new TextBlock { Text = "输入文字", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
-        ldText = new TextBox { Width = 420, Margin = new Thickness(0, 0, 8, 0) }; ldText.TextChanged += (_, _) => RefreshLdButtons(); textRow.Children.Add(ldText);
-        textRow.Children.Add(LdButton("\uE8F4", "发送文字", () => ExecuteLdPlayerAsync("input", new JsonObject { ["text"] = ldText.Text }), requireText: true, requireStarted: true));
-        actions.Children.Add(textRow);
-        var keys = Toolbar();
-        keys.Children.Add(LdButton("\uE80F", "主页", () => ExecuteLdPlayerAsync("keyevent", new JsonObject { ["key"] = "home" }), requireStarted: true));
-        keys.Children.Add(LdButton("\uE72B", "返回", () => ExecuteLdPlayerAsync("keyevent", new JsonObject { ["key"] = "back" }), requireStarted: true));
-        keys.Children.Add(LdButton("\uE995", "增大音量", () => ExecuteLdPlayerAsync("keyevent", new JsonObject { ["key"] = "volumeup" }), requireStarted: true));
-        keys.Children.Add(LdButton("\uE993", "减小音量", () => ExecuteLdPlayerAsync("keyevent", new JsonObject { ["key"] = "volumedown" }), requireStarted: true));
-        actions.Children.Add(keys);
-        instanceQuickActions = new Expander { Header = "实例快捷操作", Content = actions };
-        page.Children.Add(instanceQuickActions);
         UpdateLdPlayerRows();
         ViewModel.PropertyChanged += (_, _) => RefreshLdButtons();
         return page;
@@ -7306,17 +7277,16 @@ public partial class MainWindow
         if (instanceActionChoice is not null && !ReferenceEquals(instanceActionChoice.SelectedItem, row)) instanceActionChoice.SelectedItem = row;
         var instance = row?.Index is { } index ? ViewModel.Runtime.LdPlayer?.Instances.FirstOrDefault(item => item.Index == index) : null;
         ldSelection = instance is null ? null : new LdInstanceRow(instance, row!.Binding, row.State);
-        if (ldContext is not null) ldContext.Text = ldSelection is null ? "实例操作：未选择" : $"实例操作：{ldSelection.Name} · 编号 {ldSelection.Index} · 代次 {ldSelection.Generation}";
         RefreshLdButtons();
     }
 
-    private Button LdButton(string glyph, string label, Func<Task> action, bool requireSelection = true, bool requirePackage = false, bool requireText = false, bool requireStarted = false, bool requireStopped = false, bool requireProcess = false)
+    private Button LdButton(string glyph, string label, Func<Task> action, bool requireSelection = true, bool requireStopped = false, bool requireProcess = false)
     {
         var command = new AsyncCommand(async () =>
         {
             try { await action(); }
             catch (Exception error) { ldFeedback.Text = label + "失败：" + ViewModel.PresentError(error); }
-        }, () => !ldBusy && !captureInProgress && !ViewModel.HasActiveOperations && ViewModel.ConnectionReloadAvailable && ViewModel.Runtime.LdPlayer is not null && (!requireSelection || ldSelection is not null && (ViewModel.Demo || ldSelection.Index is > 0 and < 99999)) && (!requirePackage || !string.IsNullOrWhiteSpace(ldPackage?.Text)) && (!requireText || !string.IsNullOrWhiteSpace(ldText?.Text)) && (!requireStarted || ldSelection?.Instance.AndroidStarted == true && (ViewModel.Demo || LdInstanceConnected(ldSelection.Index))) && (!requireStopped || ldSelection?.Instance is { IsStarting: false, AndroidStarted: false, ProcessId: <= 0, VBoxProcessId: <= 0, TopWindow: 0, BindWindow: 0 }) && (!requireProcess || ldSelection?.Instance is { ProcessId: > 0 } || ldSelection?.Instance.AndroidStarted == true));
+        }, () => !ldBusy && !captureInProgress && !ViewModel.HasActiveOperations && ViewModel.ConnectionReloadAvailable && ViewModel.Runtime.LdPlayer is not null && (!requireSelection || ldSelection is not null && (ViewModel.Demo || ldSelection.Index is > 0 and < 99999)) && (!requireStopped || ldSelection?.Instance is { IsStarting: false, AndroidStarted: false, ProcessId: <= 0, VBoxProcessId: <= 0, TopWindow: 0, BindWindow: 0 }) && (!requireProcess || ldSelection?.Instance is { ProcessId: > 0 } || ldSelection?.Instance.AndroidStarted == true));
         ldCommands.Add(command);
         ldCommandsByLabel.Add(label, command);
         return Button(glyph, label, command);
@@ -9297,6 +9267,9 @@ public partial class MainWindow
         {
             SetWallViewMode(mode);
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (VisualDescendants<Expander>(Shell).Any(expander => expander.Header as string == "实例快捷操作")
+                || VisualDescendants<TextBlock>(Shell).Any(text => text.Text is "应用包名" or "输入文字"))
+                throw new InvalidOperationException("设备管理仍保留与应用管理/文本输入重复的实例快捷表单：" + mode);
             if (VisualDescendants<TextBlock>(Shell).Any(text => text.Text == "后台启动") ||
                 VisualDescendants<FrameworkElement>(Shell).Any(control => control.ToolTip is string tip && tip.Contains("隐藏本次启动", StringComparison.Ordinal)))
                 throw new InvalidOperationException("已删除的后台启动入口仍存在：" + mode);
@@ -9348,6 +9321,73 @@ public partial class MainWindow
             if (confirmations != 0) throw new InvalidOperationException("普通启动仍弹出确认框。");
         }
         finally { ViewModel.Confirm = originalConfirm; }
+    }
+
+    private async Task VerifyCanonicalDeviceActionsAsync(string? screenshot)
+    {
+        if (!ViewModel.Demo) throw new InvalidOperationException("入口归属验收仅限演示模式。");
+        var previousTag = (tabs.SelectedItem as TabItem)?.Tag?.ToString() ?? "设备墙 / 主控";
+        var previousMode = wallViewMode; var previousAction = instanceActionRow;
+        var current = ViewModel.CurrentDevice; var main = ViewModel.MainDevice ?? throw new InvalidOperationException("主控夹具缺失。");
+        var info = main.Info; var text = ViewModel.TextInput; var sync = ViewModel.SyncKeyboard;
+        var selections = ViewModel.Devices.ToDictionary(row => row, row => row.IsSelected);
+        try
+        {
+            NavigateTo("设备墙 / 主控"); SetWallViewMode("screens");
+            SelectUnifiedInstance(unifiedDevices.First(row => row.Instance is { Index: > 0, AndroidStarted: false }));
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            var expected = new Dictionary<string, string> { ["MainVolumeUp"] = "增大音量", ["MainVolumeDown"] = "减小音量" };
+            var buttons = VisualDescendants<Button>(wallMainPanel).Where(button => expected.ContainsKey(button.Name)).ToArray();
+            if (buttons.Length != 2 || buttons.Any(button => button.ToolTip as string != expected[button.Name] || button.Content is not TextBlock || button.ActualWidth != 34 || button.Command is not AsyncCommand))
+                throw new InvalidOperationException("主控音量图标、提示或稳定尺寸缺失。");
+            var other = ViewModel.Devices.First(row => !ReferenceEquals(row, main));
+            foreach (var row in ViewModel.Devices) row.IsSelected = ReferenceEquals(row, other);
+            foreach (var enabled in new[] { false, true })
+            {
+                ViewModel.SyncKeyboard = enabled; ViewModel.UpdateSelection();
+                string[] expectedTargets = enabled ? [other.Serial] : [];
+                if (!ViewModel.InputTargets(main.Serial, false).SequenceEqual(expectedTargets)) throw new InvalidOperationException("主控音量未沿用现有键盘同步目标规则。");
+                foreach (var button in buttons)
+                {
+                    if (!button.Command!.CanExecute(null)) throw new InvalidOperationException("有效主控的音量命令不可用。");
+                    await ((AsyncCommand)button.Command).ExecuteAsync();
+                }
+            }
+            ViewModel.SetExternalBusy(true);
+            try { if (buttons.Any(button => button.Command!.CanExecute(null))) throw new InvalidOperationException("繁忙时主控音量仍可操作。"); }
+            finally { ViewModel.SetExternalBusy(false); }
+            main.Info = info with { State = "Offline" }; ViewModel.UpdateSelection();
+            if (buttons.Any(button => button.Command!.CanExecute(null))) throw new InvalidOperationException("离线主控音量仍可操作。");
+            main.Info = info; ViewModel.SyncKeyboard = sync;
+            foreach (var pair in selections) pair.Key.IsSelected = pair.Value;
+            ViewModel.UpdateSelection();
+            if (wallMainPanel is ScrollViewer viewport) viewport.ScrollToEnd();
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            foreach (var button in buttons)
+            {
+                var y = button.TranslatePoint(new Point(), wallMainPanel).Y;
+                if (y < 0 || y + button.ActualHeight > wallMainPanel.ActualHeight + 1) throw new InvalidOperationException("主控音量按钮无法滚动到可见区。");
+            }
+            if (screenshot is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshot)!, "canonical-main-controls.png"));
+            NavigateTo("应用"); SyncApplicationTargets();
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (applicationTargets.Any(row => row.IsSelected) || CanManageApplicationTargets() || !VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "安装 APK"))
+                throw new InvalidOperationException("应用入口缺失，或实例下拉隐式授权了应用目标。");
+            NavigateTo("文本"); ViewModel.TextInput = "入口去重中文验证";
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (!VisualDescendants<TextBox>(Shell).Any(input => BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path == nameof(WorkspaceViewModel.TextInput))
+                || !VisualDescendants<Button>(Shell).Any(button => ReferenceEquals(button.Command, ViewModel.TextCommand)))
+                throw new InvalidOperationException("独立文本输入或发送命令入口缺失。");
+            if (!ReferenceEquals(current, ViewModel.CurrentDevice) || !ReferenceEquals(main, ViewModel.MainDevice) || selections.Any(pair => pair.Key.IsSelected != pair.Value))
+                throw new InvalidOperationException("入口切换把实例目标隐式映射到群控或主控。");
+        }
+        finally
+        {
+            main.Info = info; ViewModel.TextInput = text; ViewModel.SyncKeyboard = sync;
+            foreach (var pair in selections) pair.Key.IsSelected = pair.Value;
+            ViewModel.UpdateSelection(); SelectUnifiedInstance(previousAction);
+            SetWallViewMode(previousMode); NavigateTo(previousTag);
+        }
     }
 
     private async Task VerifyOperationGatesAsync()
@@ -9508,13 +9548,11 @@ public partial class MainWindow
                     throw new InvalidOperationException("模拟关闭后统一列表未即时更新。");
             }
             finally { ViewModel.Confirm = confirm; }
-            instanceQuickActions.IsExpanded = true;
-            await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
-            wallActionsViewport.ScrollToBottom();
+            wallActionsViewport.ScrollToTop();
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
             await Task.Delay(60);
-            if (instanceActionChoice.ActualWidth <= 0 || ldPackage.ActualWidth <= 0 || ldText.ActualWidth <= 0)
-                throw new InvalidOperationException("合并后的实例操作控件未布局。");
+            if (instanceActionChoice.ActualWidth <= 0 || instanceActionChoice.ActualHeight < 32)
+                throw new InvalidOperationException("实例生命周期目标控件未布局。");
             if (screenshot is not null) SaveRender(Path.Combine(Path.GetDirectoryName(screenshot)!, "merged-device-actions.png"));
             var groupChoice = VisualDescendants<ComboBox>(Shell).Single(input => input.ToolTip as string == "设备分组");
             var groupTop = groupChoice.TranslatePoint(new Point(), Shell).Y;
@@ -9525,13 +9563,12 @@ public partial class MainWindow
             if (wallWorkspace.ActualHeight < 140 || visibleListHeight < 140 || listTop + wallWorkspace.ActualHeight > footerTop + 1
                 || groupTop < 0 || groupTop + groupChoice.ActualHeight > Shell.ActualHeight)
                 throw new InvalidOperationException($"统一页操作区挤占列表或裁切全局工具栏：列表高 {wallWorkspace.ActualHeight:F1}，分组顶 {groupTop:F1}。");
-            var inputTop = ldText.TranslatePoint(new Point(), wallActionsViewport).Y;
-            if (inputTop < 0 || inputTop + ldText.ActualHeight > wallActionsViewport.ActualHeight)
-                throw new InvalidOperationException("快捷操作滚动后文字输入仍不可见。");
+            var targetTop = instanceActionChoice.TranslatePoint(new Point(), wallActionsViewport).Y;
+            if (targetTop < 0 || targetTop + instanceActionChoice.ActualHeight > wallActionsViewport.ActualHeight)
+                throw new InvalidOperationException("实例操作目标超出可见操作区。");
         }
         finally
         {
-            instanceQuickActions.IsExpanded = false;
             wallActionsViewport.ScrollToTop();
             other.Device.Info = otherInfo;
             ViewModel.GroupFilter = previousGroup; ViewModel.Groups.Remove(group);
@@ -10434,7 +10471,14 @@ public partial class MainWindow
         main.SetBinding(HeightProperty, new Binding(nameof(ActualHeight)) { Source = viewport });
         var heading = BoundText(nameof(WorkspaceViewModel.MainContext), true); heading.FontWeight = FontWeights.SemiBold; heading.Foreground = WallInk; heading.Margin = new Thickness(0, 0, 0, 12); DockPanel.SetDock(heading, Dock.Top); main.Children.Add(heading);
         var bottom = new StackPanel { Margin = new Thickness(0, 12, 0, 0) }; DockPanel.SetDock(bottom, Dock.Bottom); main.Children.Add(bottom);
-        var keys = Toolbar(); keys.Children.Add(Button("\uE72B", "返回", () => ViewModel.KeyAsync(4), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE80F", "主页", () => ViewModel.KeyAsync(3), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE7C4", "任务", () => ViewModel.KeyAsync(187), canExecute: ViewModel.CanControlMainInput)); bottom.Children.Add(keys);
+        var keys = Toolbar(); keys.Children.Add(Button("\uE72B", "返回", () => ViewModel.KeyAsync(4), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE80F", "主页", () => ViewModel.KeyAsync(3), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE7C4", "任务", () => ViewModel.KeyAsync(187), canExecute: ViewModel.CanControlMainInput));
+        foreach (var (glyph, label, key, name) in new[] { ("\uE995", "增大音量", 24, "MainVolumeUp"), ("\uE993", "减小音量", 25, "MainVolumeDown") })
+        {
+            var volume = Button(glyph, label, () => ViewModel.KeyAsync(key), canExecute: ViewModel.CanControlMainInput);
+            volume.Name = name; volume.Content = WallGlyph(glyph); volume.Width = volume.MinWidth = 34; volume.Height = 34; volume.Padding = new Thickness(0);
+            System.Windows.Automation.AutomationProperties.SetName(volume, label); keys.Children.Add(volume);
+        }
+        bottom.Children.Add(keys);
         var cast = new Expander { Header = "设备投屏", Margin = new Thickness(0, 8, 0, 0) };
         var castActions = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
         castActions.Children.Add(Button("\uE714", "启动 scrcpy 投屏", OpenScreenAsync, canExecute: CanLaunchScrcpy));

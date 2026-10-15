@@ -125,7 +125,14 @@ public partial class MainWindow
         main.SetBinding(HeightProperty, new Binding(nameof(ActualHeight)) { Source = viewport });
         var heading = BoundText(nameof(WorkspaceViewModel.MainContext), true); heading.FontWeight = FontWeights.SemiBold; heading.Foreground = WallInk; heading.Margin = new Thickness(0, 0, 0, 12); DockPanel.SetDock(heading, Dock.Top); main.Children.Add(heading);
         var bottom = new StackPanel { Margin = new Thickness(0, 12, 0, 0) }; DockPanel.SetDock(bottom, Dock.Bottom); main.Children.Add(bottom);
-        var keys = Toolbar(); keys.Children.Add(Button("\uE72B", "返回", () => ViewModel.KeyAsync(4), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE80F", "主页", () => ViewModel.KeyAsync(3), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE7C4", "任务", () => ViewModel.KeyAsync(187), canExecute: ViewModel.CanControlMainInput)); bottom.Children.Add(keys);
+        var keys = Toolbar(); keys.Children.Add(Button("\uE72B", "返回", () => ViewModel.KeyAsync(4), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE80F", "主页", () => ViewModel.KeyAsync(3), canExecute: ViewModel.CanControlMainInput)); keys.Children.Add(Button("\uE7C4", "任务", () => ViewModel.KeyAsync(187), canExecute: ViewModel.CanControlMainInput));
+        foreach (var (glyph, label, key, name) in new[] { ("\uE995", "增大音量", 24, "MainVolumeUp"), ("\uE993", "减小音量", 25, "MainVolumeDown") })
+        {
+            var volume = Button(glyph, label, () => ViewModel.KeyAsync(key), canExecute: ViewModel.CanControlMainInput);
+            volume.Name = name; volume.Content = WallGlyph(glyph); volume.Width = volume.MinWidth = 34; volume.Height = 34; volume.Padding = new Thickness(0);
+            System.Windows.Automation.AutomationProperties.SetName(volume, label); keys.Children.Add(volume);
+        }
+        bottom.Children.Add(keys);
         var cast = new Expander { Header = "设备投屏", Margin = new Thickness(0, 8, 0, 0) };
         var castActions = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
         castActions.Children.Add(Button("\uE714", "启动 scrcpy 投屏", OpenScreenAsync, canExecute: CanLaunchScrcpy));

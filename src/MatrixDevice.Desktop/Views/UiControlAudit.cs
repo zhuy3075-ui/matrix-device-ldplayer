@@ -15,6 +15,9 @@ public partial class MainWindow
         {
             SetWallViewMode(mode);
             await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (VisualDescendants<Expander>(Shell).Any(expander => expander.Header as string == "实例快捷操作")
+                || VisualDescendants<TextBlock>(Shell).Any(text => text.Text is "应用包名" or "输入文字"))
+                throw new InvalidOperationException("设备管理仍保留与应用管理/文本输入重复的实例快捷表单：" + mode);
             if (VisualDescendants<TextBlock>(Shell).Any(text => text.Text == "后台启动") ||
                 VisualDescendants<FrameworkElement>(Shell).Any(control => control.ToolTip is string tip && tip.Contains("隐藏本次启动", StringComparison.Ordinal)))
                 throw new InvalidOperationException("已删除的后台启动入口仍存在：" + mode);
@@ -66,6 +69,73 @@ public partial class MainWindow
             if (confirmations != 0) throw new InvalidOperationException("普通启动仍弹出确认框。");
         }
         finally { ViewModel.Confirm = originalConfirm; }
+    }
+
+    private async Task VerifyCanonicalDeviceActionsAsync(string? screenshot)
+    {
+        if (!ViewModel.Demo) throw new InvalidOperationException("入口归属验收仅限演示模式。");
+        var previousTag = (tabs.SelectedItem as TabItem)?.Tag?.ToString() ?? "设备墙 / 主控";
+        var previousMode = wallViewMode; var previousAction = instanceActionRow;
+        var current = ViewModel.CurrentDevice; var main = ViewModel.MainDevice ?? throw new InvalidOperationException("主控夹具缺失。");
+        var info = main.Info; var text = ViewModel.TextInput; var sync = ViewModel.SyncKeyboard;
+        var selections = ViewModel.Devices.ToDictionary(row => row, row => row.IsSelected);
+        try
+        {
+            NavigateTo("设备墙 / 主控"); SetWallViewMode("screens");
+            SelectUnifiedInstance(unifiedDevices.First(row => row.Instance is { Index: > 0, AndroidStarted: false }));
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            var expected = new Dictionary<string, string> { ["MainVolumeUp"] = "增大音量", ["MainVolumeDown"] = "减小音量" };
+            var buttons = VisualDescendants<Button>(wallMainPanel).Where(button => expected.ContainsKey(button.Name)).ToArray();
+            if (buttons.Length != 2 || buttons.Any(button => button.ToolTip as string != expected[button.Name] || button.Content is not TextBlock || button.ActualWidth != 34 || button.Command is not AsyncCommand))
+                throw new InvalidOperationException("主控音量图标、提示或稳定尺寸缺失。");
+            var other = ViewModel.Devices.First(row => !ReferenceEquals(row, main));
+            foreach (var row in ViewModel.Devices) row.IsSelected = ReferenceEquals(row, other);
+            foreach (var enabled in new[] { false, true })
+            {
+                ViewModel.SyncKeyboard = enabled; ViewModel.UpdateSelection();
+                string[] expectedTargets = enabled ? [other.Serial] : [];
+                if (!ViewModel.InputTargets(main.Serial, false).SequenceEqual(expectedTargets)) throw new InvalidOperationException("主控音量未沿用现有键盘同步目标规则。");
+                foreach (var button in buttons)
+                {
+                    if (!button.Command!.CanExecute(null)) throw new InvalidOperationException("有效主控的音量命令不可用。");
+                    await ((AsyncCommand)button.Command).ExecuteAsync();
+                }
+            }
+            ViewModel.SetExternalBusy(true);
+            try { if (buttons.Any(button => button.Command!.CanExecute(null))) throw new InvalidOperationException("繁忙时主控音量仍可操作。"); }
+            finally { ViewModel.SetExternalBusy(false); }
+            main.Info = info with { State = "Offline" }; ViewModel.UpdateSelection();
+            if (buttons.Any(button => button.Command!.CanExecute(null))) throw new InvalidOperationException("离线主控音量仍可操作。");
+            main.Info = info; ViewModel.SyncKeyboard = sync;
+            foreach (var pair in selections) pair.Key.IsSelected = pair.Value;
+            ViewModel.UpdateSelection();
+            if (wallMainPanel is ScrollViewer viewport) viewport.ScrollToEnd();
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            foreach (var button in buttons)
+            {
+                var y = button.TranslatePoint(new Point(), wallMainPanel).Y;
+                if (y < 0 || y + button.ActualHeight > wallMainPanel.ActualHeight + 1) throw new InvalidOperationException("主控音量按钮无法滚动到可见区。");
+            }
+            if (screenshot is not null) SaveRender(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(screenshot)!, "canonical-main-controls.png"));
+            NavigateTo("应用"); SyncApplicationTargets();
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (applicationTargets.Any(row => row.IsSelected) || CanManageApplicationTargets() || !VisualDescendants<Button>(Shell).Any(button => button.ToolTip as string == "安装 APK"))
+                throw new InvalidOperationException("应用入口缺失，或实例下拉隐式授权了应用目标。");
+            NavigateTo("文本"); ViewModel.TextInput = "入口去重中文验证";
+            await Dispatcher.InvokeAsync(UpdateLayout, System.Windows.Threading.DispatcherPriority.Render);
+            if (!VisualDescendants<TextBox>(Shell).Any(input => BindingOperations.GetBinding(input, TextBox.TextProperty)?.Path.Path == nameof(WorkspaceViewModel.TextInput))
+                || !VisualDescendants<Button>(Shell).Any(button => ReferenceEquals(button.Command, ViewModel.TextCommand)))
+                throw new InvalidOperationException("独立文本输入或发送命令入口缺失。");
+            if (!ReferenceEquals(current, ViewModel.CurrentDevice) || !ReferenceEquals(main, ViewModel.MainDevice) || selections.Any(pair => pair.Key.IsSelected != pair.Value))
+                throw new InvalidOperationException("入口切换把实例目标隐式映射到群控或主控。");
+        }
+        finally
+        {
+            main.Info = info; ViewModel.TextInput = text; ViewModel.SyncKeyboard = sync;
+            foreach (var pair in selections) pair.Key.IsSelected = pair.Value;
+            ViewModel.UpdateSelection(); SelectUnifiedInstance(previousAction);
+            SetWallViewMode(previousMode); NavigateTo(previousTag);
+        }
     }
 
     private async Task VerifyOperationGatesAsync()

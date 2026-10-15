@@ -62,13 +62,11 @@ public partial class MainWindow
                     throw new InvalidOperationException("模拟关闭后统一列表未即时更新。");
             }
             finally { ViewModel.Confirm = confirm; }
-            instanceQuickActions.IsExpanded = true;
-            await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
-            wallActionsViewport.ScrollToBottom();
+            wallActionsViewport.ScrollToTop();
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
             await Task.Delay(60);
-            if (instanceActionChoice.ActualWidth <= 0 || ldPackage.ActualWidth <= 0 || ldText.ActualWidth <= 0)
-                throw new InvalidOperationException("合并后的实例操作控件未布局。");
+            if (instanceActionChoice.ActualWidth <= 0 || instanceActionChoice.ActualHeight < 32)
+                throw new InvalidOperationException("实例生命周期目标控件未布局。");
             if (screenshot is not null) SaveRender(Path.Combine(Path.GetDirectoryName(screenshot)!, "merged-device-actions.png"));
             var groupChoice = VisualDescendants<ComboBox>(Shell).Single(input => input.ToolTip as string == "设备分组");
             var groupTop = groupChoice.TranslatePoint(new Point(), Shell).Y;
@@ -79,13 +77,12 @@ public partial class MainWindow
             if (wallWorkspace.ActualHeight < 140 || visibleListHeight < 140 || listTop + wallWorkspace.ActualHeight > footerTop + 1
                 || groupTop < 0 || groupTop + groupChoice.ActualHeight > Shell.ActualHeight)
                 throw new InvalidOperationException($"统一页操作区挤占列表或裁切全局工具栏：列表高 {wallWorkspace.ActualHeight:F1}，分组顶 {groupTop:F1}。");
-            var inputTop = ldText.TranslatePoint(new Point(), wallActionsViewport).Y;
-            if (inputTop < 0 || inputTop + ldText.ActualHeight > wallActionsViewport.ActualHeight)
-                throw new InvalidOperationException("快捷操作滚动后文字输入仍不可见。");
+            var targetTop = instanceActionChoice.TranslatePoint(new Point(), wallActionsViewport).Y;
+            if (targetTop < 0 || targetTop + instanceActionChoice.ActualHeight > wallActionsViewport.ActualHeight)
+                throw new InvalidOperationException("实例操作目标超出可见操作区。");
         }
         finally
         {
-            instanceQuickActions.IsExpanded = false;
             wallActionsViewport.ScrollToTop();
             other.Device.Info = otherInfo;
             ViewModel.GroupFilter = previousGroup; ViewModel.Groups.Remove(group);
