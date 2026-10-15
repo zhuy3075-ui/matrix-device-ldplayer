@@ -9978,6 +9978,14 @@ public partial class MainWindow
             var good = LdLaunchMemory.Assess(new(6144), new((ulong)(7.8 * 1073741824), 16UL * 1073741824, 75));
             if (!await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", good, CancellationToken.None)) || confirmations != 0)
                 throw new InvalidOperationException("7.8 GiB/75%的6 GiB实例被拦截或出现普通启动确认。");
+            foreach (var nonblocking in new[]
+            {
+                LdLaunchMemory.Assess(new(null, "实例 RAM 未知"), new(11UL * 1073741824, 20UL * 1073741824, 65)),
+                LdLaunchMemory.Assess(new(6144), null),
+                LdLaunchMemory.Assess(new(6144), new(6UL * 1073741824, 6UL * 1073741824, 99))
+            })
+                if (!await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", nonblocking, CancellationToken.None)) || confirmations != 0)
+                    throw new InvalidOperationException("未知、采样失败或仅估算余量不足仍触发资源确认。");
             var risk = LdLaunchMemory.Assess(new(8192), new((ulong)(7.8 * 1073741824), 16UL * 1073741824, 75));
             if (!await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", risk, CancellationToken.None)) || confirmations != 1)
                 throw new InvalidOperationException("用户无法确认继续风险启动。");
@@ -13760,10 +13768,12 @@ public static class LdConnectionAdmission
 ```csharp
 using System.Globalization;
 using System.Text.Json;
+using System.Xml;
+using System.Xml.Linq;
 
 namespace MatrixDevice.Host;
 
-public sealed record LdMemoryConfiguration(int? MemoryMb, string? Warning = null);
+public sealed record LdMemoryConfiguration(int? MemoryMb, string? Warning = null, string? Source = null);
 public sealed record LdHostMemory(ulong AvailablePhysicalBytes, ulong AvailableCommitBytes, uint LoadPercent);
 public sealed record LdLaunchMemoryAssessment(bool RequiresConfirmation, ulong? RecommendedPhysicalBytes, string Message);
 
@@ -13792,9 +13802,15 @@ public static class LdLaunchMemory
                 if (ram is not null) return new(null, "实例内存配置字段重复，内存配置未知。");
                 ram = property.Value;
             }
+            var machinePath = Path.Combine(directory, "vms", "leidian" + index.ToString(CultureInfo.InvariantCulture), "leidian.vbox");
+            if (ram is null) return ReadMachineConfiguration(machinePath);
             if (ram is not { ValueKind: JsonValueKind.Number } value || !value.TryGetInt32(out var memoryMb) || !ValidRam(memoryMb))
-                return new(null, "实例内存字段缺失或无效，请在模拟器设置中确认 RAM。");
-            return new(memoryMb);
+                return new(null, "实例内存字段无效，RAM 未知；请在模拟器设置中核对。");
+            var machine = ReadMachineConfiguration(machinePath);
+            if (machine.MemoryMb is { } machineMb && machineMb != memoryMb)
+                return new(null, $"实例设置与虚拟机内存配置不一致（{memoryMb} / {machineMb} MiB），RAM 待核验。");
+            return new(memoryMb, machine.MemoryMb is null && File.Exists(machinePath) ? "虚拟机配置未能核验，本次仅按实例设置中的 RAM 评估。" : null,
+                machine.MemoryMb is not null ? "实例设置与虚拟机配置" : "实例设置");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or JsonException or System.Security.SecurityException)
         {
@@ -13802,34 +13818,78 @@ public static class LdLaunchMemory
         }
     }
 
+    private static LdMemoryConfiguration ReadMachineConfiguration(string path)
+    {
+        const string warning = "未读到有效的实例 RAM 配置，请在模拟器设置中核对；未猜测默认内存。";
+        try
+        {
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (file.Length > MaximumConfigurationBytes) return new(null, warning);
+            var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaximumConfigurationBytes };
+            using (var bounds = XmlReader.Create(file, settings))
+                while (bounds.Read())
+                    if (bounds.Depth > 32) return new(null, warning);
+            file.Position = 0;
+            using var reader = XmlReader.Create(file, settings);
+            var document = XDocument.Load(reader);
+            XNamespace ns = "http://www.virtualbox.org/";
+            if (document.Root?.Name != ns + "VirtualBox") return new(null, warning);
+            var machines = document.Root.Elements(ns + "Machine").ToArray();
+            if (machines.Length != 1) return new(null, warning);
+            var hardware = machines[0].Elements(ns + "Hardware").ToArray();
+            if (hardware.Length != 1) return new(null, warning);
+            var memories = hardware[0].Elements(ns + "Memory").ToArray();
+            if (memories.Length != 1 || !int.TryParse(memories[0].Attribute("RAMSize")?.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var memoryMb) || !ValidRam(memoryMb))
+                return new(null, warning);
+            return new(memoryMb, Source: "本实例虚拟机配置");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or XmlException or System.Security.SecurityException)
+        {
+            return new(null, warning);
+        }
+    }
+
     public static LdLaunchMemoryAssessment Assess(LdMemoryConfiguration configuration, LdHostMemory? host)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         var warnings = new List<string>();
+        var shortages = new List<string>();
         if (!string.IsNullOrWhiteSpace(configuration.Warning)) warnings.Add(configuration.Warning.TrimEnd('。'));
         ulong? recommended = null;
-        ulong? commit = null;
+        ulong? ramBytes = null;
         if (configuration.MemoryMb is { } memoryMb && ValidRam(memoryMb))
         {
-            commit = checked(((ulong)memoryMb + 512) * Mib);
-            recommended = checked(commit.Value + 1024 * Mib);
+            ramBytes = checked((ulong)memoryMb * Mib);
+            recommended = checked(ramBytes.Value + 1536 * Mib);
         }
-        else warnings.Add("实例 RAM 未知，无法计算本次启动的建议预算");
-        var hostKnown = host is not null && host.LoadPercent <= 100;
+        else if (warnings.Count == 0) warnings.Add("实例 RAM 未知，无法核验启动容量");
+        var hostKnown = host is not null;
+        var loadKnown = hostKnown && host!.LoadPercent <= 100;
         if (!hostKnown) warnings.Add("主机内存状态未知");
         else
         {
-            if (recommended is { } physical && host!.AvailablePhysicalBytes < physical) warnings.Add("可用物理内存低于本实例 RAM、512 MiB 进程开销及 1024 MiB 系统预留的建议预算");
-            if (commit is { } requiredCommit && host!.AvailableCommitBytes < requiredCommit) warnings.Add("可用提交内存低于本实例 RAM 与 512 MiB 进程开销的建议预算");
-            if (host!.LoadPercent >= 90) warnings.Add("主机内存负载已达到 90% 或更高");
+            if (ramBytes is { } required)
+            {
+                if (host!.AvailablePhysicalBytes < required) shortages.Add("可用物理内存低于本实例配置 RAM");
+                else if (host.AvailablePhysicalBytes < recommended!.Value) warnings.Add("物理内存未达到估算预留建议，仅作提示");
+                if (host!.AvailableCommitBytes < required) shortages.Add("可用提交额度低于本实例配置 RAM");
+                else if (host.AvailableCommitBytes < required + 512 * Mib) warnings.Add("提交额度未达到估算开销建议，仅作提示");
+            }
+            if (!loadKnown) warnings.Add("主机内存负载未知，容量数值仍单独评估");
+            else if (host!.LoadPercent >= 90) warnings.Add("主机内存负载较高，仅作提示");
         }
         var ram = recommended is not null ? configuration.MemoryMb!.Value.ToString(CultureInfo.InvariantCulture) + " MiB" : "未知";
-        var load = hostKnown ? host!.LoadPercent.ToString(CultureInfo.InvariantCulture) + "%" : "未知";
+        var load = loadKnown ? host!.LoadPercent.ToString(CultureInfo.InvariantCulture) + "%" : "未知";
         var summary = $"配置 RAM {ram}；可用物理 {GiB(hostKnown ? host!.AvailablePhysicalBytes : null)}；可用提交 {GiB(hostKnown ? host!.AvailableCommitBytes : null)}；负载 {load}；物理建议预算 {GiB(recommended)}";
         if (recommended is not null) summary += "（RAM + 512 MiB 进程开销 + 1024 MiB 系统预留）";
-        return warnings.Count == 0
-            ? new(false, recommended, summary + "。当前内存满足建议预算；该预算按采样时刻估算，非官方最低要求，也不代表已预留资源。")
-            : new(true, recommended, summary + "。" + string.Join("；", warnings) + "。建议预算按采样时刻估算，非官方最低要求，也不代表已预留资源；确认风险后仍可继续。");
+        if (ramBytes is not null && !string.IsNullOrWhiteSpace(configuration.Source)) summary += "；RAM 来源：" + configuration.Source;
+        var requiresConfirmation = shortages.Count > 0;
+        var details = shortages.Concat(warnings).ToArray();
+        if (details.Length > 0) summary += "。" + string.Join("；", details);
+        var conclusion = requiresConfirmation ? "检测到明确容量不足，确认后仍可继续。"
+            : ramBytes is null || !hostKnown ? "本次无法核验容量是否充足，仅在页面提示，不要求确认。"
+            : "可用物理与提交容量均未低于配置 RAM，不要求确认。";
+        return new(requiresConfirmation, recommended, summary + "。" + conclusion + "检查为采样时刻快照；建议预算是估算，非官方最低要求，也不代表已预留资源或保证启动成功。");
     }
 
     private static bool ValidRam(int memoryMb) => memoryMb is >= 256 and <= 65536;
@@ -15556,11 +15616,14 @@ internal static class LdLaunchMemoryTests
     public static void Register(Action<string, Func<Task>> test)
     {
         test("LD memory reads only the confirmed literal RAM key and leaves the configuration intact", ReadConfigurationAsync);
+        test("LD memory reads the same instance current machine RAM without guessing missing settings", MachineConfigurationAsync);
+        test("LD memory rejects unsafe ambiguous and unsupported machine XML without leaking configuration", UnknownMachineConfigurationAsync);
+        test("LD memory conflicting sources and invalid explicit RAM remain unknown", SourceConflictsAsync);
         test("LD memory missing malformed ambiguous and unreasonable RAM remain unknown without leaking JSON", UnknownConfigurationAsync);
         test("LD memory invalid paths indices missing files and oversized files return warnings", ConfigurationBoundsAsync);
         test("LD memory 7.8 GiB at 75 percent accepts 2 and 6 GiB but warns for 8 GiB", TypicalCapacityAsync);
-        test("LD memory physical commit and load risk thresholds are independent and advisory", RiskThresholdsAsync);
-        test("LD memory unknown host RAM and sampling failures require confirmation without guessing zero", UnknownAssessmentAsync);
+        test("LD memory only measured capacity below configured RAM requires confirmation", RiskThresholdsAsync);
+        test("LD memory unknown sampling and diagnostic warnings remain nonblocking without guessing zero", UnknownAssessmentAsync);
         test("LD memory messages show sampled RAM capacity load and estimates with invariant numeric formatting", AssessmentMessageAsync);
     }
 
@@ -15600,6 +15663,73 @@ internal static class LdLaunchMemoryTests
         return Task.CompletedTask;
     }
 
+    private static string MachineXml(string memory, string extra = "") => "<VirtualBox xmlns=\"http://www.virtualbox.org/\"><Machine><Hardware><Memory RAMSize=\"" + memory + "\"/></Hardware>" + extra + "</Machine></VirtualBox>";
+
+    private static Task MachineConfigurationAsync()
+    {
+        using var fixture = new MemoryFixture();
+        fixture.Write("{}");
+        var xml = MachineXml("6144", "<Snapshot><Hardware><Memory RAMSize=\"1024\"/></Hardware></Snapshot>");
+        fixture.WriteMachine(xml);
+        var configuration = LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2);
+        Assert(configuration.MemoryMb == 6144 && configuration.Warning is null, "Missing JSON RAM did not read current machine RAM, or selected a snapshot.");
+        Assert(File.ReadAllText(fixture.ConfigurationPath) == "{}" && File.ReadAllText(fixture.MachinePath) == xml && new FileInfo(fixture.ConsolePath).Length == 0, "RAM reads mutated files or executed the console.");
+        fixture.Write("{\"advancedSettings.memorySize\":2048}"); fixture.WriteMachine(MachineXml("2048"));
+        Assert(LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2).MemoryMb == 2048, "Matching configuration sources were not accepted.");
+        File.WriteAllText(fixture.MachinePath, MachineXml("2048"), new UTF8Encoding(true));
+        Assert(LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2).MemoryMb == 2048, "XML UTF-8 BOM was rejected.");
+        return Task.CompletedTask;
+    }
+
+    private static Task UnknownMachineConfigurationAsync()
+    {
+        using var fixture = new MemoryFixture(); fixture.Write("{}");
+        foreach (var xml in new[]
+        {
+            "broken PRIVATE_CONFIG_MUST_NOT_APPEAR", "<VirtualBox/>", MachineXml("0"), MachineXml("-1"), MachineXml("65537"), MachineXml("2048.5"), MachineXml("2GB"),
+            "<VirtualBox xmlns=\"http://www.virtualbox.org/\"><Machine><Hardware><Memory RAMSize=\"2048\"/><Memory RAMSize=\"8192\"/></Hardware></Machine></VirtualBox>",
+            "<VirtualBox xmlns=\"http://www.virtualbox.org/\"><Machine><Hardware><Memory RAMSize=\"2048\"/></Hardware></Machine><Machine><Hardware><Memory RAMSize=\"8192\"/></Hardware></Machine></VirtualBox>",
+            "<VirtualBox xmlns=\"http://www.virtualbox.org/\"><Machine><Snapshot><Hardware><Memory RAMSize=\"2048\"/></Hardware></Snapshot></Machine></VirtualBox>",
+            "<VirtualBox xmlns=\"http://www.virtualbox.org/\"><Machine><Hardware><Memory RAMSize=\"2048\"/></Hardware><Hardware><Memory RAMSize=\"8192\"/></Hardware></Machine></VirtualBox>",
+            MachineXml("2048").Replace("http://www.virtualbox.org/", "https://untrusted.example/"),
+            "<!DOCTYPE VirtualBox [<!ENTITY ram \"2048\">]><VirtualBox xmlns=\"http://www.virtualbox.org/\"><Machine><Hardware><Memory RAMSize=\"&ram;\"/></Hardware></Machine></VirtualBox>",
+            "<!DOCTYPE VirtualBox SYSTEM \"file:///PRIVATE_CONFIG_MUST_NOT_APPEAR\">" + MachineXml("2048"), new string(' ', 1024 * 1024 + 1)
+        })
+        {
+            fixture.WriteMachine(xml);
+            var configuration = LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2);
+            Assert(configuration.MemoryMb is null && !string.IsNullOrWhiteSpace(configuration.Warning), "Unsafe or ambiguous machine configuration supplied RAM.");
+            Assert(!configuration.Warning!.Contains("PRIVATE_CONFIG_MUST_NOT_APPEAR", StringComparison.Ordinal), "XML configuration contents or parser details leaked.");
+        }
+        fixture.WriteMachine(MachineXml("2048"));
+        using (var locked = new FileStream(fixture.MachinePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            Assert(LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2).MemoryMb is null, "Locked XML was accepted.");
+        return Task.CompletedTask;
+    }
+
+    private static Task SourceConflictsAsync()
+    {
+        using var fixture = new MemoryFixture(); fixture.WriteMachine(MachineXml("6144"));
+        foreach (var json in new[] { "{\"advancedSettings.memorySize\":2048}", "{\"advancedSettings.memorySize\":0}", "{\"advancedSettings.memorySize\":\"6144\"}", "{\"advancedSettings.memorySize\":6144,\"advancedSettings.memorySize\":8192}" })
+        {
+            fixture.Write(json);
+            var configuration = LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2);
+            Assert(configuration.MemoryMb is null && !string.IsNullOrWhiteSpace(configuration.Warning), "Conflicting or explicit invalid RAM was bypassed by XML fallback.");
+        }
+        fixture.Write("{\"advancedSettings.memorySize\":6144}");
+        Assert(LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2).MemoryMb == 6144, "Matching RAM did not recover.");
+        fixture.WriteMachine("broken");
+        var unverifiedMachine = LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2);
+        Assert(unverifiedMachine.MemoryMb == 6144 && !string.IsNullOrWhiteSpace(unverifiedMachine.Warning), "Unreadable second source was silently claimed consistent or discarded known JSON RAM.");
+        fixture.WriteMachine(MachineXml("6144"));
+        using (var locked = new FileStream(fixture.MachinePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var configuration = LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 2);
+            Assert(configuration.MemoryMb == 6144 && !string.IsNullOrWhiteSpace(configuration.Warning), "Locked second source did not preserve a diagnostic alongside known JSON RAM.");
+        }
+        return Task.CompletedTask;
+    }
+
     private static Task ConfigurationBoundsAsync()
     {
         using var fixture = new MemoryFixture();
@@ -15632,14 +15762,15 @@ internal static class LdLaunchMemoryTests
 
     private static Task RiskThresholdsAsync()
     {
-        var physical = 5632 * Mib; var commit = 4608 * Mib;
-        foreach (var load in new uint[] { 80, 89 })
-            Assert(!LdLaunchMemory.Assess(new(4096), new(physical, commit, load)).RequiresConfirmation, "Equal budgets or load below 90 still warn.");
-        foreach (var host in new[] { new LdHostMemory(physical - 1, commit, 0), new LdHostMemory(physical, commit - 1, 0), new LdHostMemory(physical, commit, 90) })
+        var ram = 4096 * Mib; var recommended = 5632 * Mib;
+        foreach (var load in new uint[] { 0, 80, 89, 90, 100, 101 })
+            Assert(!LdLaunchMemory.Assess(new(4096), new(ram, ram, load)).RequiresConfirmation, "Headroom, load or unknown load triggered confirmation with sufficient configured RAM capacity.");
+        foreach (var host in new[] { new LdHostMemory(ram - 1, ram, 0), new LdHostMemory(ram, ram - 1, 0), new LdHostMemory(0, ram, 100), new LdHostMemory(ram - 1, ram, 101) })
         {
             var result = LdLaunchMemory.Assess(new(4096), host);
-            Assert(result.RequiresConfirmation && result.RecommendedPhysicalBytes == physical && !string.IsNullOrWhiteSpace(result.Message), "A single capacity risk was missed.");
+            Assert(result.RequiresConfirmation && result.RecommendedPhysicalBytes == recommended && !string.IsNullOrWhiteSpace(result.Message), "A measured RAM capacity deficit was missed.");
         }
+        Assert(LdLaunchMemory.Assess(new(4096, "存在非阻断读取提示"), new(ram - 1, ram, 0)).RequiresConfirmation, "A diagnostic warning suppressed a known deficit.");
         return Task.CompletedTask;
     }
 
@@ -15648,12 +15779,16 @@ internal static class LdLaunchMemoryTests
         foreach (var ram in new int?[] { null, 0, -1, int.MaxValue })
         {
             var result = LdLaunchMemory.Assess(new(ram, "RAM 未知"), new(16 * Gib, 16 * Gib, 10));
-            Assert(result.RequiresConfirmation && result.RecommendedPhysicalBytes is null && !string.IsNullOrWhiteSpace(result.Message), "Invalid RAM became a guessed zero budget.");
+            Assert(!result.RequiresConfirmation && result.RecommendedPhysicalBytes is null && !string.IsNullOrWhiteSpace(result.Message) && !result.Message.Contains("满足建议预算", StringComparison.Ordinal), "Unknown RAM was guessed or escalated to confirmation.");
+            Assert(!LdLaunchMemory.Assess(new(ram, "RAM 未知"), new(0, 0, 100)).RequiresConfirmation, "Unknown RAM fabricated a deficit comparison.");
         }
         var noHost = LdLaunchMemory.Assess(new(6144), null);
-        Assert(noHost.RequiresConfirmation && noHost.RecommendedPhysicalBytes == 7680 * Mib, "Missing host discarded known RAM or silently allowed launch.");
-        Assert(LdLaunchMemory.Assess(new(2048, "配置读取存在警告"), new(16 * Gib, 16 * Gib, 0)).RequiresConfirmation, "Known configuration warning was discarded.");
-        Assert(LdLaunchMemory.Assess(new(2048), new(16 * Gib, 16 * Gib, 101)).RequiresConfirmation, "Malformed load was accepted as valid host memory.");
+        Assert(!noHost.RequiresConfirmation && noHost.RecommendedPhysicalBytes == 7680 * Mib && noHost.Message.Contains("未知", StringComparison.Ordinal), "Missing host became a capacity deficit or discarded known RAM.");
+        var warning = LdLaunchMemory.Assess(new(2048, "配置读取存在警告"), new(16 * Gib, 16 * Gib, 0));
+        Assert(!warning.RequiresConfirmation && warning.Message.Contains("配置读取存在警告", StringComparison.Ordinal), "Diagnostic warning was hidden or became a modal.");
+        Assert(!LdLaunchMemory.Assess(new(2048), new(16 * Gib, 16 * Gib, 101)).RequiresConfirmation, "Malformed load became a capacity deficit.");
+        var screenshot = LdLaunchMemory.Assess(new(null, "实例内存字段缺失"), new(11 * Gib, 20 * Gib, 65));
+        Assert(!screenshot.RequiresConfirmation && screenshot.Message.Contains("未知", StringComparison.Ordinal) && !screenshot.Message.Contains("确认风险后", StringComparison.Ordinal), "Reported 11 GiB 65-percent unknown RAM still needs confirmation.");
         return Task.CompletedTask;
     }
 
@@ -15684,16 +15819,20 @@ internal static class LdLaunchMemoryTests
         private readonly string directory = Path.Combine(Path.GetTempPath(), "MatrixDevice.Tests", "LdLaunchMemory", Guid.NewGuid().ToString("N"));
         public string ConsolePath => Path.Combine(directory, "ldconsole.exe");
         public string ConfigurationPath => Path.Combine(directory, "vms", "config", "leidian2.config");
+        public string MachinePath => Path.Combine(directory, "vms", "leidian2", "leidian.vbox");
         public MemoryFixture()
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ConfigurationPath)!);
             File.WriteAllBytes(ConsolePath, []);
         }
         public void Write(string json) => File.WriteAllText(ConfigurationPath, json, new UTF8Encoding(false));
+        public void WriteMachine(string xml) { Directory.CreateDirectory(Path.GetDirectoryName(MachinePath)!); File.WriteAllText(MachinePath, xml, new UTF8Encoding(false)); }
         public void Dispose()
         {
             if (File.Exists(ConfigurationPath)) File.Delete(ConfigurationPath);
             File.Delete(ConsolePath);
+            if (File.Exists(MachinePath)) File.Delete(MachinePath);
+            if (Directory.Exists(Path.GetDirectoryName(MachinePath)!)) Directory.Delete(Path.GetDirectoryName(MachinePath)!);
             Directory.Delete(Path.GetDirectoryName(ConfigurationPath)!);
             Directory.Delete(Path.Combine(directory, "vms"));
             Directory.Delete(directory);

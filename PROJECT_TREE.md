@@ -9,6 +9,8 @@ MatrixDevice.Reconstructed/
 |   |-- codex/
 |   |   |-- launch-memory-policy/
 |   |   |   +-- REPORT.md
+|   |   |-- launch-resource-confirmation/
+|   |   |   +-- REPORT.md
 |   |   |-- realtime-monitoring/
 |   |   |   |-- goal-prompt.md
 |   |   |   |-- HANDOFF.md

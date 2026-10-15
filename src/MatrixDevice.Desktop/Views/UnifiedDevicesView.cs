@@ -335,6 +335,14 @@ public partial class MainWindow
             var good = LdLaunchMemory.Assess(new(6144), new((ulong)(7.8 * 1073741824), 16UL * 1073741824, 75));
             if (!await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", good, CancellationToken.None)) || confirmations != 0)
                 throw new InvalidOperationException("7.8 GiB/75%的6 GiB实例被拦截或出现普通启动确认。");
+            foreach (var nonblocking in new[]
+            {
+                LdLaunchMemory.Assess(new(null, "实例 RAM 未知"), new(11UL * 1073741824, 20UL * 1073741824, 65)),
+                LdLaunchMemory.Assess(new(6144), null),
+                LdLaunchMemory.Assess(new(6144), new(6UL * 1073741824, 6UL * 1073741824, 99))
+            })
+                if (!await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", nonblocking, CancellationToken.None)) || confirmations != 0)
+                    throw new InvalidOperationException("未知、采样失败或仅估算余量不足仍触发资源确认。");
             var risk = LdLaunchMemory.Assess(new(8192), new((ulong)(7.8 * 1073741824), 16UL * 1073741824, 75));
             if (!await Task.Run(() => ConfirmLaunchMemoryAsync(2, "离线内存测试", risk, CancellationToken.None)) || confirmations != 1)
                 throw new InvalidOperationException("用户无法确认继续风险启动。");
