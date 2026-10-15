@@ -76,6 +76,11 @@ public partial class MainWindow : Window
         Height = viewModel.Runtime.Settings.WindowHeight;
         Title = viewModel.Demo ? "矩阵设备 · 演示模式" : "矩阵设备";
         viewModel.DeviceChanged = () => { RefreshScreens(); _ = EnsureDebugLoadedAsync(); };
+        viewModel.CurrentDebugReadyChanged = () => _ = EnsureDebugLoadedAsync();
+        viewModel.DebugSourceAdopted = source =>
+        {
+            if (viewModel.IsCurrentDebugSource(source)) debugAutoPending = false;
+        };
         viewModel.NodesChanged = RebuildNodes;
         viewModel.NodeSelectionChanged = HighlightNode;
         viewModel.WallChanged = RefreshWall;
@@ -242,7 +247,7 @@ public partial class MainWindow : Window
         finally { captureInProgress = false; }
     }
 
-    private bool NeedsDebugAutoLoad() => !(ViewModel.Demo && !DebugAutomaticFixturePermitted) && !closing && !closeApproved && IsLoaded
+    private bool NeedsDebugAutoLoad() => !(ViewModel.Demo && !(DebugAutomaticFixturePermitted || ReconnectLoadingFixturePermitted)) && !closing && !closeApproved && IsLoaded
         && Equals((tabs?.SelectedItem as TabItem)?.Tag, "节点") && ViewModel.CurrentDevice?.Info.Online == true && ViewModel.Nodes.Count == 0;
 
     private Task EnsureDebugLoadedAsync()
@@ -336,6 +341,7 @@ public partial class MainWindow : Window
     public async Task RunSmokeAsync(string? screenshotPath = null)
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("启动验收仅允许显式演示模式");
+        await VerifyReconnectedDebugLoadingAsync();
         await VerifyCompletedDebugCacheAsync();
         await VerifyResponsiveScreenshotAsync();
         await VerifyResponsiveDebugAsync();

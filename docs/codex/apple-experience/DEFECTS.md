@@ -32,6 +32,7 @@
 | AP-026 | P1/截屏正文离线修复并独立通过 | 固定300右表令两390图像真实仅26宽，其余四尺寸原刷新按钮完整44命中检查失败；第一轮长坐标文本预算51.1767大于48 | [A06b2b报告](A06_SCREENSHOT_RESPONSIVE.md)：同对象宽双栏/窄画面色值、局部44及坐标列100最小预算；独立150/三桌面每10/630/257/10清理与旧11/16/49全套、六shell135，主仓150/1000全套/390shell135通过。原两轮红保留；非物理点击/DPI/Android、缓存/原生保存/在途裁剪认证 |
 | AP-027 | P1/已独立及主仓离线修复完成缓存 | 已完成图/节点没有身份戳，同row新Ready或重连仍保留旧检查；Catalog已t12/g2但旧row t11/g1仍真实导出旧PNG/JSON并显示完成 | [A06c1](A06_COMPLETED_CACHE.md)：原15红保留；首14/4经原断言七叶诊断确认为新夹具误预期，仅修意图/有效门禁合同，生产41E4不再改。最终独立150/三桌面各18/295/18清理及旧四套/六shell135，主仓150/完整18及旧套/390shell135通过；离线历史及PNG/JSON产物真实核验。AP028、同row自动首载和实机仍开放，不称Android越权或全历史追踪已验 |
 | AP-028 | P2/状态历史观察边界，待取证 | Catalog只存最新快照；VM未同步/未消费的Ready经Unknown/Unauthorized到Offline中间态可能无法从最终g+1区分，尚未实际运行该串联 | A06c1只承诺消费时Owner/Row/Catalog字段资格，不宣称全历史追踪；可见非Offline拒绝且清戳后不复活。完整目标后续验证中间态撤销需求和Catalog事件/版本合同，不扩大本地只读历史为新读取或输入许可 |
+| AP-029 | P1/已独立及主仓离线修复 | 同Current行新Ready后旧缓存正确撤下，但完整目录接纳不创建自动首载意图；有空闲也无Shot，真实传输/脚本阻塞时pending仍false | [A06c2](A06_RECONNECT_LOADING.md)原19=8PASS/11FAIL/19清理及r0两CS4014保留；首生产仅VM/Main30+/1-，新fixture仅显式discard+4ASCII，19动作/断言/等待不改。最终独立150/三桌面各19/289/19清理与旧五套/六shell135，主仓150/同19与原五套/390shell135通过；真实externalpending true→strict采纳false、旧在途payload拒绝及Close均核。仅完整VM接纳的自有Demo路径，不代表任意Info/Catalog-only、生产timer、Android/native保存/runtime热换或全目标通过 |
 
 ## 修复记录规则
 

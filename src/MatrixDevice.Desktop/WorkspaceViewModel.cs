@@ -31,6 +31,7 @@ public sealed class WorkspaceViewModel : ObservableObject
     private readonly Dictionary<DeviceRow, CompletedScreenshot> completedScreenshots = [];
     private CompletedScreenshot? completedDebugImage;
     private CompletedNodeTree? completedNodeTree;
+    private DebugSourceIdentity? observedCurrentDebugSource;
     private long debugPublicationRevision;
     private AndroidNode? nodeRoot;
     private NodeRow? selectedNode;
@@ -124,6 +125,8 @@ public sealed class WorkspaceViewModel : ObservableObject
     public AsyncCommand SaveSettingsCommand { get; }
     public Action? NodesChanged { get; set; }
     public Action? DeviceChanged { get; set; }
+    internal Action? CurrentDebugReadyChanged { get; set; }
+    internal Action<DebugSourceIdentity>? DebugSourceAdopted { get; set; }
     public Action? WallChanged { get; set; }
     public Action? NodeSelectionChanged { get; set; }
     public Func<string, string, bool> Confirm { get; set; } = (title, message) => MessageBox.Show(message, title, MessageBoxButton.OKCancel, MessageBoxImage.Warning) == MessageBoxResult.OK;
@@ -137,6 +140,7 @@ public sealed class WorkspaceViewModel : ObservableObject
             if (ReferenceEquals(currentDevice, value)) return;
             debugPublicationRevision++;
             Set(ref currentDevice, value);
+            observedCurrentDebugSource = SnapshotCurrentDebugSource();
             DeviceName = value?.Name ?? "";
             ShowCompletedScreenshot(value);
             ClearNodes();
@@ -260,6 +264,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         RefreshApiRows();
         RefreshDeviceView();
         if (demo && CurrentDevice is null) CurrentDevice = Devices.FirstOrDefault();
+        ObserveCurrentDebugReadyIdentity();
         Changed(nameof(HasActiveOperations));
     }
 
@@ -457,6 +462,9 @@ public sealed class WorkspaceViewModel : ObservableObject
             await RefreshGeometryAsync(publication, requireCurrent: true);
             RequireDebugPublication(publication);
             var identity = CaptureDebugSource(publication.Owner, row); source = identity;
+            RequireDebugPublication(publication);
+            observedCurrentDebugSource = identity;
+            DebugSourceAdopted?.Invoke(identity);
             var bytes = await publication.Owner.Backend.ScreenshotAsync(identity.Info.Serial);
             PublishScreenshotCache(identity, bytes);
             RequireDebugPublication(publication);
@@ -489,7 +497,7 @@ public sealed class WorkspaceViewModel : ObservableObject
 
     // Source caches follow device identity; the current inspection additionally follows its revision.
     private readonly record struct DebugPublicationContext(MatrixRuntime Owner, DeviceRow? Current, string? SourceSerial, long Revision);
-    private readonly record struct DebugSourceIdentity(MatrixRuntime Owner, DeviceRow Row, DeviceInfo Info);
+    internal readonly record struct DebugSourceIdentity(MatrixRuntime Owner, DeviceRow Row, DeviceInfo Info);
     private sealed record CompletedScreenshot(DebugSourceIdentity Source, BitmapSource Image, DateTimeOffset CapturedAt);
     private sealed record CompletedNodeTree(DebugSourceIdentity Source, AndroidNode Root);
     private sealed class DebugSourceExpiredException() : OperationCanceledException("设备身份或几何已变化，旧结果未发布。") { }
@@ -531,6 +539,22 @@ public sealed class WorkspaceViewModel : ObservableObject
     }
     private bool DebugSourceIsValid(DebugSourceIdentity source) => ReferenceEquals(runtime, source.Owner) && Devices.Contains(source.Row)
         && SameDebugIdentity(source.Row.Info, source.Info) && source.Owner.Devices.Snapshot.Any(info => SameDebugIdentity(info, source.Info));
+    internal bool IsCurrentDebugSource(DebugSourceIdentity source) => ReferenceEquals(CurrentDevice, source.Row) && DebugSourceIsValid(source);
+    private DebugSourceIdentity? SnapshotCurrentDebugSource()
+    {
+        if (CurrentDevice is not { } row) return null;
+        var source = new DebugSourceIdentity(runtime, row, row.Info);
+        return DebugSourceIsValid(source) ? source : null;
+    }
+    private void ObserveCurrentDebugReadyIdentity()
+    {
+        if (SnapshotCurrentDebugSource() is not { } source) return;
+        var previous = observedCurrentDebugSource;
+        observedCurrentDebugSource = source;
+        if (previous is { } observed && ReferenceEquals(observed.Owner, source.Owner) && ReferenceEquals(observed.Row, source.Row)
+            && SameDebugIdentity(observed.Info, source.Info)) return;
+        CurrentDebugReadyChanged?.Invoke();
+    }
     private static bool SameDebugIdentity(DeviceInfo actual, DeviceInfo expected) => actual.Online && expected.Online && actual.Serial == expected.Serial
         && actual.Generation == expected.Generation && actual.TransportId == expected.TransportId && actual.Width == expected.Width
         && actual.Height == expected.Height && actual.Rotation == expected.Rotation;

@@ -20,7 +20,23 @@ A02主仓149/149（51.17秒）和最终1000×700界面通过；独立verifier149
 
 ## 当前状态与下一步
 
-### 最新执行：A06c1离线验收与交付入口
+### 最新执行：A06c2离线验收完成，交付门禁
+
+本段优先于所有下方历史流程。A06c1已实际commit/push `90815e8cd05a6b2b4574dd7ca8213da0f8a41835`，远端一致/test49e4710不变；实际交付记录在根`artifacts/cache-root/push-complete-r1.json`，不重做旧交付。
+
+新三树`apple-reconnect-loading`、`-tests`、`-verifier`均基于90815e8。轻量合同与全部本阶段证据索引见[A06_RECONNECT_LOADING](A06_RECONNECT_LOADING.md)。新19例r0 B0E4...63D1/Main仅测试接线0714...E017已双静审；原五套不改。首次独立Build进程exit0/73.494秒，正式150/150 51.11秒，实际2条新fixture CS4014、0错误；同EADD...ABB2 DLL首1000 childexit1/30.373秒，19=8PASS11FAIL19cleanup、208checks1826events、precondition0。原报告4FE2DE27...209A、摘要AC4D9312...37F6，root实读19及关键分量。无新Ready首载pending的产品缺口已复现，AP029开放。原五套未到NOT-RUN，不以第19基线前置绿代替新ack证明。
+
+基线两exec已结束、自有0/126源前后同/旧五套及实际配置E4E33...BB05F0未变。生产首轮r1只VM/Main共30+/1-，累计F950B28D...50EB、VM C288EEE0...75F1/纯生产Main9C4F...3DDB，双静审通过；新fixture r1 F1AC3257...4228仅比r0多4ASCII显式discard，不await或改19合同。hig已机械导入并与root独立组合计算核最终Main F243E54C...F802/46879B，VM C288、fixtureF1AC/旧五套/实际配置同。同步严格source ack消费已履行pending，不改guards/revision/Core或默认Demo。
+
+独立矩阵已完成并归锁：150/50.92秒/0警告错误，DLL8EED24D1...E83D；三完整窗口首次exit0/93.798、94.062、94.575秒，每19/289/19清理，事件实际2214/2214/2212；旧18/10/11/16/49全套、外观209/Native25/筛选73+matrix32/文案36/12idle及六shell135全过。第19三次externalpending true→strict g2/t12采纳false、inflight旧payload未发布/最大1、两段几何/实际Close实读；outer.colors仍0，不填外层取色成功。20份126源快照/旧五套/实际配置同，全部exec结束/owned0，摘要8609A9E0...6470E。不要重跑旧矩阵或误以为62667/6787等会话仍在运行。
+
+根已机械导入DE0+F950，VM C288/Main F243/新fixture F1AC精确；new初17F847...CDB2仅CRLF差异全文证明后复制冻LF，旧5原LF和配置同，import记录在artifacts/reconnect-root。首次主仓150/51.05秒/实际0警告错误，Build进程71.580秒；一次1000完整exit0/93.348秒同新19/289/2214/19清理与旧五套/12idle；390shell exit0/135/2.528秒。第19true→false/时间序、旧payload拒绝、源和任务清理原分量已核，root目视1000及390。根摘要BE91B9A5...3E381，DLL FB4B1F8C...703D7；六份126源前后同、旧五套及实际配置同。根67844/97085及shell全部实际终结、自有0；Build/GUI锁root空闲，不凭下方历史状态重跑。
+
+当前只剩本阶段交付：10份源码/正式文档最终独立审查→冻raw10→仅快照helperF36ABAB4...BA6C打包/全源ZIP核字节/回写3清单→精确stage13→独立audit60A9E46E...2C537→单独commit/push原私有功能分支。根代表执行器3C203BB1...F019、helper/audit均已root实读静审，打包与audit现在仍无执行批准。实际结果须读tests树artifacts/reconnect-loading-package及根artifacts/reconnect-root/push-complete-r1.json，并核Git/远端；不要凭本段流程推断已push，也不要Git已含且远端一致时重做交付。两用户PNG/实际配置/依赖/本轮原始证据排除，AP021旧tracked材料保留不称隐私净化，不合并发布或清worktree。
+
+完整目标active，A06c2运行验收已过但当前交付未做。下一项先取证原生“保存裁剪”开框期间合法晚到帧导致crop清空、可能退化完整新图的静态候选；VM写盘await前已冻结bytes不是缺口。先读合同和真红，优先保留原保存意图，不因更小易绿就取消合法保存；JSON原生框与未完成拖拽/失捕另案。19自有窗口固定1000，不冒称逐例六尺寸；outer.colors/nodes实际0仍保留。AP019/020/023/028、A07..A12、真实专用1/2及最终30分钟继续开放，不启动普通程序、原实例0、ADB或改本机配置，不删除worktree/用户PNG。
+
+### 以下为A06c1已结束的验收与交付过程
 
 本段优先于下方所有历史执行记录。上一goal轮针对最新用户四项列表请求完成实际主仓150/1000完整/390设备889复验，是有效证据进展；没有重复改源码。新的goal继续完整目标，恢复A06c1；原c7b6d24 HEAD/test备份未动，本机配置仍E4E33A8...BB05F0，不导入未验修复。
 
