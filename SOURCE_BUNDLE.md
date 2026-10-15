@@ -3848,6 +3848,12 @@ public interface IDeviceBackend : IAsyncDisposable
 
 public sealed record AppSettings
 {
+    public const double MinimumWindowWidth = 390;
+    public const double MinimumWindowHeight = 640;
+    public const double MaximumWindowWidth = 7680;
+    public const double MaximumWindowHeight = 4320;
+    public const double DefaultWindowWidth = 1440;
+    public const double DefaultWindowHeight = 900;
     public string LdConsolePath { get; init; } = "";
     public Dictionary<int, string> LdSerialBindings { get; init; } = [];
     public string AdbPath { get; init; } = "";
@@ -3873,8 +3879,8 @@ public sealed record AppSettings
     public bool ForceHardwareDecode { get; init; }
     public bool ShowFps { get; init; }
     public string Language { get; init; } = "zh-CN";
-    public double WindowWidth { get; init; } = 1440;
-    public double WindowHeight { get; init; } = 900;
+    public double WindowWidth { get; init; } = DefaultWindowWidth;
+    public double WindowHeight { get; init; } = DefaultWindowHeight;
     public string FileRoot { get; init; } = "/sdcard/MatrixExchange";
     public int CommandTimeoutSeconds { get; init; } = 30;
 }
@@ -4180,14 +4186,15 @@ public partial class App : Application
         try
         {
             var smoke = e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
+            var shellVerification = e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase);
             var liveVerification = e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase);
             var unifiedVerification = e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase);
             var oneClickVerification = e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase);
             var monitorVerification = e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase);
-            if (new[] { smoke, liveVerification, unifiedVerification, oneClickVerification, monitorVerification }.Count(enabled => enabled) > 1)
+            if (new[] { smoke, shellVerification, liveVerification, unifiedVerification, oneClickVerification, monitorVerification }.Count(enabled => enabled) > 1)
                 throw new ArgumentException("一次只能选择一种自动验收模式。");
             string? unifiedCandidate = null;
-            var demo = smoke || e.Args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
+            var demo = smoke || shellVerification || e.Args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
             var dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MatrixDevice.Reconstructed", demo ? "demo" : "data");
             var directoryIndex = Array.FindIndex(e.Args, arg => arg.Equals("--data-dir", StringComparison.OrdinalIgnoreCase));
             if (directoryIndex >= 0)
@@ -4205,12 +4212,12 @@ public partial class App : Application
                 if (ldConsoleIndex + 1 >= e.Args.Length || e.Args[ldConsoleIndex + 1].StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("--ldconsole 后必须提供雷电命令行程序的完整路径");
                 settings = settings with { LdConsolePath = Path.GetFullPath(e.Args[ldConsoleIndex + 1]) };
             }
-            if (smoke)
+            if (smoke || shellVerification)
             {
                 settings = settings with { WindowWidth = 1440, WindowHeight = 900, AutoStartApi = false, AutoConnect = false };
                 var widthIndex = Array.FindIndex(e.Args, arg => arg == "--width"); var heightIndex = Array.FindIndex(e.Args, arg => arg == "--height");
-                if (widthIndex >= 0 && widthIndex + 1 < e.Args.Length && double.TryParse(e.Args[widthIndex + 1], out var width)) settings = settings with { WindowWidth = Math.Clamp(width, 1000, 2400) };
-                if (heightIndex >= 0 && heightIndex + 1 < e.Args.Length && double.TryParse(e.Args[heightIndex + 1], out var height)) settings = settings with { WindowHeight = Math.Clamp(height, 700, 1800) };
+                if (widthIndex >= 0 && widthIndex + 1 < e.Args.Length && double.TryParse(e.Args[widthIndex + 1], out var width)) settings = settings with { WindowWidth = Math.Clamp(width, AppSettings.MinimumWindowWidth, AppSettings.MaximumWindowWidth) };
+                if (heightIndex >= 0 && heightIndex + 1 < e.Args.Length && double.TryParse(e.Args[heightIndex + 1], out var height)) settings = settings with { WindowHeight = Math.Clamp(height, AppSettings.MinimumWindowHeight, AppSettings.MaximumWindowHeight) };
             }
             if (unifiedVerification)
             {
@@ -4238,7 +4245,11 @@ public partial class App : Application
             await window.RecoverBackgroundWindowsAsync();
             window.UpdateUnifiedDirectory();
             if (runtime.Settings.AutoStartApi) await window.ViewModel.StartApisAsync();
-            if (e.Args.Contains("--open-monitor", StringComparer.OrdinalIgnoreCase) && !smoke && !liveVerification && !unifiedVerification && !oneClickVerification && !monitorVerification) window.NavigateTo("实时监控");
+            if (e.Args.Contains("--open-monitor", StringComparer.OrdinalIgnoreCase) && !smoke && !shellVerification && !liveVerification && !unifiedVerification && !oneClickVerification && !monitorVerification) window.NavigateTo("实时监控");
+            if (shellVerification)
+            {
+                await window.RunResponsiveShellAcceptanceAsync(e.Args); window.Close();
+            }
             if (smoke)
             {
                 var screenshotIndex = Array.FindIndex(e.Args, arg => arg.Equals("--screenshot", StringComparison.OrdinalIgnoreCase));
@@ -4267,7 +4278,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
+            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
             else MessageBox.Show(UiErrorPresentation.Describe(ex), "矩阵设备启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             try
@@ -4674,7 +4685,7 @@ public sealed class StateCaptionConverter : IMultiValueConverter
 ## src/MatrixDevice.Desktop/MainWindow.xaml
 
 ```xml
-<Window x:Class="MatrixDevice.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="矩阵设备" Width="1440" Height="900" MinWidth="1000" MinHeight="700" WindowStartupLocation="CenterScreen">
+<Window x:Class="MatrixDevice.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:core="clr-namespace:MatrixDevice.Core;assembly=MatrixDevice.Core" Title="矩阵设备" Width="1440" Height="900" MinWidth="{x:Static core:AppSettings.MinimumWindowWidth}" MinHeight="{x:Static core:AppSettings.MinimumWindowHeight}" WindowStartupLocation="CenterScreen">
   <Grid x:Name="Shell" />
 </Window>
 
@@ -4734,6 +4745,7 @@ public partial class MainWindow : Window
     private Task? captureOperation;
     private bool debugAutoLoading;
     private bool debugAutoPending;
+    private Action<Window>? responsiveOwnedDialogFixture;
     public WorkspaceViewModel ViewModel { get; }
 
     public MainWindow(WorkspaceViewModel viewModel)
@@ -4753,6 +4765,9 @@ public partial class MainWindow : Window
         viewModel.NodeSelectionChanged = HighlightNode;
         viewModel.WallChanged = RefreshWall;
         BuildShell();
+        SizeChanged += (_, _) => ApplyResponsiveWorkspace();
+        Loaded += (_, _) => ApplyResponsiveWorkspace();
+        PreviewKeyDown += (_, args) => { if (args.Key == Key.Escape && navigationDrawerOpen) { CloseNavigationDrawer(); args.Handled = true; } };
         LocalizationService.Current.LanguageChanged += OnLanguageChanged;
         captureTimer = new DispatcherTimerAdapter(TimeSpan.FromSeconds(5), CaptureTickAsync);
         directoryTimer = new DispatcherTimerAdapter(TimeSpan.FromSeconds(5), UpdateDeviceDirectoryAsync);
@@ -4814,7 +4829,7 @@ public partial class MainWindow : Window
         tabs.Items.Add(tab);
     }
     private static DockPanel Page() => new() { Margin = new Thickness(14), LastChildFill = true };
-    private static WrapPanel Toolbar() => new() { Orientation = Orientation.Horizontal };
+    private static WrapPanel Toolbar() => ResponsiveLayout.Toolbar();
     private static TextBlock Label(string text)
     {
         var label = new TextBlock { FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 6, 0, 7) };
@@ -4827,7 +4842,7 @@ public partial class MainWindow : Window
     private static CheckBox Check(string text, string binding) { var checkbox = new CheckBox(); LocalizationService.Bind(checkbox, ContentControl.ContentProperty, text); LocalizationService.Bind(checkbox, System.Windows.Automation.AutomationProperties.NameProperty, text); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(binding)); return checkbox; }
     private static FrameworkElement Field(string label, FrameworkElement control, double labelWidth = 155)
     {
-        var row = new Grid { Margin = new Thickness(0, 0, 0, 9) }; row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(labelWidth) }); row.ColumnDefinitions.Add(new ColumnDefinition()); var text = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap }; LocalizationService.Bind(text, TextBlock.TextProperty, label); row.Children.Add(text); if (control is Control) LocalizationService.Bind(control, System.Windows.Automation.AutomationProperties.NameProperty, label); Grid.SetColumn(control, 1); row.Children.Add(control); return row;
+        return ResponsiveLayout.Field(label, control, labelWidth);
     }
     private static Button Button(string glyph, string title, ICommand command)
     {
@@ -4958,7 +4973,14 @@ public partial class MainWindow : Window
 
     private void ShowText(string title, string text)
     {
-        var window = new Window { Owner = this, Title = title, Width = 700, Height = 500, Content = new TextBox { Text = text, IsReadOnly = true, AcceptsReturn = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontFamily = new FontFamily("Consolas"), Padding = new Thickness(12) }, WindowStartupLocation = WindowStartupLocation.CenterOwner }; window.Show();
+        var window = new Window { Owner = this, Title = title, Width = 700, Height = 500, Content = new TextBox { Text = text, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontFamily = new FontFamily("Consolas"), Padding = new Thickness(12) } }; ResponsiveLayout.FitOwnedWindow(window, this, 700, 500); window.Show();
+    }
+
+    private bool? ShowOwnedDialog(Window dialog, double preferredWidth, double preferredHeight)
+    {
+        ResponsiveLayout.FitOwnedWindow(dialog, this, preferredWidth, preferredHeight);
+        if (ViewModel.Demo) responsiveOwnedDialogFixture?.Invoke(dialog);
+        return dialog.ShowDialog();
     }
 
     public async Task RunSmokeAsync(string? screenshotPath = null)
@@ -5721,6 +5743,150 @@ public sealed class TransferRow : ObservableObject
         try { return System.IO.File.Exists(path) ? $"{new System.IO.FileInfo(path).Length / 1024d:F1} KiB" : "待下载"; }
         catch (Exception) { return "未核验"; }
     }
+}
+
+```
+
+## src/MatrixDevice.Desktop/ResponsiveLayout.cs
+
+```csharp
+using System.Windows;
+using System.Windows.Controls;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Windows.Interop;
+using System.Windows.Media;
+
+namespace MatrixDevice.Desktop;
+
+internal static class ResponsiveLayout
+{
+    private static readonly ConditionalWeakTable<Window, OwnedWindowFit> ownedWindows = new();
+    public static FrameworkElement Field(string label, FrameworkElement input, double labelWidth)
+    {
+        var row = new Grid { Margin = new Thickness(0, 0, 0, 9) };
+        row.ColumnDefinitions.Add(new() { Width = new GridLength(labelWidth) }); row.ColumnDefinitions.Add(new());
+        row.RowDefinitions.Add(new() { Height = GridLength.Auto }); row.RowDefinitions.Add(new() { Height = new GridLength(0) });
+        var caption = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
+        LocalizationService.Bind(caption, TextBlock.TextProperty, label); row.Children.Add(caption);
+        if (input is Control) LocalizationService.Bind(input, System.Windows.Automation.AutomationProperties.NameProperty, label);
+        Grid.SetColumn(input, 1); row.Children.Add(input);
+        bool? stacked = null;
+        void Arrange()
+        {
+            if (row.ActualWidth <= 0 || stacked == (row.ActualWidth < 460)) return;
+            stacked = row.ActualWidth < 460;
+            row.ColumnDefinitions[0].Width = new GridLength(stacked == true ? 0 : labelWidth);
+            row.RowDefinitions[1].Height = stacked == true ? GridLength.Auto : new GridLength(0);
+            Grid.SetColumnSpan(caption, stacked == true ? 2 : 1);
+            Grid.SetRow(input, stacked == true ? 1 : 0); Grid.SetColumn(input, stacked == true ? 0 : 1); Grid.SetColumnSpan(input, stacked == true ? 2 : 1);
+            caption.Margin = stacked == true ? new Thickness(0, 0, 0, 6) : new Thickness(0);
+        }
+        row.SizeChanged += (_, _) => Arrange(); row.Loaded += (_, _) => Arrange();
+        return row;
+    }
+
+    public static WrapPanel Toolbar()
+    {
+        var panel = new WrapPanel { Orientation = Orientation.Horizontal };
+        var originalCaps = new Dictionary<FrameworkElement, double>();
+        void Constrain()
+        {
+            if (panel.ActualWidth <= 0) return;
+            foreach (var child in panel.Children.OfType<FrameworkElement>())
+            {
+                if (!originalCaps.TryGetValue(child, out var cap)) originalCaps[child] = cap = child.MaxWidth;
+                child.MaxWidth = Math.Max(child.MinWidth, Math.Min(cap, Math.Max(0, panel.ActualWidth - child.Margin.Left - child.Margin.Right)));
+            }
+        }
+        panel.SizeChanged += (_, _) => Constrain(); panel.Loaded += (_, _) => Constrain();
+        return panel;
+    }
+
+    public static void FitOwnedWindow(Window window, Window owner, double preferredWidth, double preferredHeight)
+    {
+        var fit = ownedWindows.GetValue(window, _ => new(window, owner));
+        fit.PreferredWidth = preferredWidth; fit.PreferredHeight = preferredHeight; fit.Apply();
+    }
+    internal static string? FollowFailure(Window window) => ownedWindows.TryGetValue(window, out var fit) ? fit.LastFollowFailure : null;
+
+    internal static Rect OwnerWorkArea(Window owner)
+    {
+        var ownerWidth = owner.ActualWidth > 0 ? owner.ActualWidth : owner.Width;
+        var ownerHeight = owner.ActualHeight > 0 ? owner.ActualHeight : owner.Height;
+        var handle = new WindowInteropHelper(owner).Handle;
+        var monitor = MonitorFromWindow(handle, 2); var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+        if (handle != IntPtr.Zero && monitor != IntPtr.Zero && GetMonitorInfo(monitor, ref info) && GetWindowRect(handle, out var bounds))
+        {
+            var dpi = VisualTreeHelper.GetDpi(owner);
+            return new Rect(owner.Left + (info.Work.Left - bounds.Left) / dpi.DpiScaleX, owner.Top + (info.Work.Top - bounds.Top) / dpi.DpiScaleY,
+                (info.Work.Right - info.Work.Left) / dpi.DpiScaleX, (info.Work.Bottom - info.Work.Top) / dpi.DpiScaleY);
+        }
+        return new Rect(owner.Left, owner.Top, ownerWidth, ownerHeight);
+    }
+
+    internal readonly record struct OwnedBounds(Rect Bounds, double MinimumWidth, double MinimumHeight, double MaximumWidth, double MaximumHeight);
+    internal static OwnedBounds CalculateOwnedBounds(Rect owner, Rect work, double preferredWidth, double preferredHeight, double minimumWidth, double minimumHeight)
+    {
+        static bool Valid(Rect rectangle) => !rectangle.IsEmpty && double.IsFinite(rectangle.X) && double.IsFinite(rectangle.Y) && double.IsFinite(rectangle.Width) && double.IsFinite(rectangle.Height) && rectangle.Width > 0 && rectangle.Height > 0;
+        if (!Valid(owner) || !Valid(work) || !double.IsFinite(preferredWidth) || !double.IsFinite(preferredHeight) || preferredWidth <= 0 || preferredHeight <= 0 || !double.IsFinite(minimumWidth) || !double.IsFinite(minimumHeight) || minimumWidth < 0 || minimumHeight < 0)
+            throw new InvalidOperationException($"弹窗边界无效：owner={owner}; work={work}; preferred={preferredWidth}×{preferredHeight}。");
+        var available = Rect.Intersect(owner, work);
+        if (available.IsEmpty || available.Width <= 24 || available.Height <= 24) throw new InvalidOperationException("主窗口没有足够的可见工作区，无法安全显示弹窗。");
+        var maxWidth = available.Width - 24; var maxHeight = available.Height - 24;
+        var minWidth = Math.Min(minimumWidth, maxWidth); var minHeight = Math.Min(minimumHeight, maxHeight);
+        var width = Math.Clamp(preferredWidth, minWidth, maxWidth); var height = Math.Clamp(preferredHeight, minHeight, maxHeight);
+        return new(new Rect(Math.Clamp(owner.X + (owner.Width - width) / 2, available.Left + 12, available.Right - width - 12),
+            Math.Clamp(owner.Y + (owner.Height - height) / 2, available.Top + 12, available.Bottom - height - 12), width, height), minWidth, minHeight, maxWidth, maxHeight);
+    }
+
+    private sealed class OwnedWindowFit
+    {
+        private readonly Window window, owner;
+        private readonly double minimumWidth, minimumHeight;
+        public double PreferredWidth { get; set; }
+        public double PreferredHeight { get; set; }
+        public string? LastFollowFailure { get; private set; }
+        public OwnedWindowFit(Window window, Window owner)
+        {
+            this.window = window; this.owner = owner; minimumWidth = window.MinWidth; minimumHeight = window.MinHeight;
+            owner.SizeChanged += OwnerChanged; owner.LocationChanged += OwnerMoved;
+            window.Closed += (_, _) => { owner.SizeChanged -= OwnerChanged; owner.LocationChanged -= OwnerMoved; ownedWindows.Remove(window); };
+        }
+        private void OwnerChanged(object sender, SizeChangedEventArgs args) => Follow();
+        private void OwnerMoved(object? sender, EventArgs args) => Follow();
+        private void Follow()
+        {
+            if (!window.IsVisible) return;
+            try { Apply(); LastFollowFailure = null; }
+            catch (InvalidOperationException exception)
+            {
+                // Moving the owner outside a work area must not discard the last valid child bounds.
+                if (LastFollowFailure != exception.Message) System.Diagnostics.Trace.TraceWarning("弹窗跟随暂停：{0}；{1}", window.Title, exception.Message);
+                LastFollowFailure = exception.Message;
+            }
+        }
+        public void Apply()
+        {
+            if (!owner.IsLoaded) throw new InvalidOperationException("主窗口尚未完成布局，无法计算弹窗边界。");
+            var fit = CalculateOwnedBounds(new Rect(owner.Left, owner.Top, owner.ActualWidth, owner.ActualHeight), OwnerWorkArea(owner), PreferredWidth, PreferredHeight, minimumWidth, minimumHeight);
+            window.MinWidth = Math.Min(window.MinWidth, fit.MinimumWidth); window.MinHeight = Math.Min(window.MinHeight, fit.MinimumHeight);
+            window.MaxWidth = fit.MaximumWidth; window.MaxHeight = fit.MaximumHeight;
+            window.MinWidth = fit.MinimumWidth; window.MinHeight = fit.MinimumHeight; window.SizeToContent = SizeToContent.Manual;
+            window.Width = fit.Bounds.Width; window.Height = fit.Bounds.Height;
+            window.WindowStartupLocation = WindowStartupLocation.Manual;
+            window.Left = fit.Bounds.Left; window.Top = fit.Bounds.Top;
+        }
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MonitorInfo { public int Size; public NativeRect Monitor, Work; public int Flags; }
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
+    [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
+    [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(IntPtr window, out NativeRect bounds);
 }
 
 ```
@@ -6770,9 +6936,51 @@ public partial class MainWindow
             var primaryContrast = AppearanceColors(primary.Foreground).SelectMany(front => AppearanceColors(primary.Background).Select(back => AppearanceContrast(AppearanceOverlay(front, primaryFeedback.Opacity), AppearanceOverlay(back, primaryFeedback.Opacity)))).Min();
             contrast.Add(new { name = "主要按钮白色反馈层合成", ratio = primaryContrast, minimum = 4.5, overlayOpacity = primaryFeedback.Opacity });
             Check(primaryContrast >= 4.5, "反馈层合成后的主要按钮文字对比度");
-            toggle.Focus(); Keyboard.Focus(toggle); await Render(); await Task.Delay(170);
             var toggleFeedback = (Border)toggle.Template.FindName("FocusFeedback", toggle);
-            Check(toggle.IsKeyboardFocused && toggleFeedback.HasAnimatedProperties && toggleFeedback.Opacity > 0, "实际Toggle模板局部反馈运行");
+            var toggleFocusWatch = System.Diagnostics.Stopwatch.StartNew();
+            var toggleFocusStates = new List<object>();
+            void RecordToggleFocus(string phase, TimeSpan? renderingTime = null)
+            {
+                toggleFocusStates.Add(new
+                {
+                    phase, elapsedMilliseconds = toggleFocusWatch.Elapsed.TotalMilliseconds,
+                    active = IsActive, enabled = toggle.IsEnabled, visible = toggle.IsVisible,
+                    keyboardFocused = toggle.IsKeyboardFocused, keyboardFocusWithin = toggle.IsKeyboardFocusWithin,
+                    focusedControl = Keyboard.FocusedElement?.GetType().FullName,
+                    feedbackOpacity = toggleFeedback.Opacity, feedbackAnimated = toggleFeedback.HasAnimatedProperties,
+                    applicationMotionEnabled = MotionPreferences.Current.AnimationsEnabled,
+                    systemMotionEnabled = SystemParameters.ClientAreaAnimation, renderingTime
+                });
+                File.WriteAllText(Path.Combine(ViewModel.DataDirectory, "appearance-toggle-focus.json"), JsonSerializer.Serialize(new
+                {
+                    scope = "Toggle focus prerequisite and one animation observation; no animation retries or OS preference changes", states = toggleFocusStates
+                }, JsonDefaults.Options));
+            }
+            RecordToggleFocus("before-focus");
+            do
+            {
+                Activate(); toggle.Focus(); Keyboard.Focus(toggle); await Render();
+                if (IsActive && toggle.IsEnabled && toggle.IsKeyboardFocused && toggle.IsKeyboardFocusWithin) break;
+                await Task.Delay(20);
+            } while (toggleFocusWatch.Elapsed < TimeSpan.FromSeconds(1));
+            RecordToggleFocus("focus-prerequisite");
+            Check(IsActive && toggle.IsEnabled && toggle.IsKeyboardFocused && toggle.IsKeyboardFocusWithin,
+                $"Toggle真实焦点前置成立（active={IsActive}; enabled={toggle.IsEnabled}; focus={toggle.IsKeyboardFocused}; within={toggle.IsKeyboardFocusWithin}; elapsedMs={toggleFocusWatch.ElapsedMilliseconds}）");
+            var rendering = new TaskCompletionSource<TimeSpan>(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnToggleRendering(object? sender, EventArgs args) { if (args is RenderingEventArgs frame) rendering.TrySetResult(frame.RenderingTime); }
+            CompositionTarget.Rendering += OnToggleRendering;
+            try
+            {
+                toggle.InvalidateVisual();
+                var completed = await Task.WhenAny(rendering.Task, Task.Delay(500));
+                RecordToggleFocus("render-frame", completed == rendering.Task ? await rendering.Task : null);
+                Check(completed == rendering.Task, "Toggle焦点后收到真实渲染帧（500ms有界）");
+            }
+            finally { CompositionTarget.Rendering -= OnToggleRendering; }
+            await Task.Delay(170); await Render();
+            RecordToggleFocus("animation-observation");
+            Check(toggle.IsKeyboardFocused && toggleFeedback.HasAnimatedProperties && toggleFeedback.Opacity > 0,
+                $"实际Toggle模板局部反馈运行（active={IsActive}; enabled={toggle.IsEnabled}; focus={toggle.IsKeyboardFocused}; within={toggle.IsKeyboardFocusWithin}; opacity={toggleFeedback.Opacity}; animated={toggleFeedback.HasAnimatedProperties}; appMotion={MotionPreferences.Current.AnimationsEnabled}; systemMotion={SystemParameters.ClientAreaAnimation}; elapsedMs={toggleFocusWatch.ElapsedMilliseconds}）");
             MotionPreferences.Current.SetFixturePreference(false); await Render();
             Check(!toggleFeedback.HasAnimatedProperties && toggleFeedback.Opacity == 0 && popup.PopupAnimation == PopupAnimation.None, "减少动画同时移除Toggle与实际Popup反馈");
             MotionPreferences.Current.SetFixturePreference(true); await Render();
@@ -7251,7 +7459,7 @@ public partial class MainWindow
         var panel = new DockPanel { Margin = new Thickness(16) }; var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
         var cancel = new Button { Content = "取消", IsCancel = true, MinWidth = 78 }; var accept = new Button { Content = "确认执行", IsDefault = true, MinWidth = 92 };
         accept.Click += (_, _) => dialog.DialogResult = true; buttons.Children.Add(cancel); buttons.Children.Add(accept); DockPanel.SetDock(buttons, Dock.Bottom); panel.Children.Add(buttons);
-        panel.Children.Add(new TextBox { Text = message, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, AcceptsReturn = true }); dialog.Content = panel; return dialog.ShowDialog() == true;
+        panel.Children.Add(new TextBox { Text = message, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, AcceptsReturn = true }); dialog.Content = panel; return ShowOwnedDialog(dialog, 560, 460) == true;
     }
     private static string ApplicationOperationCaption(ApplicationOperation operation) => operation switch { ApplicationOperation.List => "读取应用", ApplicationOperation.Install => "安装应用", ApplicationOperation.Uninstall => "卸载应用", ApplicationOperation.Start => "启动应用", ApplicationOperation.Stop => "停止应用", _ => "清除数据" };
     private static string ApplicationBatchSummary(IEnumerable<ApplicationTaskRow> rows) => $"进度 {rows.Count(row => row.Terminal)}/{rows.Count()} · 已完成 {rows.Count(row => row.ResultState == ApplicationTaskState.Succeeded)} · 安装命令完成（包名未核验）{rows.Count(row => row.ResultState == ApplicationTaskState.CompletedUnverified)} · 失败 {rows.Count(row => row.ResultState == ApplicationTaskState.Failed)} · 取消 {rows.Count(row => row.ResultState == ApplicationTaskState.Cancelled)}";
@@ -9130,9 +9338,10 @@ public partial class MainWindow
             if (process.MainWindowHandle == IntPtr.Zero) throw new InvalidOperationException("投屏窗口尚未出现");
             await VerifyMainScreenIdentityAsync(target);
             RequireScrcpySession(target, session);
+            var window = new Window { Owner = this, Title = "投屏 · " + target.Serial, Width = 600, Height = 850, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            ResponsiveLayout.FitOwnedWindow(window, this, 600, 850);
             var host = new NativeWindowHost(process, System.IO.Path.Combine(ViewModel.DataDirectory, "window-recovery"));
-            nativeHosts.Add(host);
-            var window = new Window { Owner = this, Title = "投屏 · " + target.Serial, Width = 600, Height = 850, Content = host, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            window.Content = host; nativeHosts.Add(host);
             window.Closing += (_, args) => { try { host.Restore(); nativeHosts.Remove(host); } catch (Exception ex) { args.Cancel = true; MessageBox.Show(window, ViewModel.PresentError(ex), "窗口恢复失败", MessageBoxButton.OK, MessageBoxImage.Error); } };
             window.Show(); target.Row.ScreenState = "已嵌入自有 scrcpy 窗口";
         });
@@ -9321,6 +9530,269 @@ public sealed class ResponsiveColumnsConverter : IMultiValueConverter
         return Math.Max(1, Math.Min(preferred, (int)Math.Floor(width / 135)));
     }
     public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture) => throw new NotSupportedException();
+}
+
+```
+
+## src/MatrixDevice.Desktop/Views/ResponsiveShellSmoke.cs
+
+```csharp
+using System.IO;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Threading;
+using MatrixDevice.Core;
+using MatrixDevice.Features;
+using MatrixDevice.Host;
+
+namespace MatrixDevice.Desktop;
+
+public partial class MainWindow
+{
+    internal async Task RunResponsiveShellAcceptanceAsync(string[] args)
+    {
+        if (!ViewModel.Demo) throw new InvalidOperationException("共享壳层验收仅限演示工作区。");
+        string? Argument(string flag) { var index = Array.IndexOf(args, flag); return index < 0 ? null : args[index + 1]; }
+        double Requested(string flag, double fallback) => Argument(flag) is string value ? double.Parse(value, System.Globalization.CultureInfo.InvariantCulture) : fallback;
+        var requestedWidth = Requested("--width", 1440); var requestedHeight = Requested("--height", 900);
+        var screenshot = Argument("--screenshot"); var checks = new List<string>(); var geometries = new List<object>(); var breakpoints = new List<object>(); var fieldStates = new List<object>();
+        void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); checks.Add(message); }
+        async Task Settle()
+        {
+            await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.ContextIdle);
+            await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Render);
+            await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.ApplicationIdle);
+        }
+        async Task Resize(double width, double height) { Width = width; Height = height; await Settle(); Check(ActualWidth == width && ActualHeight == height, $"实际外窗 {width}×{height}"); }
+        static Rect In(FrameworkElement element, FrameworkElement surface) => element.TransformToAncestor(surface).TransformBounds(new Rect(new Point(), element.RenderSize));
+        static bool VisibleInside(FrameworkElement element, FrameworkElement surface)
+        {
+            var bounds = In(element, surface);
+            return element.IsVisible && bounds.Width > 0 && bounds.Height > 0 && bounds.Left >= -1 && bounds.Top >= -1 && bounds.Right <= surface.ActualWidth + 1 && bounds.Bottom <= surface.ActualHeight + 1;
+        }
+        void Click(ButtonBase button) { Check(button.IsEnabled && button.IsVisible, "可点击：" + AutomationProperties.GetName(button)); button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent)); }
+        void Escape(UIElement source)
+        {
+            var presentation = PresentationSource.FromVisual(source) ?? throw new InvalidOperationException("键盘测试对象没有显示源。");
+            source.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, presentation, Environment.TickCount, Key.Escape) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+        }
+        void Capture(string suffix)
+        {
+            if (screenshot is null) return;
+            var path = Path.Combine(Path.GetDirectoryName(screenshot)!, Path.GetFileNameWithoutExtension(screenshot) + suffix + ".png");
+            SaveRender(path);
+        }
+
+        await Settle(); Activate();
+        Check(IsLoaded && IsVisible && PresentationSource.FromVisual(this) is not null && new WindowInteropHelper(this).Handle != IntPtr.Zero, "已显示真实 WPF/HWND 窗口");
+        Check(ActualWidth == requestedWidth && ActualHeight == requestedHeight, $"原始请求 {requestedWidth}×{requestedHeight} 与实际外窗一致");
+        foreach (var (width, height) in new[] { (390, 640), (390, 844), (768, 1024) })
+        {
+            var applied = new SettingsEditor(new AppSettings()) { WindowWidth = width, WindowHeight = height }.ToSettings();
+            var storePath = Path.Combine(ViewModel.DataDirectory, $"geometry-{width}-{height}", "AppConfig.json");
+            var store = new SettingsStore(storePath); store.Load(); store.Save(applied);
+            var loaded = new SettingsStore(storePath).Load();
+            Check(loaded.WindowWidth == width && loaded.WindowHeight == height, $"设置 Apply/Save/新 Store Load 保留 {width}×{height}");
+        }
+        foreach (var bad in new[] { double.NaN, double.PositiveInfinity, 389d, 7681d })
+        {
+            var rejected = false; try { _ = new SettingsEditor(new AppSettings()) { WindowWidth = bad }.ToSettings(); } catch (InvalidOperationException) { rejected = true; }
+            Check(rejected, "设置拒绝非法宽度：" + bad);
+        }
+        var main = ViewModel.MainDevice; var current = ViewModel.CurrentDevice; var selected = ViewModel.Devices.Select(row => (row.Serial, row.IsSelected)).ToArray();
+        var originalShell = ViewModel.ShellInput; var originalText = ViewModel.TextInput; var originalPage = ((TabItem)tabs.SelectedItem).Tag!.ToString()!;
+        var originalPreference = sidebarPreference;
+        var nav = navigation.ToDictionary(pair => pair.Key, pair => pair.Value);
+        var expectedTags = new[] { "设备墙 / 主控", "实时监控", "节点", "截图 / 取色", "Shell", "应用", "文件", "文本", "脚本", "API", "扩展", "设置" };
+        Check(expectedTags.SequenceEqual(navigation.Keys) && navigation.Values.Select(AutomationProperties.GetAutomationId).Distinct().Count() == 12, "原十二导航/稳定 ID 唯一");
+        try
+        {
+            sidebarPreference = null;
+            foreach (var (width, expected) in new[] { (699, 0), (700, 72), (1099, 72), (1100, 212) })
+            {
+                await Resize(width, 900);
+                Check(sidebarColumn.ActualWidth == expected, $"断点 {width} 的侧栏为 {expected}");
+                Check(navigationPane.IsVisible == (width >= 700), "抽屉关闭与侧栏可见性一致：" + width);
+                breakpoints.Add(new { outerWidth = width, actualWidth = ActualWidth, sidebarWidth = sidebarColumn.ActualWidth, drawer = navigationDrawerOpen });
+            }
+            await Resize(768, 900); SetSidebarCollapsed(false); await Settle();
+            Check(sidebarColumn.ActualWidth == 212, "中屏手工展开");
+            await Resize(390, 640); navigationMenuButton.Focus(); Click(navigationMenuButton); await Settle();
+            Check(navigationDrawerOpen && navigationPane.IsVisible && navigationBackdrop.IsVisible && !workspace.IsEnabled && sidebarColumn.ActualWidth == 0, "手机为单一拦截式抽屉，不占固定栏");
+            Check(KeyboardNavigation.GetTabNavigation(navigationPane) == KeyboardNavigationMode.Cycle, "抽屉内键盘焦点循环");
+            foreach (var pair in nav)
+            {
+                Check(ReferenceEquals(pair.Value, navigation[pair.Key]), "导航未复制：" + pair.Key);
+                pair.Value.BringIntoView(); await Settle();
+                Check(VisibleInside(pair.Value, navigationPane), "抽屉可滚达导航：" + pair.Key);
+            }
+            Capture("-drawer");
+            Escape(navigation["设置"]); await Settle();
+            Check(!navigationDrawerOpen && !navigationPane.IsVisible && workspace.IsEnabled && navigationMenuButton.IsKeyboardFocused, "Escape 关闭抽屉并回到入口焦点");
+            Click(navigationMenuButton); await Settle(); Click(navigation["节点"]); await Settle();
+            Check(!navigationDrawerOpen && navigationMenuButton.IsKeyboardFocused && Equals(((TabItem)tabs.SelectedItem).Tag, "节点"), $"选页关闭抽屉并返还焦点：open={navigationDrawerOpen}; focus={Keyboard.FocusedElement}; page={((TabItem)tabs.SelectedItem).Tag}");
+            Click(navigationMenuButton); await Settle();
+            navigationBackdrop.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = Mouse.MouseDownEvent }); await Settle();
+            Check(!navigationDrawerOpen && navigationMenuButton.IsKeyboardFocused, "遮罩关闭抽屉并返还焦点");
+            await Resize(700, 900); Check(sidebarColumn.ActualWidth == 212, "手机抽屉不覆盖桌面展开偏好");
+            SetSidebarCollapsed(true); await Resize(1440, 900); Check(sidebarColumn.ActualWidth == 72, "宽窗保留手工折叠偏好");
+            await Resize(requestedWidth, requestedHeight); sidebarPreference = originalPreference; ApplyResponsiveWorkspace(); await Settle();
+            NavigateTo("节点"); await Settle();
+            Check(Grid.GetRow(singleTargetGroup) == (requestedWidth < 700 ? 1 : 0) && VisibleInside(singleTargetGroup, Shell) && singleTargetChoice.ActualWidth > 0, "单设备目标换行且控件完整可见");
+            foreach (var name in new[] { "DeviceDetails", "WorkspaceMore", "WorkspaceSettings" }) Check(VisibleInside(VisualDescendants<Button>(Shell).Single(button => button.Name == name), Shell), "全局入口在视口内：" + name);
+            var settings = VisualDescendants<Button>(Shell).Single(button => button.Name == "WorkspaceSettings");
+            Check(settings.ContextMenu is null, "设置入口不再承载网络/目录动作");
+            var more = VisualDescendants<Button>(Shell).Single(button => button.Name == "WorkspaceMore"); more.Focus(); Click(more); await Settle();
+            Check(more.ContextMenu is { IsOpen: true } && more.ContextMenu.Items.Count == 2 && ((MenuItem)more.ContextMenu.Items[0]).Header as string == "网络连接（高级）" && ((MenuItem)more.ContextMenu.Items[1]).Header as string == "立即更新目录", "更多菜单承载网络与更新目录");
+            Escape(more.ContextMenu!); await Settle(); Check(!more.ContextMenu!.IsOpen && more.IsKeyboardFocused, "更多菜单 Escape 返回按钮焦点");
+            Click(settings); await Settle(); Check(Equals(((TabItem)tabs.SelectedItem).Tag, "设置"), "设置按钮仅进入设置");
+            var countsBeforeFixture = workspaceCounts.Text;
+            try
+            {
+                workspaceCounts.SetCurrentValue(TextBlock.TextProperty, new string('数', 300)); workspaceStatus.SetCurrentValue(TextBlock.TextProperty, new string('状', 300)); await Settle();
+                Check(VisibleInside(workspaceCounts, Shell) && VisibleInside(workspaceStatus, Shell) && workspaceCounts.TextTrimming == TextTrimming.CharacterEllipsis && workspaceStatus.TextTrimming == TextTrimming.CharacterEllipsis && workspaceStatus.ToolTip is string, "长页脚保持有界且完整信息可通过提示读取");
+            }
+            finally { workspaceCounts.Text = countsBeforeFixture; workspaceStatus.GetBindingExpression(TextBlock.TextProperty)!.UpdateTarget(); }
+            var notice = workspace.Children.OfType<Border>().Single(border => Grid.GetRow(border) == 1); var errorScroll = (ScrollViewer)notice.Child; var errorText = (TextBlock)errorScroll.Content;
+            try
+            {
+                notice.SetCurrentValue(VisibilityProperty, Visibility.Visible); errorText.SetCurrentValue(TextBlock.TextProperty, string.Join("\n", Enumerable.Repeat(new string('错', 150), 40))); await Settle();
+                Check(errorScroll.ActualHeight <= 100 && errorScroll.ScrollableHeight > 0 && VisibleInside(errorScroll, Shell), "长错误正文限制高度并可滚动");
+            }
+            finally { notice.GetBindingExpression(VisibilityProperty)!.UpdateTarget(); errorText.GetBindingExpression(TextBlock.TextProperty)!.UpdateTarget(); }
+
+            await Resize(768, 900); NavigateTo("Shell"); await Settle();
+            var overlay = new Border { Width = 620, Height = 280, Background = ThemeBrush("SurfaceBrush"), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
+            Grid.SetColumnSpan(overlay, 2); Panel.SetZIndex(overlay, 1000); Shell.Children.Add(overlay);
+            var fixture = new StackPanel(); overlay.Child = fixture;
+            var fieldInput = BoundInput(nameof(WorkspaceViewModel.ShellInput)); var field = (Grid)Field("命令", fieldInput, 120); field.Width = 459; field.HorizontalAlignment = HorizontalAlignment.Left; fixture.Children.Add(field);
+            var toolbar = Toolbar(); toolbar.Width = 280; toolbar.HorizontalAlignment = HorizontalAlignment.Left; var toolbarInput = new TextBox { Width = 470, MaxWidth = 500 }; toolbar.Children.Add(toolbarInput); fixture.Children.Add(toolbar);
+            try
+            {
+                ViewModel.ShellInput = "responsive-field-state"; await Settle();
+                var focusDeadline = System.Diagnostics.Stopwatch.StartNew();
+                do
+                {
+                    Activate(); Keyboard.Focus(fieldInput); await Settle();
+                    if (IsActive && fieldInput.IsKeyboardFocused) break;
+                    await Task.Delay(20);
+                } while (focusDeadline.Elapsed < TimeSpan.FromSeconds(1));
+                fieldInput.Select(3, 5);
+                var selectionStart = fieldInput.SelectionStart; var selectionLength = fieldInput.SelectionLength; var caret = fieldInput.CaretIndex;
+                Check(IsActive && fieldInput.IsKeyboardFocused && fieldInput.Text == "responsive-field-state" && selectionStart == 3 && selectionLength == 5, $"字段初态已激活并持有真实键盘焦点和选区：active={IsActive}; focus={fieldInput.IsKeyboardFocused}; text={fieldInput.Text}; selection={selectionStart}/{selectionLength}; waitedMs={focusDeadline.ElapsedMilliseconds}");
+                fieldStates.Add(new { phase = "before", field.ActualWidth, fieldInput.Text, fieldInput.IsKeyboardFocused, fieldInput.SelectionStart, fieldInput.SelectionLength, fieldInput.CaretIndex });
+                foreach (var width in new[] { 459, 460, 459, 460, 459 })
+                {
+                    field.Width = width; await Settle();
+                    Check(field.ActualWidth == width && Grid.GetRow(fieldInput) == (width < 460 ? 1 : 0), "字段自身 459/460 断点：" + width);
+                    Check(field.RowDefinitions.Count == 2 && field.Children.Contains(fieldInput) && BindingOperations.GetBinding(fieldInput, TextBox.TextProperty)?.Path.Path == nameof(WorkspaceViewModel.ShellInput), "字段保持原输入/绑定/固定行定义：" + width);
+                    Check(fieldInput.Text == "responsive-field-state" && fieldInput.IsKeyboardFocused && fieldInput.SelectionStart == selectionStart && fieldInput.SelectionLength == selectionLength && fieldInput.CaretIndex == caret, $"字段换行保留输入/焦点/选区/光标：{width}; text={fieldInput.Text}; focus={fieldInput.IsKeyboardFocused}; selection={fieldInput.SelectionStart}/{fieldInput.SelectionLength}; caret={fieldInput.CaretIndex}; expected={selectionStart}/{selectionLength}/{caret}");
+                    fieldStates.Add(new { phase = "after", field.ActualWidth, fieldInput.Text, fieldInput.IsKeyboardFocused, fieldInput.SelectionStart, fieldInput.SelectionLength, fieldInput.CaretIndex });
+                }
+                Check(toolbarInput.ActualWidth <= 280 && toolbarInput.MaxWidth == 280, "工具栏窄宽度限制实际输入");
+                toolbar.Width = 600; await Settle(); Check(toolbarInput.ActualWidth == 470 && toolbarInput.MaxWidth == 500, "工具栏返回宽屏恢复原尺寸上限");
+            }
+            finally { Shell.Children.Remove(overlay); ViewModel.ShellInput = originalShell; }
+
+            var negativeOwner = new Rect(-1700, 50, 768, 1024); var negativeWork = new Rect(-1920, 0, 1920, 1080);
+            var negative = ResponsiveLayout.CalculateOwnedBounds(negativeOwner, negativeWork, 700, 900, 360, 480);
+            Check(negativeOwner.Contains(negative.Bounds) && negativeWork.Contains(negative.Bounds) && negative.Bounds.X < 0 && negative.MinimumHeight == 480, "负坐标副屏几何保留工作区与旧最小值");
+            foreach (var operation in new Action[]
+            {
+                () => ResponsiveLayout.CalculateOwnedBounds(new Rect(double.NaN, 0, 390, 640), negativeWork, 420, 640, 360, 480),
+                () => ResponsiveLayout.CalculateOwnedBounds(negativeOwner, negativeWork, double.NaN, 640, 360, 480),
+                () => ResponsiveLayout.CalculateOwnedBounds(new Rect(3000, 0, 390, 640), new Rect(0, 0, 1920, 1080), 420, 640, 360, 480)
+            })
+            {
+                var rejected = false; try { operation(); } catch (InvalidOperationException) { rejected = true; }
+                Check(rejected, "弹窗非法/不可见几何快速拒绝");
+            }
+            await Resize(requestedWidth, requestedHeight); sidebarPreference = originalPreference; ApplyResponsiveWorkspace(); await Settle();
+            void CheckOwned(Window dialog)
+            {
+                var bounds = new Rect(dialog.Left, dialog.Top, dialog.ActualWidth, dialog.ActualHeight);
+                Check(dialog.IsLoaded && dialog.IsVisible && new WindowInteropHelper(dialog).Handle != IntPtr.Zero, "真实弹窗已显示：" + dialog.Title);
+                Check(new Rect(Left, Top, ActualWidth, ActualHeight).Contains(bounds) && ResponsiveLayout.OwnerWorkArea(this).Contains(bounds), "弹窗在 owner/当前显示器工作区内：" + dialog.Title);
+                geometries.Add(new { dialog.Title, dialog.Left, dialog.Top, dialog.ActualWidth, dialog.ActualHeight, dialog.MinWidth, dialog.MinHeight, dialog.MaxWidth, dialog.MaxHeight });
+            }
+            ShowDeviceDirectory(); await Settle(); CheckOwned(directoryWindow!);
+            Check(VisibleInside(VisualDescendants<Button>(directoryWindow!).Single(button => button.ToolTip as string == "保存信息"), (FrameworkElement)directoryWindow!.Content), "设备详情保存按钮在视口内"); directoryWindow.Hide();
+            ShowScanner(); await Settle(); CheckOwned(scannerWindow!);
+            var scannerScroll = (ScrollViewer)scannerWindow!.Content; scannerScroll.ScrollToEnd(); await Settle();
+            Check(VisualDescendants<Button>(scannerWindow).Where(button => button.IsVisible).All(button => VisibleInside(button, (FrameworkElement)scannerWindow.Content)), "网络弹窗滚动后按钮可见"); scannerWindow.Hide();
+            ShowText("响应式长日志", string.Join("\n", Enumerable.Repeat(new string('X', 300), 80))); await Settle();
+            var log = OwnedWindows.Cast<Window>().Single(window => window.Title == "响应式长日志"); CheckOwned(log);
+            var logInput = (TextBox)log.Content; logInput.ScrollToEnd(); await Settle(); Check(logInput.TextWrapping == TextWrapping.Wrap && logInput.VerticalOffset > 0, "长日志换行且可滚动至结尾"); log.Close();
+            var nativeGeometryOnly = new Window { Owner = this, Title = "原生容器几何夹具", MinWidth = 500, MinHeight = 700, Content = new Border() };
+            ResponsiveLayout.FitOwnedWindow(nativeGeometryOnly, this, 600, 850); nativeGeometryOnly.Show(); await Settle(); CheckOwned(nativeGeometryOnly); nativeGeometryOnly.Close();
+
+            Exception? modalFailure = null; var modalCount = 0;
+            responsiveOwnedDialogFixture = dialog =>
+            {
+                var timeout = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+                timeout.Tick += (_, _) => { timeout.Stop(); modalFailure = new InvalidOperationException("弹窗夹具超时：" + dialog.Title); dialog.Close(); };
+                dialog.Closed += (_, _) => timeout.Stop(); timeout.Start();
+                dialog.ContentRendered += async (_, _) =>
+                {
+                    try
+                    {
+                        await Settle(); CheckOwned(dialog); modalCount++;
+                        var buttons = VisualDescendants<Button>(dialog).ToArray(); var cancel = buttons.Single(button => button.IsCancel);
+                        Check(buttons.Where(button => button.IsDefault || button.IsCancel).All(button => VisibleInside(button, (FrameworkElement)dialog.Content)), "模态确认/取消按钮可见：" + dialog.Title);
+                        foreach (var scroll in VisualDescendants<ScrollViewer>(dialog).Where(scroll => scroll.ScrollableHeight > 0)) scroll.ScrollToEnd();
+                        await Settle();
+                        if (screenshot is not null) SaveRender(Path.Combine(Path.GetDirectoryName(screenshot)!, "modal-" + modalCount + ".png"), dialog);
+                        var peer = new ButtonAutomationPeer(cancel); ((IInvokeProvider)peer.GetPattern(PatternInterface.Invoke)).Invoke();
+                    }
+                    catch (Exception exception) { modalFailure = exception; dialog.Close(); }
+                };
+            };
+            try
+            {
+                var target = ViewModel.CurrentDevice ?? ViewModel.Devices.First();
+                Check(!ConfirmApplicationPlan([new(new(target.Serial, target.Name, target.Info.Generation, target.Info.TransportId), ApplicationOperation.Uninstall, "com.matrix.demo")]), "应用确认实际取消，未调用卸载");
+                if (modalFailure is not null) throw modalFailure;
+                await EditLdInstanceAsync(true); if (modalFailure is not null) throw modalFailure;
+                Check(modalCount == 2, "实际应用确认与雷电编辑均仅取消");
+            }
+            finally { responsiveOwnedDialogFixture = null; }
+            ShowDeviceDirectory(); await Settle(); CheckOwned(directoryWindow!); directoryWindow!.Hide();
+            ShowScanner(); await Settle(); CheckOwned(scannerWindow!); scannerWindow!.Hide();
+            var follow = new Window { Owner = this, Title = "跟随 owner 几何夹具", MinWidth = 360, MinHeight = 480, Content = new Border() };
+            ResponsiveLayout.FitOwnedWindow(follow, this, 700, 700); follow.Show(); await Settle();
+            await Resize(390, 640); CheckOwned(follow); await Resize(requestedWidth, requestedHeight); CheckOwned(follow);
+            var lastValid = new Rect(follow.Left, follow.Top, follow.ActualWidth, follow.ActualHeight); var ownerLeft = Left;
+            try
+            {
+                Left = -100000; await Settle();
+                Check(ResponsiveLayout.FollowFailure(follow) is not null && new Rect(follow.Left, follow.Top, follow.ActualWidth, follow.ActualHeight) == lastValid, "owner 移出工作区时保留最后边界并记录诊断，不冒泡崩溃");
+            }
+            finally { Left = ownerLeft; await Settle(); }
+            CheckOwned(follow); Check(ResponsiveLayout.FollowFailure(follow) is null, "owner 回到工作区后恢复跟随"); follow.Close();
+        }
+        finally
+        {
+            responsiveOwnedDialogFixture = null; directoryWindow?.Hide(); scannerWindow?.Hide();
+            if (navigationDrawerOpen) CloseNavigationDrawer();
+            ViewModel.ShellInput = originalShell; ViewModel.TextInput = originalText;
+            sidebarPreference = originalPreference; await Resize(requestedWidth, requestedHeight); ApplyResponsiveWorkspace(); NavigateTo(originalPage); await Settle();
+        }
+        Check(ReferenceEquals(main, ViewModel.MainDevice) && ReferenceEquals(current, ViewModel.CurrentDevice) && selected.SequenceEqual(ViewModel.Devices.Select(row => (row.Serial, row.IsSelected))) && ViewModel.ShellInput == originalShell && ViewModel.TextInput == originalText, "调整布局不改变主控/目标/勾选/输入");
+        Check(ActualWidth == requestedWidth && ActualHeight == requestedHeight, "最终取证恢复原始请求尺寸");
+        Capture("");
+        var report = JsonSerializer.Serialize(new { scope = "A04 shared shell only; fixed page multi-column bodies deferred; no device/process/network operations; native MessageBox/file chooser and physical mixed-DPI not tested; routed keyboard/click fixtures, not OS mouse synthesis", requestedWidth, requestedHeight, actualWidth = ActualWidth, actualHeight = ActualHeight, hwnd = new WindowInteropHelper(this).Handle.ToInt64(), loaded = IsLoaded, visible = IsVisible, captureState = "idle", assertions = checks.Count, checks, breakpoints, fieldStates, geometries }, JsonDefaults.Options);
+        await File.WriteAllTextAsync(Path.Combine(ViewModel.DataDirectory, "responsive-shell.json"), report);
+        if (screenshot is not null) await File.WriteAllTextAsync(Path.ChangeExtension(screenshot, ".json"), report);
+    }
 }
 
 ```
@@ -10782,7 +11254,9 @@ public partial class MainWindow
         var content = new StackPanel { Margin = new Thickness(20) };
         foreach (var field in new[] { Field("名称", name, 90), Field("新CPU核数", cpu, 90), Field("新内存 MiB", memory, 90), Field("宽度", width, 90), Field("高度", height, 90), Field("DPI", dpi, 90) }) content.Children.Add(field);
         var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Firebrick, Margin = new Thickness(0, 0, 0, 8) }; content.Children.Add(error);
-        var dialog = new Window { Owner = this, Title = create ? "新建空白模拟器" : "冷态资源配置", Width = 420, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = content };
+        var dialog = new Window { Owner = this, Title = create ? "新建空白模拟器" : "冷态资源配置", Width = 420, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var layout = new DockPanel(); var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(20, 8, 20, 16) };
+        DockPanel.SetDock(buttons, Dock.Bottom); layout.Children.Add(buttons); layout.Children.Add(new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }); dialog.Content = layout;
         LdInstanceConfiguration? configuration = null;
         var submit = new Button { Content = create ? "创建并配置" : "保存配置", IsDefault = true, Margin = new Thickness(0, 6, 0, 0) };
         submit.Click += (_, _) =>
@@ -10796,8 +11270,8 @@ public partial class MainWindow
             }
             catch (Exception ex) { error.Text = ViewModel.PresentError(ex); }
         };
-        content.Children.Add(submit);
-        if (dialog.ShowDialog() != true || configuration is null) return;
+        var cancel = new Button { Content = "取消", IsCancel = true, MinWidth = 78, Name = "CancelInstanceEdit" }; buttons.Children.Add(cancel); buttons.Children.Add(submit);
+        if (ShowOwnedDialog(dialog, 420, 560) != true || configuration is null) return;
         if (!ViewModel.Confirm(create ? "新建空白雷电实例" : "修改雷电实例资源", create ? $"创建空白实例“{name.Text.Trim()}”，配置 {configuration.Cpu}核 / {configuration.MemoryMb} MiB / {configuration.Width}×{configuration.Height}。\n不会复制账号或数据，不自动启动。继续？" : $"仅修改实例 {selected!.Index}：{selected.Name} 的CPU、内存和分辨率；不会修改设备身份。配置后需启动验证。继续？")) return;
         await RunLdWorkspaceOperationAsync(create ? "新建空白实例" : "配置实例", async ct =>
         {
@@ -11096,6 +11570,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Media;
+using System.Windows.Input;
 
 namespace MatrixDevice.Desktop;
 
@@ -11113,6 +11588,13 @@ public partial class MainWindow
     private bool sidebarCollapsed;
     private FrameworkElement singleTargetLabel = null!;
     private FrameworkElement singleTargetChoice = null!;
+    private Border navigationPane = null!, navigationBackdrop = null!;
+    private Button navigationMenuButton = null!;
+    private Grid workspaceToolbar = null!, singleTargetGroup = null!, workspaceFooter = null!;
+    private TextBlock workspaceStatus = null!;
+    private bool navigationDrawerOpen;
+    private bool? sidebarPreference;
+    private IInputElement? navigationReturnFocus;
     private static readonly (string Tag, string Icon)[] WorkspacePages =
     [
         ("设备墙 / 主控", "\uE8EA"), ("实时监控", "\uE9D9"),
@@ -11134,7 +11616,7 @@ public partial class MainWindow
         sidebarColumn = new ColumnDefinition { Width = new GridLength(212) };
         Shell.ColumnDefinitions.Add(sidebarColumn);
         Shell.ColumnDefinitions.Add(new ColumnDefinition());
-        Shell.Children.Add(BuildNavigation());
+        navigationPane = BuildNavigation(); Shell.Children.Add(navigationPane);
         workspace = new Grid();
         workspace.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         workspace.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -11144,15 +11626,21 @@ public partial class MainWindow
         workspace.Children.Add(BuildWorkspaceToolbar());
 
         var notice = new Border { Background = ThemeBrush("DangerSurfaceBrush"), Padding = new Thickness(20, 9, 20, 9) };
-        var error = BoundText(nameof(WorkspaceViewModel.Error), true); error.Foreground = ThemeBrush("DangerBrush"); notice.Child = error;
+        var error = BoundText(nameof(WorkspaceViewModel.Error), true); error.Foreground = ThemeBrush("DangerBrush"); notice.Child = new ScrollViewer { Content = error, MaxHeight = 100, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         notice.SetBinding(VisibilityProperty, new Binding(nameof(WorkspaceViewModel.Error)) { Converter = new NonEmptyVisibilityConverter() });
         Grid.SetRow(notice, 1); workspace.Children.Add(notice);
         var footer = new Grid { Margin = new Thickness(20, 8, 20, 10) };
+        workspaceFooter = footer; footer.RowDefinitions.Add(new() { Height = GridLength.Auto }); footer.RowDefinitions.Add(new() { Height = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition());
         workspaceCounts = BoundText(nameof(WorkspaceViewModel.Counts)); workspaceCounts.FontSize = 11; workspaceCounts.Foreground = ThemeBrush("MutedBrush"); footer.Children.Add(workspaceCounts);
+        workspaceCounts.TextTrimming = TextTrimming.CharacterEllipsis; workspaceCounts.SetBinding(ToolTipProperty, new Binding(nameof(TextBlock.Text)) { Source = workspaceCounts });
         var status = BoundText(nameof(WorkspaceViewModel.Status)); status.FontSize = 11; status.TextAlignment = TextAlignment.Right;
+        workspaceStatus = status;
         status.TextTrimming = TextTrimming.CharacterEllipsis; status.SetBinding(ToolTipProperty, new Binding(nameof(WorkspaceViewModel.Status)));
         Grid.SetColumn(status, 1); footer.Children.Add(status); Grid.SetRow(footer, 3); workspace.Children.Add(footer);
+        navigationBackdrop = new Border { Background = new SolidColorBrush(Color.FromArgb(50, 0, 0, 0)), Visibility = Visibility.Collapsed };
+        Grid.SetColumnSpan(navigationBackdrop, 2); Panel.SetZIndex(navigationBackdrop, 10); Shell.Children.Add(navigationBackdrop);
+        navigationBackdrop.MouseDown += (_, args) => { CloseNavigationDrawer(); args.Handled = true; };
     }
 
     private Border BuildNavigation()
@@ -11178,7 +11666,7 @@ public partial class MainWindow
         collapse.Name = "NavigationToggle";
         System.Windows.Automation.AutomationProperties.SetAutomationId(collapse, collapse.Name);
         System.Windows.Automation.AutomationProperties.SetName(collapse, "折叠导航");
-        collapse.SetResourceReference(StyleProperty, "SubtleButton"); collapse.Click += (_, _) => SetSidebarCollapsed(!sidebarCollapsed); bottom.Children.Add(collapse);
+        collapse.SetResourceReference(StyleProperty, "SubtleButton"); collapse.Click += (_, _) => { if (ActualWidth < 700) CloseNavigationDrawer(); else SetSidebarCollapsed(!sidebarCollapsed); }; bottom.Children.Add(collapse);
         var statistics = new StackPanel { Margin = new Thickness(18, 15, 14, 16) };
         statistics.Children.Add(new TextBlock { Text = "本机工作区", FontWeight = FontWeights.SemiBold, FontSize = 12 });
         var mode = BoundText(nameof(WorkspaceViewModel.ModeLabel), true); mode.Foreground = ThemeBrush("MutedBrush"); mode.FontSize = 11; mode.Margin = new Thickness(0, 7, 0, 5); statistics.Children.Add(mode);
@@ -11208,26 +11696,38 @@ public partial class MainWindow
     {
         var surface = new Border { Background = ThemeBrush("SurfaceBrush"), BorderBrush = ThemeBrush("BorderBrush"), BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(20, 10, 20, 10) };
         var row = new Grid(); surface.Child = row;
+        workspaceToolbar = row;
+        row.RowDefinitions.Add(new() { Height = GridLength.Auto }); row.RowDefinitions.Add(new() { Height = GridLength.Auto });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         row.ColumnDefinitions.Add(new ColumnDefinition());
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        navigationMenuButton = new Button { Name = "WorkspaceNavigation", Content = ShellGlyph("\uE700"), Width = 38, Height = 38, ToolTip = "导航", Visibility = Visibility.Collapsed };
+        navigationMenuButton.SetResourceReference(StyleProperty, "IconButton"); System.Windows.Automation.AutomationProperties.SetName(navigationMenuButton, "打开导航"); System.Windows.Automation.AutomationProperties.SetAutomationId(navigationMenuButton, navigationMenuButton.Name);
+        navigationMenuButton.Click += (_, _) => { if (navigationDrawerOpen) CloseNavigationDrawer(); else OpenNavigationDrawer(); }; row.Children.Add(navigationMenuButton);
+        singleTargetGroup = new Grid(); singleTargetGroup.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); singleTargetGroup.ColumnDefinitions.Add(new());
+        Grid.SetColumn(singleTargetGroup, 1); row.Children.Add(singleTargetGroup);
         var targetLabel = new TextBlock { Text = "单设备目标", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 10, 0), Foreground = ThemeBrush("MutedBrush") };
         singleTargetLabel = targetLabel;
-        row.Children.Add(targetLabel);
+        singleTargetGroup.Children.Add(targetLabel);
         var target = new ComboBox { Name = "SingleDeviceTarget", ItemsSource = new ListCollectionView(ViewModel.Devices), ItemTemplate = OperationTargetTemplate(), IsSynchronizedWithCurrentItem = false, MinHeight = 38, MaxWidth = 520, HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 0, 10, 0), ToolTip = "节点、截图、命令等单设备操作目标" };
         singleTargetChoice = target;
         target.SetBinding(Selector.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.CurrentDevice)));
-        System.Windows.Automation.AutomationProperties.SetName(target, "单设备目标"); Grid.SetColumn(target, 1); row.Children.Add(target);
+        System.Windows.Automation.AutomationProperties.SetName(target, "单设备目标"); Grid.SetColumn(target, 1); singleTargetGroup.Children.Add(target);
         var details = new Button { Name = "DeviceDetails", Content = ShellGlyph("\uE8A7"), ToolTip = "设备详情", MinHeight = 38, Margin = new Thickness(0, 0, 5, 0) };
         System.Windows.Automation.AutomationProperties.SetName(details, "设备详情"); System.Windows.Automation.AutomationProperties.SetAutomationId(details, details.Name);
         details.SetResourceReference(StyleProperty, "IconButton"); details.Click += (_, _) => ShowDeviceDirectory(); Grid.SetColumn(details, 2); row.Children.Add(details);
         var settings = new Button { Name = "WorkspaceSettings", Content = ShellGlyph("\uE713"), ToolTip = "设置", MinHeight = 38 };
         System.Windows.Automation.AutomationProperties.SetName(settings, "设置"); System.Windows.Automation.AutomationProperties.SetAutomationId(settings, settings.Name);
-        settings.SetResourceReference(StyleProperty, "IconButton"); settings.Click += (_, _) => NavigateTo("设置"); Grid.SetColumn(settings, 3); row.Children.Add(settings);
+        settings.SetResourceReference(StyleProperty, "IconButton"); settings.Click += (_, _) => NavigateTo("设置"); Grid.SetColumn(settings, 4); row.Children.Add(settings);
         var advanced = new ContextMenu();
         var network = new MenuItem { Header = "网络连接（高级）" }; network.Click += (_, _) => ShowScanner(); advanced.Items.Add(network);
         var refresh = new MenuItem { Header = "立即更新目录" }; refresh.Click += async (_, _) => await UpdateDeviceDirectoryAsync(); advanced.Items.Add(refresh);
-        settings.ContextMenu = advanced;
+        var more = new Button { Name = "WorkspaceMore", Content = ShellGlyph("\uE712"), ToolTip = "更多", MinHeight = 38, ContextMenu = advanced };
+        System.Windows.Automation.AutomationProperties.SetName(more, "更多操作"); System.Windows.Automation.AutomationProperties.SetAutomationId(more, more.Name); more.SetResourceReference(StyleProperty, "IconButton");
+        more.Click += (_, _) => { advanced.PlacementTarget = more; advanced.Placement = PlacementMode.Bottom; advanced.IsOpen = true; };
+        advanced.PreviewKeyDown += (_, args) => { if (args.Key == Key.Escape) { advanced.IsOpen = false; args.Handled = true; } };
+        advanced.Closed += (_, _) => more.Focus();
+        Grid.SetColumn(more, 3); row.Children.Add(more);
         return surface;
     }
 
@@ -11260,6 +11760,7 @@ public partial class MainWindow
         var page = tabs.Items.Cast<TabItem>().SingleOrDefault(item => Equals(item.Tag, tag))
             ?? throw new ArgumentException("导航页面不存在：" + tag);
         tabs.SelectedItem = page; UpdateNavigation();
+        if (navigationDrawerOpen) CloseNavigationDrawer();
     }
 
     private void UpdateNavigation()
@@ -11267,6 +11768,7 @@ public partial class MainWindow
         var selected = (tabs.SelectedItem as TabItem)?.Tag?.ToString();
         var targetVisibility = selected is "节点" or "截图 / 取色" or "Shell" or "文件" or "文本" or "脚本" or "API" or "扩展" ? Visibility.Visible : Visibility.Collapsed;
         singleTargetLabel.Visibility = singleTargetChoice.Visibility = targetVisibility;
+        singleTargetGroup.Visibility = targetVisibility;
         foreach (var item in navigation) item.Value.IsChecked = item.Key == selected;
         if (selected is not null && navigation.TryGetValue(selected, out var active) && active.IsLoaded) active.BringIntoView();
         var label = LocalizationService.PageDisplayName(selected ?? "设备墙 / 主控");
@@ -11275,11 +11777,55 @@ public partial class MainWindow
 
     private void SetSidebarCollapsed(bool collapsed)
     {
-        sidebarCollapsed = collapsed; sidebarColumn.Width = new GridLength(collapsed ? 72 : 212);
-        foreach (var caption in sidebarCaptions) caption.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
-        sidebarStatistics.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
-        collapseGlyph.Text = collapsed ? "\uE76C" : "\uE76B";
-        if (collapseGlyph.Parent is StackPanel { Parent: Button collapse }) System.Windows.Automation.AutomationProperties.SetName(collapse, collapsed ? "展开导航" : "折叠导航");
+        sidebarPreference = collapsed; ApplyResponsiveWorkspace();
+    }
+
+    private void ApplyResponsiveWorkspace()
+    {
+        if (ActualWidth <= 0 || workspaceToolbar is null) return;
+        var narrow = ActualWidth < 700;
+        if (!narrow && navigationDrawerOpen) { navigationDrawerOpen = false; navigationReturnFocus = null; }
+        sidebarCollapsed = narrow ? !navigationDrawerOpen : sidebarPreference ?? ActualWidth < 1100;
+        sidebarColumn.Width = new GridLength(narrow ? 0 : sidebarCollapsed ? 72 : 212);
+        navigationPane.Visibility = !narrow || navigationDrawerOpen ? Visibility.Visible : Visibility.Collapsed;
+        navigationPane.Width = narrow ? Math.Min(280, Math.Max(1, Shell.ActualWidth - 48)) : double.NaN;
+        navigationPane.HorizontalAlignment = narrow ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
+        Grid.SetColumnSpan(navigationPane, narrow ? 2 : 1); Panel.SetZIndex(navigationPane, narrow ? 20 : 0);
+        navigationBackdrop.Visibility = narrow && navigationDrawerOpen ? Visibility.Visible : Visibility.Collapsed;
+        workspace.IsEnabled = !navigationDrawerOpen;
+        KeyboardNavigation.SetTabNavigation(navigationPane, narrow ? KeyboardNavigationMode.Cycle : KeyboardNavigationMode.Continue);
+        navigationMenuButton.Visibility = narrow ? Visibility.Visible : Visibility.Collapsed;
+        Grid.SetRow(singleTargetGroup, narrow ? 1 : 0); Grid.SetColumn(singleTargetGroup, narrow ? 0 : 1); Grid.SetColumnSpan(singleTargetGroup, narrow ? 5 : 1);
+        singleTargetGroup.Margin = narrow ? new Thickness(0, 8, 0, 0) : new Thickness(0);
+        Grid.SetRow(workspaceStatus, narrow ? 1 : 0); Grid.SetColumn(workspaceStatus, narrow ? 0 : 1); Grid.SetColumnSpan(workspaceStatus, narrow ? 2 : 1);
+        Grid.SetColumnSpan(workspaceCounts, narrow ? 2 : 1); workspaceStatus.TextAlignment = narrow ? TextAlignment.Left : TextAlignment.Right;
+        foreach (var caption in sidebarCaptions) caption.Visibility = sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+        sidebarStatistics.Visibility = sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+        foreach (var link in navigation.Values) link.Padding = sidebarCollapsed ? new Thickness(8, 9, 8, 9) : new Thickness(14, 9, 14, 9);
+        collapseGlyph.Text = sidebarCollapsed ? "\uE76C" : "\uE76B";
+        if (collapseGlyph.Parent is StackPanel { Parent: Button collapse }) System.Windows.Automation.AutomationProperties.SetName(collapse, narrow ? "关闭导航" : sidebarCollapsed ? "展开导航" : "折叠导航");
+    }
+
+    private void OpenNavigationDrawer()
+    {
+        if (ActualWidth >= 700) return;
+        navigationReturnFocus = Keyboard.FocusedElement; navigationDrawerOpen = true; ApplyResponsiveWorkspace();
+        if ((tabs.SelectedItem as TabItem)?.Tag is string tag) { navigation[tag].BringIntoView(); navigation[tag].Focus(); }
+    }
+
+    private void CloseNavigationDrawer()
+    {
+        if (!navigationDrawerOpen) return;
+        navigationDrawerOpen = false; ApplyResponsiveWorkspace();
+        var previous = navigationReturnFocus as UIElement;
+        void ReturnFocus()
+        {
+            if (navigationDrawerOpen || ActualWidth >= 700 || closing) return;
+            if (previous is { IsVisible: true, IsEnabled: true }) previous.Focus(); else navigationMenuButton.Focus();
+        }
+        ReturnFocus();
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, (Action)ReturnFocus);
+        navigationReturnFocus = null;
     }
 
     private void ShowDeviceDirectory()
@@ -11290,7 +11836,7 @@ public partial class MainWindow
             directoryWindow.Content = BuildDirectory();
             directoryWindow.Closing += (_, args) => { if (!closing) { args.Cancel = true; directoryWindow.Hide(); } };
         }
-        directoryWindow.Show(); directoryWindow.Activate();
+        ResponsiveLayout.FitOwnedWindow(directoryWindow, this, 420, 640); directoryWindow.Show(); directoryWindow.Activate();
     }
 
     private void ShowScanner()
@@ -11303,7 +11849,7 @@ public partial class MainWindow
             scannerWindow.Content = new ScrollViewer { Content = new Border { Padding = new Thickness(20), Child = scanner }, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
             scannerWindow.Closing += (_, args) => { if (!closing) { scanCancellation?.Cancel(); args.Cancel = true; scannerWindow.Hide(); } };
         }
-        scannerWindow.Show(); scannerWindow.Activate();
+        ResponsiveLayout.FitOwnedWindow(scannerWindow, this, 460, 420); scannerWindow.Show(); scannerWindow.Activate();
     }
 }
 
@@ -12076,7 +12622,8 @@ public sealed class SettingsEditor : ObservableObject
         if (BasicApiPort is < 1024 or > 65535 || AutomatorApiPort is < 1024 or > 65535 || BasicApiPort == AutomatorApiPort) throw new InvalidOperationException("API 端口必须为不同的 1024–65535 整数");
         if (MainMaxSize is < 64 or > 8192 || MiniMaxSize is < 64 or > 8192 || MainMaxFps is < 1 or > 240 || MiniMaxFps is < 1 or > 240) throw new InvalidOperationException("投屏尺寸或帧率超出有效范围");
         if (MainBitRate is < 10000 or > 100000000 || MiniBitRate is < 10000 or > 100000000) throw new InvalidOperationException("码率必须为 10000–100000000 bit/s");
-        if (WindowWidth < 1000 || WindowHeight < 700) throw new InvalidOperationException("窗体至少为 1000 × 700");
+        if (!double.IsFinite(WindowWidth) || !double.IsFinite(WindowHeight) || WindowWidth < AppSettings.MinimumWindowWidth || WindowHeight < AppSettings.MinimumWindowHeight || WindowWidth > AppSettings.MaximumWindowWidth || WindowHeight > AppSettings.MaximumWindowHeight)
+            throw new InvalidOperationException($"窗体尺寸必须为 {AppSettings.MinimumWindowWidth}–{AppSettings.MaximumWindowWidth} × {AppSettings.MinimumWindowHeight}–{AppSettings.MaximumWindowHeight}");
         if (CommandTimeoutSeconds is < 1 or > 600) throw new InvalidOperationException("命令超时必须为 1–600 秒");
         var bindings = JsonSerializer.Deserialize<Dictionary<int, string>>(LdBindingsJson, JsonDefaults.Options) ?? [];
         var adbSerials = JsonSerializer.Deserialize<string[]>(AdbSerialsJson, JsonDefaults.Options) ?? throw new InvalidOperationException("ADB授权串号必须是JSON数组");
@@ -15598,8 +16145,8 @@ public sealed class SettingsStore(string path)
         MiniMaxSize = Math.Clamp(value.MiniMaxSize, 180, 4096),
         MainMaxFps = Math.Clamp(value.MainMaxFps, 1, 120),
         MiniMaxFps = Math.Clamp(value.MiniMaxFps, 1, 120),
-        WindowWidth = double.IsFinite(value.WindowWidth) ? Math.Clamp(value.WindowWidth, 1100, 7680) : 1440,
-        WindowHeight = double.IsFinite(value.WindowHeight) ? Math.Clamp(value.WindowHeight, 720, 4320) : 900,
+        WindowWidth = double.IsFinite(value.WindowWidth) ? Math.Clamp(value.WindowWidth, AppSettings.MinimumWindowWidth, AppSettings.MaximumWindowWidth) : AppSettings.DefaultWindowWidth,
+        WindowHeight = double.IsFinite(value.WindowHeight) ? Math.Clamp(value.WindowHeight, AppSettings.MinimumWindowHeight, AppSettings.MaximumWindowHeight) : AppSettings.DefaultWindowHeight,
         CommandTimeoutSeconds = Math.Clamp(value.CommandTimeoutSeconds, 1, 300),
         LdSerialBindings = (value.LdSerialBindings ?? []).Where(x => x.Key >= 0 && !string.IsNullOrWhiteSpace(x.Value))
             .ToDictionary(x => x.Key, x => x.Value.Trim()),
@@ -18101,6 +18648,19 @@ if (args.Length > 0 && args[0] == "--ldconsole-test-child")
 
 var tests = new List<(string Name, Func<Task> Run)>();
 void Test(string name, Func<Task> run) => tests.Add((name, run));
+Test("window geometry preserves supported compact sizes through normalize save and fresh load", () =>
+{
+    foreach (var (width, height) in new[] { (390, 640), (390, 844), (768, 1024) })
+    {
+        var requested = new AppSettings { WindowWidth = width, WindowHeight = height };
+        var normalized = SettingsStore.Normalize(requested);
+        Check(normalized.WindowWidth == width && normalized.WindowHeight == height, $"Supported window {width}x{height} was enlarged during normalize.");
+        var path = Path.Combine(Temp(), "AppConfig.json"); var store = new SettingsStore(path); store.Load(); store.Save(requested);
+        var loaded = new SettingsStore(path).Load();
+        Check(loaded.WindowWidth == width && loaded.WindowHeight == height, $"Fresh load enlarged window {width}x{height}.");
+    }
+    return Task.CompletedTask;
+});
 ExistingAdbTests.Register(Test);
 ScreenVideoTests.Register(Test);
 LdWorkspaceTests.Register(Test);

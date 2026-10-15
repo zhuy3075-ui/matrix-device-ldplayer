@@ -148,9 +148,51 @@ public partial class MainWindow
             var primaryContrast = AppearanceColors(primary.Foreground).SelectMany(front => AppearanceColors(primary.Background).Select(back => AppearanceContrast(AppearanceOverlay(front, primaryFeedback.Opacity), AppearanceOverlay(back, primaryFeedback.Opacity)))).Min();
             contrast.Add(new { name = "主要按钮白色反馈层合成", ratio = primaryContrast, minimum = 4.5, overlayOpacity = primaryFeedback.Opacity });
             Check(primaryContrast >= 4.5, "反馈层合成后的主要按钮文字对比度");
-            toggle.Focus(); Keyboard.Focus(toggle); await Render(); await Task.Delay(170);
             var toggleFeedback = (Border)toggle.Template.FindName("FocusFeedback", toggle);
-            Check(toggle.IsKeyboardFocused && toggleFeedback.HasAnimatedProperties && toggleFeedback.Opacity > 0, "实际Toggle模板局部反馈运行");
+            var toggleFocusWatch = System.Diagnostics.Stopwatch.StartNew();
+            var toggleFocusStates = new List<object>();
+            void RecordToggleFocus(string phase, TimeSpan? renderingTime = null)
+            {
+                toggleFocusStates.Add(new
+                {
+                    phase, elapsedMilliseconds = toggleFocusWatch.Elapsed.TotalMilliseconds,
+                    active = IsActive, enabled = toggle.IsEnabled, visible = toggle.IsVisible,
+                    keyboardFocused = toggle.IsKeyboardFocused, keyboardFocusWithin = toggle.IsKeyboardFocusWithin,
+                    focusedControl = Keyboard.FocusedElement?.GetType().FullName,
+                    feedbackOpacity = toggleFeedback.Opacity, feedbackAnimated = toggleFeedback.HasAnimatedProperties,
+                    applicationMotionEnabled = MotionPreferences.Current.AnimationsEnabled,
+                    systemMotionEnabled = SystemParameters.ClientAreaAnimation, renderingTime
+                });
+                File.WriteAllText(Path.Combine(ViewModel.DataDirectory, "appearance-toggle-focus.json"), JsonSerializer.Serialize(new
+                {
+                    scope = "Toggle focus prerequisite and one animation observation; no animation retries or OS preference changes", states = toggleFocusStates
+                }, JsonDefaults.Options));
+            }
+            RecordToggleFocus("before-focus");
+            do
+            {
+                Activate(); toggle.Focus(); Keyboard.Focus(toggle); await Render();
+                if (IsActive && toggle.IsEnabled && toggle.IsKeyboardFocused && toggle.IsKeyboardFocusWithin) break;
+                await Task.Delay(20);
+            } while (toggleFocusWatch.Elapsed < TimeSpan.FromSeconds(1));
+            RecordToggleFocus("focus-prerequisite");
+            Check(IsActive && toggle.IsEnabled && toggle.IsKeyboardFocused && toggle.IsKeyboardFocusWithin,
+                $"Toggle真实焦点前置成立（active={IsActive}; enabled={toggle.IsEnabled}; focus={toggle.IsKeyboardFocused}; within={toggle.IsKeyboardFocusWithin}; elapsedMs={toggleFocusWatch.ElapsedMilliseconds}）");
+            var rendering = new TaskCompletionSource<TimeSpan>(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnToggleRendering(object? sender, EventArgs args) { if (args is RenderingEventArgs frame) rendering.TrySetResult(frame.RenderingTime); }
+            CompositionTarget.Rendering += OnToggleRendering;
+            try
+            {
+                toggle.InvalidateVisual();
+                var completed = await Task.WhenAny(rendering.Task, Task.Delay(500));
+                RecordToggleFocus("render-frame", completed == rendering.Task ? await rendering.Task : null);
+                Check(completed == rendering.Task, "Toggle焦点后收到真实渲染帧（500ms有界）");
+            }
+            finally { CompositionTarget.Rendering -= OnToggleRendering; }
+            await Task.Delay(170); await Render();
+            RecordToggleFocus("animation-observation");
+            Check(toggle.IsKeyboardFocused && toggleFeedback.HasAnimatedProperties && toggleFeedback.Opacity > 0,
+                $"实际Toggle模板局部反馈运行（active={IsActive}; enabled={toggle.IsEnabled}; focus={toggle.IsKeyboardFocused}; within={toggle.IsKeyboardFocusWithin}; opacity={toggleFeedback.Opacity}; animated={toggleFeedback.HasAnimatedProperties}; appMotion={MotionPreferences.Current.AnimationsEnabled}; systemMotion={SystemParameters.ClientAreaAnimation}; elapsedMs={toggleFocusWatch.ElapsedMilliseconds}）");
             MotionPreferences.Current.SetFixturePreference(false); await Render();
             Check(!toggleFeedback.HasAnimatedProperties && toggleFeedback.Opacity == 0 && popup.PopupAnimation == PopupAnimation.None, "减少动画同时移除Toggle与实际Popup反馈");
             MotionPreferences.Current.SetFixturePreference(true); await Render();

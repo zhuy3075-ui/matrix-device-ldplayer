@@ -66,6 +66,19 @@ if (args.Length > 0 && args[0] == "--ldconsole-test-child")
 
 var tests = new List<(string Name, Func<Task> Run)>();
 void Test(string name, Func<Task> run) => tests.Add((name, run));
+Test("window geometry preserves supported compact sizes through normalize save and fresh load", () =>
+{
+    foreach (var (width, height) in new[] { (390, 640), (390, 844), (768, 1024) })
+    {
+        var requested = new AppSettings { WindowWidth = width, WindowHeight = height };
+        var normalized = SettingsStore.Normalize(requested);
+        Check(normalized.WindowWidth == width && normalized.WindowHeight == height, $"Supported window {width}x{height} was enlarged during normalize.");
+        var path = Path.Combine(Temp(), "AppConfig.json"); var store = new SettingsStore(path); store.Load(); store.Save(requested);
+        var loaded = new SettingsStore(path).Load();
+        Check(loaded.WindowWidth == width && loaded.WindowHeight == height, $"Fresh load enlarged window {width}x{height}.");
+    }
+    return Task.CompletedTask;
+});
 ExistingAdbTests.Register(Test);
 ScreenVideoTests.Register(Test);
 LdWorkspaceTests.Register(Test);

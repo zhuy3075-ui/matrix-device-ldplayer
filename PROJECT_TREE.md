@@ -10,6 +10,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- apple-experience/
 |   |   |   |-- A02_MAIN_TARGET.md
 |   |   |   |-- A03_APPEARANCE.md
+|   |   |   |-- A04_RESPONSIVE_SHELL.md
 |   |   |   |-- CONTROL_CATALOG.md
 |   |   |   |-- DEFECTS.md
 |   |   |   |-- HANDOFF.md
@@ -225,6 +226,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- NativeWindowHost.cs
 |   |   |-- packages.lock.json
 |   |   |-- Presentation.cs
+|   |   |-- ResponsiveLayout.cs
 |   |   |-- Themes/
 |   |   |   +-- ModernTheme.xaml
 |   |   |-- UiErrorPresentation.cs
@@ -250,6 +252,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- NetworkScannerView.cs
 |   |   |   |-- OneClickStartAcceptance.cs
 |   |   |   |-- ResponsiveColumnsConverter.cs
+|   |   |   |-- ResponsiveShellSmoke.cs
 |   |   |   |-- ScreenshotView.cs
 |   |   |   |-- ScriptsView.cs
 |   |   |   |-- SettingsView.cs

@@ -126,9 +126,10 @@ public partial class MainWindow
             if (process.MainWindowHandle == IntPtr.Zero) throw new InvalidOperationException("投屏窗口尚未出现");
             await VerifyMainScreenIdentityAsync(target);
             RequireScrcpySession(target, session);
+            var window = new Window { Owner = this, Title = "投屏 · " + target.Serial, Width = 600, Height = 850, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            ResponsiveLayout.FitOwnedWindow(window, this, 600, 850);
             var host = new NativeWindowHost(process, System.IO.Path.Combine(ViewModel.DataDirectory, "window-recovery"));
-            nativeHosts.Add(host);
-            var window = new Window { Owner = this, Title = "投屏 · " + target.Serial, Width = 600, Height = 850, Content = host, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            window.Content = host; nativeHosts.Add(host);
             window.Closing += (_, args) => { try { host.Restore(); nativeHosts.Remove(host); } catch (Exception ex) { args.Cancel = true; MessageBox.Show(window, ViewModel.PresentError(ex), "窗口恢复失败", MessageBoxButton.OK, MessageBoxImage.Error); } };
             window.Show(); target.Row.ScreenState = "已嵌入自有 scrcpy 窗口";
         });

@@ -113,8 +113,8 @@ public sealed class SettingsStore(string path)
         MiniMaxSize = Math.Clamp(value.MiniMaxSize, 180, 4096),
         MainMaxFps = Math.Clamp(value.MainMaxFps, 1, 120),
         MiniMaxFps = Math.Clamp(value.MiniMaxFps, 1, 120),
-        WindowWidth = double.IsFinite(value.WindowWidth) ? Math.Clamp(value.WindowWidth, 1100, 7680) : 1440,
-        WindowHeight = double.IsFinite(value.WindowHeight) ? Math.Clamp(value.WindowHeight, 720, 4320) : 900,
+        WindowWidth = double.IsFinite(value.WindowWidth) ? Math.Clamp(value.WindowWidth, AppSettings.MinimumWindowWidth, AppSettings.MaximumWindowWidth) : AppSettings.DefaultWindowWidth,
+        WindowHeight = double.IsFinite(value.WindowHeight) ? Math.Clamp(value.WindowHeight, AppSettings.MinimumWindowHeight, AppSettings.MaximumWindowHeight) : AppSettings.DefaultWindowHeight,
         CommandTimeoutSeconds = Math.Clamp(value.CommandTimeoutSeconds, 1, 300),
         LdSerialBindings = (value.LdSerialBindings ?? []).Where(x => x.Key >= 0 && !string.IsNullOrWhiteSpace(x.Value))
             .ToDictionary(x => x.Key, x => x.Value.Trim()),

@@ -381,7 +381,9 @@ public partial class MainWindow
         var content = new StackPanel { Margin = new Thickness(20) };
         foreach (var field in new[] { Field("名称", name, 90), Field("新CPU核数", cpu, 90), Field("新内存 MiB", memory, 90), Field("宽度", width, 90), Field("高度", height, 90), Field("DPI", dpi, 90) }) content.Children.Add(field);
         var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Firebrick, Margin = new Thickness(0, 0, 0, 8) }; content.Children.Add(error);
-        var dialog = new Window { Owner = this, Title = create ? "新建空白模拟器" : "冷态资源配置", Width = 420, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = content };
+        var dialog = new Window { Owner = this, Title = create ? "新建空白模拟器" : "冷态资源配置", Width = 420, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var layout = new DockPanel(); var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(20, 8, 20, 16) };
+        DockPanel.SetDock(buttons, Dock.Bottom); layout.Children.Add(buttons); layout.Children.Add(new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }); dialog.Content = layout;
         LdInstanceConfiguration? configuration = null;
         var submit = new Button { Content = create ? "创建并配置" : "保存配置", IsDefault = true, Margin = new Thickness(0, 6, 0, 0) };
         submit.Click += (_, _) =>
@@ -395,8 +397,8 @@ public partial class MainWindow
             }
             catch (Exception ex) { error.Text = ViewModel.PresentError(ex); }
         };
-        content.Children.Add(submit);
-        if (dialog.ShowDialog() != true || configuration is null) return;
+        var cancel = new Button { Content = "取消", IsCancel = true, MinWidth = 78, Name = "CancelInstanceEdit" }; buttons.Children.Add(cancel); buttons.Children.Add(submit);
+        if (ShowOwnedDialog(dialog, 420, 560) != true || configuration is null) return;
         if (!ViewModel.Confirm(create ? "新建空白雷电实例" : "修改雷电实例资源", create ? $"创建空白实例“{name.Text.Trim()}”，配置 {configuration.Cpu}核 / {configuration.MemoryMb} MiB / {configuration.Width}×{configuration.Height}。\n不会复制账号或数据，不自动启动。继续？" : $"仅修改实例 {selected!.Index}：{selected.Name} 的CPU、内存和分辨率；不会修改设备身份。配置后需启动验证。继续？")) return;
         await RunLdWorkspaceOperationAsync(create ? "新建空白实例" : "配置实例", async ct =>
         {

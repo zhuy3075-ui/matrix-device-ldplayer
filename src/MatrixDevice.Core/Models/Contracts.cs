@@ -116,6 +116,12 @@ public interface IDeviceBackend : IAsyncDisposable
 
 public sealed record AppSettings
 {
+    public const double MinimumWindowWidth = 390;
+    public const double MinimumWindowHeight = 640;
+    public const double MaximumWindowWidth = 7680;
+    public const double MaximumWindowHeight = 4320;
+    public const double DefaultWindowWidth = 1440;
+    public const double DefaultWindowHeight = 900;
     public string LdConsolePath { get; init; } = "";
     public Dictionary<int, string> LdSerialBindings { get; init; } = [];
     public string AdbPath { get; init; } = "";
@@ -141,8 +147,8 @@ public sealed record AppSettings
     public bool ForceHardwareDecode { get; init; }
     public bool ShowFps { get; init; }
     public string Language { get; init; } = "zh-CN";
-    public double WindowWidth { get; init; } = 1440;
-    public double WindowHeight { get; init; } = 900;
+    public double WindowWidth { get; init; } = DefaultWindowWidth;
+    public double WindowHeight { get; init; } = DefaultWindowHeight;
     public string FileRoot { get; init; } = "/sdcard/MatrixExchange";
     public int CommandTimeoutSeconds { get; init; } = 30;
 }

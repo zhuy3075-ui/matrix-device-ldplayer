@@ -49,6 +49,7 @@ public partial class MainWindow : Window
     private Task? captureOperation;
     private bool debugAutoLoading;
     private bool debugAutoPending;
+    private Action<Window>? responsiveOwnedDialogFixture;
     public WorkspaceViewModel ViewModel { get; }
 
     public MainWindow(WorkspaceViewModel viewModel)
@@ -68,6 +69,9 @@ public partial class MainWindow : Window
         viewModel.NodeSelectionChanged = HighlightNode;
         viewModel.WallChanged = RefreshWall;
         BuildShell();
+        SizeChanged += (_, _) => ApplyResponsiveWorkspace();
+        Loaded += (_, _) => ApplyResponsiveWorkspace();
+        PreviewKeyDown += (_, args) => { if (args.Key == Key.Escape && navigationDrawerOpen) { CloseNavigationDrawer(); args.Handled = true; } };
         LocalizationService.Current.LanguageChanged += OnLanguageChanged;
         captureTimer = new DispatcherTimerAdapter(TimeSpan.FromSeconds(5), CaptureTickAsync);
         directoryTimer = new DispatcherTimerAdapter(TimeSpan.FromSeconds(5), UpdateDeviceDirectoryAsync);
@@ -129,7 +133,7 @@ public partial class MainWindow : Window
         tabs.Items.Add(tab);
     }
     private static DockPanel Page() => new() { Margin = new Thickness(14), LastChildFill = true };
-    private static WrapPanel Toolbar() => new() { Orientation = Orientation.Horizontal };
+    private static WrapPanel Toolbar() => ResponsiveLayout.Toolbar();
     private static TextBlock Label(string text)
     {
         var label = new TextBlock { FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 6, 0, 7) };
@@ -142,7 +146,7 @@ public partial class MainWindow : Window
     private static CheckBox Check(string text, string binding) { var checkbox = new CheckBox(); LocalizationService.Bind(checkbox, ContentControl.ContentProperty, text); LocalizationService.Bind(checkbox, System.Windows.Automation.AutomationProperties.NameProperty, text); checkbox.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(binding)); return checkbox; }
     private static FrameworkElement Field(string label, FrameworkElement control, double labelWidth = 155)
     {
-        var row = new Grid { Margin = new Thickness(0, 0, 0, 9) }; row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(labelWidth) }); row.ColumnDefinitions.Add(new ColumnDefinition()); var text = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap }; LocalizationService.Bind(text, TextBlock.TextProperty, label); row.Children.Add(text); if (control is Control) LocalizationService.Bind(control, System.Windows.Automation.AutomationProperties.NameProperty, label); Grid.SetColumn(control, 1); row.Children.Add(control); return row;
+        return ResponsiveLayout.Field(label, control, labelWidth);
     }
     private static Button Button(string glyph, string title, ICommand command)
     {
@@ -273,7 +277,14 @@ public partial class MainWindow : Window
 
     private void ShowText(string title, string text)
     {
-        var window = new Window { Owner = this, Title = title, Width = 700, Height = 500, Content = new TextBox { Text = text, IsReadOnly = true, AcceptsReturn = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontFamily = new FontFamily("Consolas"), Padding = new Thickness(12) }, WindowStartupLocation = WindowStartupLocation.CenterOwner }; window.Show();
+        var window = new Window { Owner = this, Title = title, Width = 700, Height = 500, Content = new TextBox { Text = text, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontFamily = new FontFamily("Consolas"), Padding = new Thickness(12) } }; ResponsiveLayout.FitOwnedWindow(window, this, 700, 500); window.Show();
+    }
+
+    private bool? ShowOwnedDialog(Window dialog, double preferredWidth, double preferredHeight)
+    {
+        ResponsiveLayout.FitOwnedWindow(dialog, this, preferredWidth, preferredHeight);
+        if (ViewModel.Demo) responsiveOwnedDialogFixture?.Invoke(dialog);
+        return dialog.ShowDialog();
     }
 
     public async Task RunSmokeAsync(string? screenshotPath = null)

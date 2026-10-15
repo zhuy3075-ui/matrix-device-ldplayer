@@ -1,3 +1,3 @@
-<Window x:Class="MatrixDevice.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="矩阵设备" Width="1440" Height="900" MinWidth="1000" MinHeight="700" WindowStartupLocation="CenterScreen">
+<Window x:Class="MatrixDevice.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:core="clr-namespace:MatrixDevice.Core;assembly=MatrixDevice.Core" Title="矩阵设备" Width="1440" Height="900" MinWidth="{x:Static core:AppSettings.MinimumWindowWidth}" MinHeight="{x:Static core:AppSettings.MinimumWindowHeight}" WindowStartupLocation="CenterScreen">
   <Grid x:Name="Shell" />
 </Window>

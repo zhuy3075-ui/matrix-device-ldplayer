@@ -762,7 +762,8 @@ public sealed class SettingsEditor : ObservableObject
         if (BasicApiPort is < 1024 or > 65535 || AutomatorApiPort is < 1024 or > 65535 || BasicApiPort == AutomatorApiPort) throw new InvalidOperationException("API 端口必须为不同的 1024–65535 整数");
         if (MainMaxSize is < 64 or > 8192 || MiniMaxSize is < 64 or > 8192 || MainMaxFps is < 1 or > 240 || MiniMaxFps is < 1 or > 240) throw new InvalidOperationException("投屏尺寸或帧率超出有效范围");
         if (MainBitRate is < 10000 or > 100000000 || MiniBitRate is < 10000 or > 100000000) throw new InvalidOperationException("码率必须为 10000–100000000 bit/s");
-        if (WindowWidth < 1000 || WindowHeight < 700) throw new InvalidOperationException("窗体至少为 1000 × 700");
+        if (!double.IsFinite(WindowWidth) || !double.IsFinite(WindowHeight) || WindowWidth < AppSettings.MinimumWindowWidth || WindowHeight < AppSettings.MinimumWindowHeight || WindowWidth > AppSettings.MaximumWindowWidth || WindowHeight > AppSettings.MaximumWindowHeight)
+            throw new InvalidOperationException($"窗体尺寸必须为 {AppSettings.MinimumWindowWidth}–{AppSettings.MaximumWindowWidth} × {AppSettings.MinimumWindowHeight}–{AppSettings.MaximumWindowHeight}");
         if (CommandTimeoutSeconds is < 1 or > 600) throw new InvalidOperationException("命令超时必须为 1–600 秒");
         var bindings = JsonSerializer.Deserialize<Dictionary<int, string>>(LdBindingsJson, JsonDefaults.Options) ?? [];
         var adbSerials = JsonSerializer.Deserialize<string[]>(AdbSerialsJson, JsonDefaults.Options) ?? throw new InvalidOperationException("ADB授权串号必须是JSON数组");

@@ -15,14 +15,15 @@ public partial class App : Application
         try
         {
             var smoke = e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
+            var shellVerification = e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase);
             var liveVerification = e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase);
             var unifiedVerification = e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase);
             var oneClickVerification = e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase);
             var monitorVerification = e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase);
-            if (new[] { smoke, liveVerification, unifiedVerification, oneClickVerification, monitorVerification }.Count(enabled => enabled) > 1)
+            if (new[] { smoke, shellVerification, liveVerification, unifiedVerification, oneClickVerification, monitorVerification }.Count(enabled => enabled) > 1)
                 throw new ArgumentException("一次只能选择一种自动验收模式。");
             string? unifiedCandidate = null;
-            var demo = smoke || e.Args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
+            var demo = smoke || shellVerification || e.Args.Contains("--demo", StringComparer.OrdinalIgnoreCase);
             var dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MatrixDevice.Reconstructed", demo ? "demo" : "data");
             var directoryIndex = Array.FindIndex(e.Args, arg => arg.Equals("--data-dir", StringComparison.OrdinalIgnoreCase));
             if (directoryIndex >= 0)
@@ -40,12 +41,12 @@ public partial class App : Application
                 if (ldConsoleIndex + 1 >= e.Args.Length || e.Args[ldConsoleIndex + 1].StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("--ldconsole 后必须提供雷电命令行程序的完整路径");
                 settings = settings with { LdConsolePath = Path.GetFullPath(e.Args[ldConsoleIndex + 1]) };
             }
-            if (smoke)
+            if (smoke || shellVerification)
             {
                 settings = settings with { WindowWidth = 1440, WindowHeight = 900, AutoStartApi = false, AutoConnect = false };
                 var widthIndex = Array.FindIndex(e.Args, arg => arg == "--width"); var heightIndex = Array.FindIndex(e.Args, arg => arg == "--height");
-                if (widthIndex >= 0 && widthIndex + 1 < e.Args.Length && double.TryParse(e.Args[widthIndex + 1], out var width)) settings = settings with { WindowWidth = Math.Clamp(width, 1000, 2400) };
-                if (heightIndex >= 0 && heightIndex + 1 < e.Args.Length && double.TryParse(e.Args[heightIndex + 1], out var height)) settings = settings with { WindowHeight = Math.Clamp(height, 700, 1800) };
+                if (widthIndex >= 0 && widthIndex + 1 < e.Args.Length && double.TryParse(e.Args[widthIndex + 1], out var width)) settings = settings with { WindowWidth = Math.Clamp(width, AppSettings.MinimumWindowWidth, AppSettings.MaximumWindowWidth) };
+                if (heightIndex >= 0 && heightIndex + 1 < e.Args.Length && double.TryParse(e.Args[heightIndex + 1], out var height)) settings = settings with { WindowHeight = Math.Clamp(height, AppSettings.MinimumWindowHeight, AppSettings.MaximumWindowHeight) };
             }
             if (unifiedVerification)
             {
@@ -73,7 +74,11 @@ public partial class App : Application
             await window.RecoverBackgroundWindowsAsync();
             window.UpdateUnifiedDirectory();
             if (runtime.Settings.AutoStartApi) await window.ViewModel.StartApisAsync();
-            if (e.Args.Contains("--open-monitor", StringComparer.OrdinalIgnoreCase) && !smoke && !liveVerification && !unifiedVerification && !oneClickVerification && !monitorVerification) window.NavigateTo("实时监控");
+            if (e.Args.Contains("--open-monitor", StringComparer.OrdinalIgnoreCase) && !smoke && !shellVerification && !liveVerification && !unifiedVerification && !oneClickVerification && !monitorVerification) window.NavigateTo("实时监控");
+            if (shellVerification)
+            {
+                await window.RunResponsiveShellAcceptanceAsync(e.Args); window.Close();
+            }
             if (smoke)
             {
                 var screenshotIndex = Array.FindIndex(e.Args, arg => arg.Equals("--screenshot", StringComparison.OrdinalIgnoreCase));
@@ -102,7 +107,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
+            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
             else MessageBox.Show(UiErrorPresentation.Describe(ex), "矩阵设备启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             try
