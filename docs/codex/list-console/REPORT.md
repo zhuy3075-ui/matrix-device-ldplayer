@@ -112,3 +112,11 @@
 交付仅提交四源、README、本报告及三份生成清单；按Git tracked快照生成源码包，另外未完的节点正文文档采用HEAD中已保存版本，不纳入本次未完成草稿，两个用户英文PNG及全部untracked材料不入包。快照清单和ZIP条目逐项核对；本机生成详情保存在 `artifacts/list-clarity-package/`。旧AP-021所列历史tracked验收材料仍保留，此次字节校验不等于对历史材料做隐私净化。
 
 灰态提示目前验证实际禁用状态与WPF服务属性，未实际打开提示Popup或验证物理悬停。全部本轮测试仅隔离Demo/STA，不能替代Android实机、真实冷启动或视频性能验证；完整项目验收目标继续执行。
+
+## 2026-10-16 本轮A07修改前版本复核
+
+最新四项请求在本轮修改前HEAD `1acbf23`中已经实现，未重复删除或重写生产代码。本次实际重读WallView、UnifiedDevicesView、LdPlayerView、UiControlAudit及ShellSimplificationSmoke，并重新打开该交付构建的设备页与主控截图。设备管理固定list、无分组入口、无独立实例下拉和两处旧连接入口；低频生命周期操作使用列表唯一勾选目标。同步点击滑动/同步按键仅在主控内，普通列表不放自动截图开关，实时多画面保留在监控。
+
+实际DLL SHA256仍为`FB4B1F8C6E77539F2C66F31C8254699FCA408674AF8EF64A4C1A9563013703D7`，与最近已完成的主仓验收一致。直接读取`artifacts/reconnect-root/root-summary-r1.json`和真实desktop/process报告：正式150/150、0警告错误，1000完整Demo exit0，listOnly/groupControlsRemoved/selectionTargetUnified/clearHiddenSelection均true、error为空；390公共布局135检查通过。这是同一构建已有执行证据的复核，不声称本次重新执行全部测试。实际配置仍E4E33A8...BB05F0，当前无矩阵或dotnet进程；没有启动、停止、输入或修改真实模拟器，也未把离线断言当作实机启动通过。
+
+以上DLL与执行状态是A07修改前的历史快照，不能作为之后新构建的结果。A07应用改名修复的独立通过、主仓构建和旧截屏前置失败分别记录于[A07报告](../apple-experience/A07_APPLICATION_IDENTITY.md)，不倒填本报告的旧执行。

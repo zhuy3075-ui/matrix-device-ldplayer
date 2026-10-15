@@ -20,6 +20,36 @@ A02主仓149/149（51.17秒）和最终1000×700界面通过；独立verifier149
 
 ## 当前状态与下一步
 
+### 最新执行：A07a已获限域独审，主仓GUI前置缺口保留
+
+本段优先于下方全部旧即时状态。r1只改ApplicationsView/ApplicationRows，原合法改名三红后独立f02正式150/51.58秒、0警告错误，新10/114检查/10清理，旧六19/18/10/11/16/49、旧应用smoke及12页完整通过。f01截屏坐标首败不倒填；r0b只将新hook移回自然应用阶段，Main5864、新fixture03FD、生产9941/F57冻结，原七夹具不动。详见[A07报告](A07_APPLICATION_IDENTITY.md)。
+
+主仓四源已机械导入且raw同；root127源与独立127源逐项规范化文本全同。root-r01参数预检在child启动前拒绝（ApplicationBatch LF/CRLF摘要差异，内容未改），保留后独审只纠正argv。root-r02 Build75.095秒exit0、150/54.18秒；完整GUI34.718秒exit1，旧重连19/缓存18通过，旧截屏9PASS1前置FAIL10清理。Main346先败，新hook381尚未到；新增10、其后四套/旧应用/12页NOT-RUN。请求OS911,573，实际1105,575，WPF screen推得0,0，不能归因用户或并同f01根因。原报告/原始流保留，所有session/child已终结，无kill/残留，127源/旧七/config E4E33均不变，Build/GUI锁空闲。
+
+非实现者明确批准A07应用改名限域交付，拒绝“root完整回归通过”或“鼠标已修”表述。交付仅4源、README、六状态/复核文档、A06d/A07报告和三清单；A06d只有真实未验报告，不导入其代码。版本与远端以Git及本机artifacts/app-identity-root交付记录为准，原两用户PNG/原始证据/配置/二进制不stage，不合并发布。
+
+下一步先对AP-033仅加有界只读输入源、捕获、真实前台与自有窗口生命周期证据，禁止盲重跑、抢焦点、弱化原断言。应用pending和正文响应式仍待，其后A08-A12、原生保存、AP019/020/023/028、真实双实例及30分钟全都开放；完整goal保持active，不回滚或清旧树。下面“A07a基线/等待r1”等为历史。
+
+### 最新执行：A07a应用改名身份已取真实红
+
+本段优先于下方历史。合同与结果见[A07_APPLICATION_IDENTITY](A07_APPLICATION_IDENTITY.md)。三新树apple-app-identity/-tests/-verifier基于1acbf23；测试r0保留，最终r0a新fixture03FD1C95...3A279/Main70055C6D...5F54D已双静审/机械导入。verifier唯一baseline-b01：150/51.54秒/0警告错误，Build73.223秒exit0；新10例3红7绿/10清理，1000smoke3.502秒exit1；旧六/旧应用smoke/12页均未到。原JSON52EEA416...7DBED、进程6CAD86E6...9E557，root实读有效前置、真实挂接命令/旧单元格名、错误和后端调用；不是helper前置红。127源/旧七套/实际配置E4E33未变，无kill，自有进程0，session62077实际终结、锁归root。
+
+已授权新实现者仅在apple-app-identity首轮修改ApplicationsView/ApplicationRows，不BuildGUI，不改公共record/测试/pending/布局/原生保存；方案为严格连接identity比较+Name-only现有行展示更新，原冻结Target不变，计划/合法结果采用最新显示名。等待两生产源冻结→root与非实现者审→独立final单1000完整→主仓代表/交付，每个实际完成缺陷立即push原私有feature。当前主仓生产源仍未改，不把修复中写成通过。上一goal轮是progress（正式夹具/方案和独审修正），本轮已取得能改变下一动作的产品红；完整目标active。
+
+### 最新执行：A06d原生交互前置失败已留证，继续A07
+
+本段优先于下方历史流程。A06c2已经实际提交并推送 `1acbf23b149047dd46a132660d417f31f5613812`，远端feature相同、test仍49e4710；完整实际记录为根 `artifacts/reconnect-root/push-complete-r1.json`（SHA32892414...0A20）。其301源/304ZIP/155Bundle与精确13暂存已经独立audit6518AB5D...9314通过，不重做该交付；A06c2交付后tracked/index干净，当前仅阶段状态文档变更，原两用户PNG仍未跟踪，配置E4E33未变。
+
+下一项轻量合同见[A06_NATIVE_IMAGE_SAVE](A06_NATIVE_IMAGE_SAVE.md)。已核SaveImageAsync在原生框后读实时crop，合法新DebugImage会清crop；VM写盘await前编码本身不是缺口。推荐开框前守卫核验并冻结PNG，确认仍保存原意图，不默认漂移后取消，不持全局Busy跨框；准备后写入不得被ExecuteAsync的Busy早退静默吞掉，并需局部写入/关闭约束。JSON原生框和未完成拖拽/失捕获另项。
+
+三新隔离树apple-native-save/-tests/-verifier均基于1acbf23。正式r0仅App严格验收接线+新NativeImageSaveAcceptance；patch6E987...FD04/fixtureAB46...9531/App244C...9999已双静审，原六套不动。独立首次Build150/51.30秒/0警告错误，实际子进程73.422秒/exit0，DLL25F2...1F77；127源/旧六/配置同，exec12857已结束归锁。
+
+root原生首启exec25625/PID27696，sky唯一返回自有Title/HWND，但首次窗口截图FrameArrived超时，刷新重选同窗/activate后单次重试仍window capture超时。遵守computer-use恢复规则停止，不用UIA/Win32输入。真实fixture在ready-for-crop90秒超时，整个child91.520秒正常exit1，无330s timeout/kill；原FAIL/verifiedfalse/cleanedtrue，Down/Up/SaveClicks0，只有Discover/Discover/F0Shot和原Task2完成，无F1/裁剪/保存框/信号/输出。这是前置失败，不是产品红，尚不批准保存实现。原报告4A5E741F...6276E、工具记录D124A613...FB3DD、root完整127/旧六/配置清理检查6EC31239...14E0D；PID0/所有exec实际终结、锁root空闲。窄runner仅102个src cs/xaml，另按Build127逐一检查，不混称。
+
+源码与原始失败均保留在独立树和root artifacts/native-save-root，本阶段主仓只改状态文档，新CLI/夹具尚未合入或push。CLI补验首r0在missing-demo因CP936误解码为UTF8而首停（实际child拒绝正确），原FAIL1CB70...6285C保留；仅另存runner-r1严格UTF8/936与decoder记录、原10断言/argv不改，经root读增量后新轮一次10/10拒绝通过。摘要tests/artifacts/native-save-cli/run-20261016-040104-3a113fe2/summary.json SHA25A4E1EB...9E115，root重读十份原stderr和完整127/旧六前后证据。每child exit1/约0.189至0.216秒/无kill，目录无误建、配置同/owned0，不是原生保存绿；没有仍运行的session。
+
+可在旧进程终结后独立做accessibility-only L1诊断，不能据此拖画布或填画面恢复；不要直接重跑同一个失败case或在无原生红时修保存。继续其他安全任务：A07当前ApplicationsView（不是旧VM LoadApps捷径）已只读发现Name参与record相等/自动读pending/固定栏三个候选，均未实测，优先做仅metadata改名的同身份应用行反例。具体为Features/Applications/ApplicationBatch.cs的ApplicationTarget positional Name自动参与record相等，而RequireSame不含Name；ApplicationsView.cs约193/231的Contains可能拒同代次/transport旧行。新A07三树尚未建立、未编码测试；下一轮先形成轻合同/受控红，不把静态推断当缺陷。完整目标active，原生保存/JSON/失捕获、AP019/020/023/028、真实1/2及30分钟仍开放。
+
 ### 最新执行：A06c2离线验收完成，交付门禁
 
 本段优先于所有下方历史流程。A06c1已实际commit/push `90815e8cd05a6b2b4574dd7ca8213da0f8a41835`，远端一致/test49e4710不变；实际交付记录在根`artifacts/cache-root/push-complete-r1.json`，不重做旧交付。

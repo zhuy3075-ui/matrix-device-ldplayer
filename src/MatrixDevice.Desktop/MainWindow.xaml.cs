@@ -378,6 +378,7 @@ public partial class MainWindow : Window
         await VerifyOperationGatesAsync();
         await VerifyOneClickProjectionAsync();
         await VerifyCanonicalDeviceActionsAsync(screenshotPath);
+        await VerifyApplicationIdentityAsync();
         await VerifyApplicationManagementAsync(screenshotPath);
         await VerifyLaunchMemoryUiAsync();
         await LdWindowVisibilitySmoke.VerifyAsync(System.IO.Path.Combine(ViewModel.DataDirectory, "window-visibility-smoke"));

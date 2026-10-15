@@ -23,15 +23,17 @@ internal sealed class ApplicationTargetRow(DeviceInfo info, bool protectedTarget
 internal sealed class InstalledApplicationRow(ApplicationTarget target, AppInfo app) : ObservableObject
 {
     private bool selected;
+    private string targetName = target.Name;
     public ApplicationTarget Target { get; } = target;
     public AppInfo App { get; } = app;
     public string Serial => Target.Serial;
-    public string TargetName => string.IsNullOrWhiteSpace(Target.Name) ? Target.Serial : Target.Name;
+    public string TargetName => string.IsNullOrWhiteSpace(targetName) ? Target.Serial : targetName;
     public string PackageName => App.PackageName;
     public string Name => App.Name ?? "未提供";
     public string Version => string.IsNullOrWhiteSpace(App.VersionName) ? "未提供" : App.VersionName;
     public string Kind => App.IsSystem ? "系统" : "用户";
     public bool IsSelected { get => selected; set => Set(ref selected, value); }
+    public void UpdateTargetName(string name) => Set(ref targetName, name, nameof(TargetName));
 }
 
 internal sealed class ApplicationTaskRow(ApplicationBatchItem item) : ObservableObject

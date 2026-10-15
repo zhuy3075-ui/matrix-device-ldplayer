@@ -133,7 +133,12 @@ public partial class MainWindow
                 else row.Update(device.Info, ApplicationTargetProtected(device.Serial));
             }
             foreach (var row in applicationTargets.Where(row => !ViewModel.Devices.Any(device => device.Serial == row.Serial)).ToArray()) applicationTargets.Remove(row);
-            foreach (var row in applicationRows.Where(row => !applicationTargets.Any(target => target.IsSelected && target.Available && target.Info.Serial == row.Serial && target.Info.Generation == row.Target.Generation && target.Info.TransportId == row.Target.TransportId)).ToArray()) applicationRows.Remove(row);
+            foreach (var row in applicationRows.ToArray())
+            {
+                var target = applicationTargets.FirstOrDefault(target => target.IsSelected && target.Available && ApplicationTargetIdentity(ApplicationTarget.Freeze(target.Info)) == ApplicationTargetIdentity(row.Target));
+                if (target is null) applicationRows.Remove(row);
+                else row.UpdateTargetName(target.Info.Name);
+            }
         }
         finally { applicationSyncing = false; }
         RefreshApplicationControls();
@@ -160,6 +165,7 @@ public partial class MainWindow
         applicationReadTimer.Stop(); applicationReadTimer.Start();
     }
     private ApplicationTarget[] SelectedApplicationTargets() => applicationTargets.Where(row => row.IsSelected).Select(row => ApplicationTarget.Freeze(row.Info)).ToArray();
+    private static (string Serial, long Generation, uint? TransportId) ApplicationTargetIdentity(ApplicationTarget target) => (target.Serial, target.Generation, target.TransportId);
     private bool CanManageApplicationTargets() => !applicationRunning && !ViewModel.Busy && !ViewModel.Transferring && !ViewModel.Runtime.Api.HasActiveRequests
         && applicationTargets.Any(row => row.IsSelected) && applicationTargets.Where(row => row.IsSelected).All(row => row.Available && !ApplicationScriptBusy(ViewModel.Runtime, row.Serial));
     private bool CanManageApplicationRows() => CanManageApplicationTargets() && applicationRows.Any(row => row.IsSelected && (applicationSystemToggle.IsChecked == true || !row.App.IsSystem));
@@ -180,7 +186,7 @@ public partial class MainWindow
     }
     private Task ChangeSelectedApplicationsAsync(ApplicationOperation operation)
     {
-        var rows = applicationRows.Where(row => row.IsSelected && (applicationSystemToggle.IsChecked == true || !row.App.IsSystem)).Select(row => new ApplicationBatchItem(row.Target, operation, row.PackageName, IsSystem: row.App.IsSystem)).ToArray();
+        var rows = applicationRows.Where(row => row.IsSelected && (applicationSystemToggle.IsChecked == true || !row.App.IsSystem)).Select(row => new ApplicationBatchItem(row.Target with { Name = row.TargetName }, operation, row.PackageName, IsSystem: row.App.IsSystem)).ToArray();
         return RunApplicationPlanAsync(ApplicationBatch.RowPlan(operation, rows), operation is ApplicationOperation.Uninstall or ApplicationOperation.Clear);
     }
     private async Task RunApplicationPlanAsync(IReadOnlyList<ApplicationBatchItem> plan, bool askConfirmation = false)
@@ -190,12 +196,12 @@ public partial class MainWindow
         var runtime = ViewModel.Runtime; var frozenSelection = SelectedApplicationTargets();
         foreach (var item in plan)
         {
-            if (!frozenSelection.Contains(item.Target)) throw new DeviceException($"应用行不属于本次目标：{item.Target.Serial}。", 409, 1003);
+            if (!frozenSelection.Select(ApplicationTargetIdentity).Contains(ApplicationTargetIdentity(item.Target))) throw new DeviceException($"应用行不属于本次目标：{item.Target.Serial}。", 409, 1003);
             item.Target.RequireSame(runtime.GetDevices().SingleOrDefault(device => device.Serial == item.Target.Serial));
         }
         var confirmed = !askConfirmation || ConfirmApplicationPlan(plan);
         if (!confirmed) { applicationResult.Text = "已取消确认，未操作任何模拟器。"; return; }
-        if (!CanManageApplicationTargets() || !ReferenceEquals(runtime, ViewModel.Runtime) || !frozenSelection.ToHashSet().SetEquals(SelectedApplicationTargets()))
+        if (!CanManageApplicationTargets() || !ReferenceEquals(runtime, ViewModel.Runtime) || !frozenSelection.Select(ApplicationTargetIdentity).ToHashSet().SetEquals(SelectedApplicationTargets().Select(ApplicationTargetIdentity)))
             throw new DeviceException("确认期间工作区或勾选目标已变化，未发送命令。", 409, 1003);
         applicationReadTimer?.Stop(); applicationReadPending = false; applicationTasks.Clear(); foreach (var item in plan) applicationTasks.Add(new(item));
         applicationCancellation = new(); applicationRunning = true; applicationCancel.IsEnabled = true; RefreshApplicationControls();
@@ -228,18 +234,20 @@ public partial class MainWindow
     private void RequireApplicationContext(MatrixRuntime runtime, ApplicationTarget target)
     {
         if (!ReferenceEquals(runtime, ViewModel.Runtime) || ViewModel.Transferring || runtime.Api.HasActiveRequests || ApplicationTargetProtected(target.Serial) || ApplicationScriptBusy(runtime, target.Serial)
-            || !SelectedApplicationTargets().Contains(target))
+            || !SelectedApplicationTargets().Select(ApplicationTargetIdentity).Contains(ApplicationTargetIdentity(target)))
             throw new DeviceException($"工作区或并行任务已变化，未继续操作：{target.Serial}。", 409, 1003);
         target.RequireSame(ViewModel.Devices.SingleOrDefault(row => row.Serial == target.Serial)?.Info); target.RequireSame(runtime.GetDevices().SingleOrDefault(device => device.Serial == target.Serial));
     }
     private void ReplaceApplicationRows(ApplicationTarget target, IReadOnlyList<AppInfo> applications)
     {
-        var selected = applicationRows.Where(row => row.Serial == target.Serial && row.IsSelected).Select(row => row.PackageName).ToHashSet(StringComparer.Ordinal);
-        foreach (var row in applicationRows.Where(row => row.Serial == target.Serial).ToArray()) applicationRows.Remove(row);
-        if (!applicationTargets.Any(row => row.IsSelected && row.Available && ApplicationTarget.Freeze(row.Info) == target)) return;
+        var identity = ApplicationTargetIdentity(target);
+        var current = applicationTargets.FirstOrDefault(row => row.IsSelected && row.Available && ApplicationTargetIdentity(ApplicationTarget.Freeze(row.Info)) == identity);
+        if (current is null) return;
+        var selected = applicationRows.Where(row => ApplicationTargetIdentity(row.Target) == identity && row.IsSelected).Select(row => row.PackageName).ToHashSet(StringComparer.Ordinal);
+        foreach (var row in applicationRows.Where(row => ApplicationTargetIdentity(row.Target) == identity).ToArray()) applicationRows.Remove(row);
         foreach (var application in applications.OrderBy(app => app.PackageName, StringComparer.Ordinal))
         {
-            var row = new InstalledApplicationRow(target, application) { IsSelected = selected.Contains(application.PackageName) };
+            var row = new InstalledApplicationRow(target with { Name = current.Info.Name }, application) { IsSelected = selected.Contains(application.PackageName) };
             row.PropertyChanged += (_, _) => RefreshApplicationControls(); applicationRows.Add(row);
         }
         RefreshApplicationControls();

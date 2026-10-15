@@ -34,6 +34,15 @@
 | AP-028 | P2/状态历史观察边界，待取证 | Catalog只存最新快照；VM未同步/未消费的Ready经Unknown/Unauthorized到Offline中间态可能无法从最终g+1区分，尚未实际运行该串联 | A06c1只承诺消费时Owner/Row/Catalog字段资格，不宣称全历史追踪；可见非Offline拒绝且清戳后不复活。完整目标后续验证中间态撤销需求和Catalog事件/版本合同，不扩大本地只读历史为新读取或输入许可 |
 | AP-029 | P1/已独立及主仓离线修复 | 同Current行新Ready后旧缓存正确撤下，但完整目录接纳不创建自动首载意图；有空闲也无Shot，真实传输/脚本阻塞时pending仍false | [A06c2](A06_RECONNECT_LOADING.md)原19=8PASS/11FAIL/19清理及r0两CS4014保留；首生产仅VM/Main30+/1-，新fixture仅显式discard+4ASCII，19动作/断言/等待不改。最终独立150/三桌面各19/289/19清理与旧五套/六shell135，主仓150/同19与原五套/390shell135通过；真实externalpending true→strict采纳false、旧在途payload拒绝及Close均核。仅完整VM接纳的自有Demo路径，不代表任意Info/Catalog-only、生产timer、Android/native保存/runtime热换或全目标通过 |
 
+## 新候选与测试环境
+
+| ID | 级别/状态 | 事实与边界 | 后续验证 |
+|---|---|---|---|
+| AP-030 | P1/原生保存源码候选，尚未复现 | SaveImageAsync在原生框返回后才取crop/图；合法新帧会清crop，存在裁剪退化新全图候选，但首次实际输入未到 | [A06d](A06_NATIVE_IMAGE_SAVE.md)保留r0；不能把工具捕获超时当产品红。恢复实际交互后取证原图/裁剪保存意图，再实施，不默认取消合法保存 |
+| AP-031 | P1/测试工具前置故障，非产品缺陷 | sky两次自有WPF窗口capture timeout，已按一次恢复规则停止；真实crop/保存Click0，fixture90秒前置超时后正常清理 | 原FAIL/清理/127源与配置证据见同报告。单独helper只读诊断不能代替原生验收；不改生产渲染、共享服务或权限来凑通过。其他页面安全工作继续 |
+| AP-032 | P1/已独立离线修复，主仓完整GUI仍有限制 | 应用页把显示名称纳入连接身份；metadata仅改名后旧应用名称不更新、启停/确认/在途List误拒绝 | [A07a](A07_APPLICATION_IDENTITY.md)原10例3红保留；r1两生产文件后独立新10/114检查及完整旧套/12页通过，四源raw同主仓、127源逻辑同，主仓150通过。root-r02在新hook前旧截屏前置失败，新10当轮NOT-RUN；限域交付已获独审，AP-033不冒称已修。在线、Runtime、明确选择和活动门禁未放宽 |
+| AP-033 | P2/旧截屏输入前置可靠性缺口，根因未定 | A07a独立f01与主仓r02在旧coordinate-route的OS/WPF/原Image命中前置失败，尚未RaiseEvent；r02发生在新应用夹具调用前，实际OS也偏离请求 | [A07a](A07_APPLICATION_IDENTITY.md)保留两FAIL，f02受控隔离新轮通过不倒填根因；不归咎用户、不弱化断言或抢焦点取绿。新应用独立结果与主仓NOT-RUN分列。下一步只读采样输入源/捕获/真实前台与窗口生命周期，不与AP-028或其它焦点候选未经证据合并 |
+
 ## 修复记录规则
 
 每个问题记录红测命令/错误、最小diff、绿测/独立复验、未验证范围和commit。原失败轮次保留本机artifacts。最多3轮review-fix；未解决需明确风险，不绕过断言或缩小用户目标。不得仅将控件禁用后称功能正常。
