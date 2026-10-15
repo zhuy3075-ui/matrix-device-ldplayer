@@ -7,6 +7,10 @@ MatrixDevice.Reconstructed/
 |-- docs/
 |   |-- ASSUMPTIONS.md
 |   |-- codex/
+|   |   |-- apple-experience/
+|   |   |   |-- CONTROL_CATALOG.md
+|   |   |   |-- DEFECTS.md
+|   |   |   +-- TEST_MATRIX.md
 |   |   |-- device-action-dedup/
 |   |   |   +-- REPORT.md
 |   |   |-- launch-memory-policy/
@@ -28,6 +32,8 @@ MatrixDevice.Reconstructed/
 |   |-- LDPLAYER_INTEGRATION.md
 |   |-- LDPLAYER_PLAN.md
 |   |-- LDPLAYER_RESULTS.md
+|   |-- PRD.md
+|   |-- PROGRESS.md
 |   |-- reference/
 |   |   |-- API.md
 |   |   |-- ARCHITECTURE.md
@@ -41,6 +47,8 @@ MatrixDevice.Reconstructed/
 |   |   |-- spec.md
 |   |   +-- uispec.md
 |   |-- RESULTS.md
+|   |-- SPEC.md
+|   |-- TASKS.md
 |   |-- testing/
 |   |   |-- API_MATRIX.md
 |   |   |-- DEFECTS.md
@@ -65,6 +73,7 @@ MatrixDevice.Reconstructed/
 |   |       |-- REPORT.md
 |   |       +-- TEST_LOG.md
 |   |-- UI_REDESIGN.md
+|   |-- UI_SPEC.md
 |   |-- verification/
 |   |   |-- build-and-tests.txt
 |   |   |-- build-final.txt
