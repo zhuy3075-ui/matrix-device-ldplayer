@@ -51,6 +51,8 @@ public partial class MainWindow : Window
     private long mainCaptureDispatchCount;
     private string[] lastMainCaptureTargets = [];
     private Func<Task>? demoMainCaptureBarrier;
+    private double observedSettingsWindowWidth;
+    private double observedSettingsWindowHeight;
     private int shellHistoryCursor = -1;
     private bool closing;
     private bool closeApproved;
@@ -74,6 +76,20 @@ public partial class MainWindow : Window
         Language = System.Windows.Markup.XmlLanguage.GetLanguage(viewModel.Runtime.Settings.Language);
         Width = viewModel.Runtime.Settings.WindowWidth;
         Height = viewModel.Runtime.Settings.WindowHeight;
+        observedSettingsWindowWidth = Width;
+        observedSettingsWindowHeight = Height;
+        viewModel.SettingsWindowSizeChanges = () =>
+        {
+            var size = SettingsWindowSize();
+            return (size.Width != observedSettingsWindowWidth ? size.Width : null, size.Height != observedSettingsWindowHeight ? size.Height : null);
+        };
+        viewModel.SettingsWindowSizeSaved = (widthEdited, heightEdited) =>
+        {
+            if (widthEdited) Width = viewModel.Runtime.Settings.WindowWidth;
+            if (heightEdited) Height = viewModel.Runtime.Settings.WindowHeight;
+            observedSettingsWindowWidth = WindowState == WindowState.Normal ? Width : SettingsWindowSize().Width;
+            observedSettingsWindowHeight = WindowState == WindowState.Normal ? Height : SettingsWindowSize().Height;
+        };
         Title = viewModel.Demo ? "矩阵设备 · 演示模式" : "矩阵设备";
         viewModel.DeviceChanged = () => { RefreshScreens(); _ = EnsureDebugLoadedAsync(); };
         viewModel.CurrentDebugReadyChanged = () => _ = EnsureDebugLoadedAsync();
@@ -87,7 +103,13 @@ public partial class MainWindow : Window
         BuildShell();
         SizeChanged += (_, _) => { CancelMainGesture(); ApplyResponsiveWorkspace(); };
         LocationChanged += (_, _) => CancelMainGesture();
-        Loaded += (_, _) => ApplyResponsiveWorkspace();
+        Loaded += (_, _) =>
+        {
+            var size = SettingsWindowSize();
+            observedSettingsWindowWidth = size.Width;
+            observedSettingsWindowHeight = size.Height;
+            ApplyResponsiveWorkspace();
+        };
         PreviewKeyDown += (_, args) => { if (args.Key == Key.Escape && navigationDrawerOpen) { CloseNavigationDrawer(); args.Handled = true; } };
         LocalizationService.Current.LanguageChanged += OnLanguageChanged;
         captureTimer = new DispatcherTimerAdapter(TimeSpan.FromSeconds(5), CaptureTickAsync);
@@ -283,6 +305,12 @@ public partial class MainWindow : Window
             debugAutoLoading = false;
             if (debugAutoPending) _ = QueueDebugAutoLoadAsync();
         }
+    }
+
+    private (double Width, double Height) SettingsWindowSize()
+    {
+        var bounds = WindowState == WindowState.Normal ? new Size(ActualWidth, ActualHeight) : RestoreBounds.Size;
+        return (double.IsFinite(bounds.Width) && bounds.Width > 0 ? bounds.Width : Width, double.IsFinite(bounds.Height) && bounds.Height > 0 ? bounds.Height : Height);
     }
 
     private async void WindowClosing(object? sender, CancelEventArgs e)

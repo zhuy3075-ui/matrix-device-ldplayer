@@ -85,6 +85,16 @@
 | AP-055 | P1/受控Stream路径自然清理已独立及主仓有限复验，旧Stdio兼容失败开放 | 旧官方Stdio等待进程退出未关闭stdin，与relay形成EOF环；原SDK45512 exit-1/缺报告保持。新路径是官方StreamClientTransport接原Process真实管道，不是原Stdio问题已修 | [A15b](../automation-expansion/MCP_STDIO.md)独立及主仓各14真实会话获独审：13自然0、复用RPC id负例自然1，原输入关闭/流与SDK终态、无kill/pending/保留/清理错；12raw拒绝也通过。real、崩溃/背压等13类NOTRUN保持；不用stop-file、反射或假transport |
 | AP-056 | P1/标准同Runtime入口独立及主仓离线修复通过，实机并发待验 | 原13f先查busy后写与单命令队列不能保护完整动作；API已进入仍接纳同A脚本，HTTP取消但原后端未返回仍可抢占，忙B时Input组却先写A | [A15c](../automation-expansion/MCP_WRITE_OWNERSHIP.md)原209通过、新13的6业务红/4合同缺失保持，后继FIFO和旧VM5红保留；最终共同门/完整组结束屏障后独立与主仓各225、MCP14/13NOTRUN、VM5及三早拒获独审。原任务/流终态、189输入/156产物/实际14PDB/用户3实核，3既有警告0错；跨进程、Runtime换代、真实MCP/实机并发和完整GUI不由本项替代 |
 
+## 设置工作区
+
+| ID | 级别/状态 | 事实与边界 | 处理/后续 |
+|---|---|---|---|
+| AP-057 | P1/自有WPF独立及主仓有限域通过 | 实际数值输入abc/空值有绑定错误，旧保存仍使用上次整数并改文件、显示成功 | [A09a](A09_SETTINGS_WORKSPACE.md)原绑定逐项更新/检错，修正后恢复；同原命令和Editor，独立及主仓16组过。不以直接给VM赋整数代替真实TextBox绑定 |
+| AP-058 | P1/自有WPF独立及主仓有限域通过 | Editor允许Store会夹取的投屏大小/FPS/超时；FTP/相对Agent地址亦能保存而新Runtime不接受 | 同报告对齐既有Store有效范围并验证HTTP/HTTPS，最终几何覆盖后复核宽高；合法上下边界/非法输入/清空实测。没有扩大后端范围或连接Agent网络，额外实际超宽前置仍NOT-RUN |
+| AP-059 | P1/自有WPF独立及主仓有限域通过 | Store合并外部FileRoot/窗体值后Editor显示及original仍旧，连续保存回写旧值 | 同一Editor完整回填与重基线，外writer连续Save及原绑定/身份过；活动VM同步/列数仍按原控件权威，不扩称全部AppSettings并发意图已修 |
+| AP-060 | P1/自有WPF独立及主仓有限域通过 | 窗体字段保存后窗口未应用，原WindowClosing以旧实际尺寸覆盖；无关保存与单轴编辑需要区分意图 | 明确输入轴与自上次保存后的实际变化分开，失败不消费，成功不把未编辑轴缩回；实际原Close唯一owner及新Store重载过，最大化/RestoreBounds仍未验 |
+| AP-061 | P2/自有WPF独立及主仓有限域通过 | 旧六尺寸控件不足44；候选390×640授权串号JSON撑高，ScrollToEnd仍读不到末字，green2保留真实单项红 | 原面板随实际宽度单/双列、局部44及原JSON120高内部滚动；同夹具最终16/3066检查过。非外部物理GUI/DPI/全部页面或实机验收，原生浏览和遗留恢复仍未执行 |
+
 ## 修复记录规则
 
 每个问题记录红测命令/错误、最小diff、绿测/独立复验、未验证范围和commit。原失败轮次保留本机artifacts。最多3轮review-fix；未解决需明确风险，不绕过断言或缩小用户目标。不得仅将控件禁用后称功能正常。

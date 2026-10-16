@@ -34,10 +34,13 @@ public partial class MainWindow
         var grid = new Grid { Margin = new Thickness(0, 10, 0, 0), MaxWidth = 980 };
         grid.ColumnDefinitions.Add(new ColumnDefinition());
         grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0) });
         var left = new StackPanel();
         left.Children.Add(Label("连接与接口"));
         left.Children.Add(PathField("ADB 路径", "Settings.AdbPath"));
-        left.Children.Add(Field("授权设备串号 JSON", BoundInput("Settings.AdbSerialsJson", multiline: true)));
+        var adbSerials = BoundInput("Settings.AdbSerialsJson", multiline: true); adbSerials.Height = 120;
+        left.Children.Add(Field("授权设备串号 JSON", adbSerials));
         left.Children.Add(PathField("scrcpy 路径", "Settings.ScrcpyPath"));
         left.Children.Add(PathField("监控视频组件", "Settings.MonitorServerPath"));
         left.Children.Add(PathField("监控 FFmpeg", "Settings.MonitorFfmpegPath"));
@@ -76,8 +79,48 @@ public partial class MainWindow
         right.Children.Add(Field("窗体高度", BoundInput("Settings.WindowHeight")));
         Grid.SetColumn(right, 1);
         grid.Children.Add(right);
-        page.Children.Add(new ScrollViewer { Content = grid, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        bool? singleColumn = null;
+        void ArrangeSections()
+        {
+            if (grid.ActualWidth <= 0 || singleColumn == (grid.ActualWidth < 900)) return;
+            singleColumn = grid.ActualWidth < 900;
+            grid.ColumnDefinitions[1].Width = singleColumn == true ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+            grid.RowDefinitions[1].Height = singleColumn == true ? GridLength.Auto : new GridLength(0);
+            Grid.SetColumn(right, singleColumn == true ? 0 : 1);
+            Grid.SetRow(right, singleColumn == true ? 1 : 0);
+            right.Margin = singleColumn == true ? new Thickness(0, 18, 0, 0) : new Thickness(25, 0, 0, 0);
+        }
+        grid.SizeChanged += (_, _) => ArrangeSections();
+        grid.Loaded += (_, _) => ArrangeSections();
+        page.Children.Add(new ScrollViewer
+        {
+            Content = grid, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalContentAlignment = HorizontalAlignment.Stretch
+        });
+        var controls = SettingsControls(page).ToArray();
+        foreach (var control in controls.Where(control => control is TextBox or ButtonBase)) control.MinHeight = Math.Max(44, control.MinHeight);
+        foreach (var control in controls.OfType<ButtonBase>()) control.MinWidth = Math.Max(44, control.MinWidth);
+        var inputs = controls.OfType<TextBox>().ToArray();
+        ViewModel.SettingsValidationError = () =>
+        {
+            var bindings = inputs.Select(input => input.GetBindingExpression(TextBox.TextProperty)).ToArray();
+            if (bindings.Any(binding => binding is null)) return "设置字段绑定不可用，请重新打开工作区后重试。";
+            foreach (var binding in bindings) binding!.UpdateSource();
+            var invalid = inputs.FirstOrDefault(input => Validation.GetHasError(input));
+            if (invalid is null) return null;
+            var field = System.Windows.Automation.AutomationProperties.GetName(invalid);
+            return $"请修正“{(string.IsNullOrWhiteSpace(field) ? "设置字段" : field)}”的输入后再保存。";
+        };
         return page;
+    }
+
+    private static IEnumerable<Control> SettingsControls(DependencyObject parent)
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(parent).OfType<DependencyObject>())
+        {
+            if (child is Control control) yield return control;
+            foreach (var descendant in SettingsControls(child)) yield return descendant;
+        }
     }
 
     private FrameworkElement PathField(string label, string binding)

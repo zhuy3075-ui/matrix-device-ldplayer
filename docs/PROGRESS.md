@@ -1,5 +1,12 @@
 # 当前目标阶段记录
 
+## 2026-10-17 / A09a设置工作区
+
+- Goal/Context：上一条进度回复本身不算开发完成；从bc471bf继续设置保存与六尺寸可达性，先读Store/Runtime约束，分离生产、页面、夹具及独立审查，不使用CODEBRAIN或真实配置。
+- Decision/Files：只改VM、MainWindow、SettingsView、App早期验收入口并增加正式Smoke；保同一Editor/Runtime和21输入/4复选框/7按钮。实际绑定错误、范围/URL、成功重基线及逐轴窗体意图修复；小屏原面板单列、局部44，长JSON120高内部滚动。Store、共享主题、Build.ps1和活动同步授权不改。
+- Verification：编译误调用、额外超宽前置、旧mtime增量复用和390×640长JSON红分别保留；最终同夹具旧生产4PASS/12纯PRODUCT。独立green-r03与主仓main-r01各原225、MCP14/13NOTRUN、三拒参及16PASS/3066检查/1621任务全终态；实际五源PDB、7个直接自有进程/14流与保护核验通过。主仓Build24140自然0/117.376秒、设置55236自然0/7.275秒，execution0865CA97…FE6B1F；详见[完整记录](codex/apple-experience/A09_SETTINGS_WORKSPACE.md)。
+- Next/Risks：完成本功能核包/精确14路径审后推原private feature，以实际Git回执为准，不重跑已完成用例。超宽7780请求实测1940仅NOT-RUN，不猜原因；最大化、原生picker/遗留恢复、外部GUI/DPI/实机及最终双30分钟仍开放。接口/工具、全RPA/MCP/抓包和完整目标继续，不因局部用例数扣减约13工作块。
+
 ## 2026-10-17 / AP042父链负实验
 
 - Goal/Context：上轮实际完成a96ae0e推送与远端核验，属于progress，不重复交付。当前程序未运行，专用1/2窗口仍在；只做官方窗口枚举，没有capture/input或真实guest动作。

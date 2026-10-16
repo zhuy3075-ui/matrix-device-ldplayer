@@ -16,6 +16,8 @@
 
 [真实双实例补验](docs/codex/apple-experience/A13_DUAL_INSTANCE_SYNC.md)已取得专用实例1/2的14项VM-SDK实际效果有限通过：主控A/当前B、两同步开关四种组合的点击/滑动/主页，以及取消勾选后的隔离反例，均由节点和PNG复核。原业务路径未改，不用分别发送两次命令冒充同步。外层脚本误读成功报告省略的null字段，原outer1保留；离线2正例/6拒例报告合同复验通过，不称原外层整轮通过。正式入口`--verify-live-dual-sync`只接受已核定的两台专用实例、固定雷电身份与新鲜manifest，不是任意设备测试入口；默认构建不会触发真实设备。主仓原209项、十一严格早拒、旧VM9与十二自有WPF案例及清理获独审通过，构建3警告/0错误。完整物理GUI、文字输入、当前应用页安装卸载和最终双实例30分钟仍待，不由这14项代替。
 
+设置页保留原21输入、4复选框和7按钮，按正文宽度单/双列重排，长JSON在输入框内滚动；原保存命令先校验实际绑定、投屏范围与HTTP/HTTPS地址，成功后同一编辑器回填合并值。明确修改窗体尺寸按轴应用，普通保存不重置手动调整的窗口；旧关闭路径仍保留。独立与主仓各原225项及16组自有WPF/Demo专项通过，覆盖六尺寸、错误纠正、写入故障、外部修改连续保存、尺寸与原正常关闭、运行中自有API端口保护；可用`--verify-settings-workspace --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`运行专项。见[设置工作区报告](docs/codex/apple-experience/A09_SETTINGS_WORKSPACE.md)，原失败保持；额外超宽前置未建立、最大化、原生选择器、真实DPI/外部GUI/实机及最终30分钟仍未验，不宣称全部设置集成路径完成。
+
 完整文件清单见 `PROJECT_TREE.md`；全部源码文本见 `SOURCE_BUNDLE.md`；对应文件摘要见 `SOURCE_MANIFEST.json`。这三个文件由 `tools/New-SourcePackage.ps1` 生成，源码 ZIP 位于 `artifacts/`。
 
 全面验收与界面重设计正在按[当前计划](plan.md)实施；目标、技术边界、视觉/命名及依赖任务分别见[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[UI规格](docs/UI_SPEC.md)、[任务表](docs/TASKS.md)。当前测试范围见[功能矩阵](docs/codex/apple-experience/TEST_MATRIX.md)、[逐控件目录](docs/codex/apple-experience/CONTROL_CATALOG.md)和[问题清单](docs/codex/apple-experience/DEFECTS.md)，进展见[阶段记录](docs/PROGRESS.md)。已修复主控A/当前B时投屏错目标的代码路径，增加主控身份与进程所有权守卫，见[A02独立离线验收](docs/codex/apple-experience/A02_MAIN_TARGET.md)；真实外部投屏仍待验。这是进行中的工作，149项和三尺寸Demo不代表本轮全功能/实机/窄屏已通过。

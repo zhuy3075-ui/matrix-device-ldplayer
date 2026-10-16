@@ -131,6 +131,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     internal Action<DebugSourceIdentity>? DebugSourceAdopted { get; set; }
     public Action? WallChanged { get; set; }
     public Action? NodeSelectionChanged { get; set; }
+    internal Func<string?>? SettingsValidationError { get; set; }
+    internal Func<(double? Width, double? Height)>? SettingsWindowSizeChanges { get; set; }
+    internal Action<bool, bool>? SettingsWindowSizeSaved { get; set; }
     public Func<string, string, bool> Confirm { get; set; } = (title, message) => MessageBox.Show(message, title, MessageBoxButton.OKCancel, MessageBoxImage.Warning) == MessageBoxResult.OK;
 
     public DeviceRow? CurrentDevice
@@ -938,11 +941,20 @@ public sealed partial class WorkspaceViewModel : ObservableObject
 
     public Task SaveSettingsAsync() => ExecuteAsync("保存设置", async () =>
     {
+        SettingsNotice = "";
+        if (SettingsValidationError?.Invoke() is { } validationError) throw new InvalidOperationException(validationError);
+        var widthEdited = Settings.WindowWidthEdited;
+        var heightEdited = Settings.WindowHeightEdited;
         var settings = Settings.ToSettings() with { WallColumns = WallColumns, SyncMouse = SyncMouse, SyncKeyboard = SyncKeyboard };
+        if (SettingsWindowSizeChanges?.Invoke() is { } windowChanges)
+            settings = settings with { WindowWidth = !widthEdited && windowChanges.Width is { } width ? width : settings.WindowWidth, WindowHeight = !heightEdited && windowChanges.Height is { } height ? height : settings.WindowHeight };
+        SettingsEditor.ValidateWindowSize(settings.WindowWidth, settings.WindowHeight);
         if ((runtime.Api.BasicRunning && settings.BasicApiPort != runtime.Settings.BasicApiPort) || (runtime.Api.AutomatorRunning && settings.AutomatorApiPort != runtime.Settings.AutomatorApiPort)) throw new InvalidOperationException("请先停止正在运行的 API，再修改端口");
         runtime.Settings = runtime.SettingsStore.Save(settings);
+        Settings.AcceptSaved(runtime.Settings);
         SettingsNotice = "设置已保存；设备调试服务、自动化服务、雷电连接与监控视频组件配置重启后生效";
         AddActivity(SettingsNotice);
+        SettingsWindowSizeSaved?.Invoke(widthEdited, heightEdited);
         await Task.CompletedTask;
     });
 
@@ -987,7 +999,7 @@ public sealed record ScriptDeviceParameters(string Serial, string ScriptId, stri
 
 public sealed class SettingsEditor : ObservableObject
 {
-    private readonly AppSettings original;
+    private AppSettings original;
     public SettingsEditor(AppSettings settings)
     {
         original = settings;
@@ -1024,14 +1036,31 @@ public sealed class SettingsEditor : ObservableObject
     public double WindowHeight { get; set; }
     public string FileRoot { get; set; }
     public int CommandTimeoutSeconds { get; set; }
+    internal bool WindowWidthEdited => WindowWidth != original.WindowWidth;
+    internal bool WindowHeightEdited => WindowHeight != original.WindowHeight;
+    internal static void ValidateWindowSize(double width, double height)
+    {
+        if (!double.IsFinite(width) || !double.IsFinite(height) || width < AppSettings.MinimumWindowWidth || height < AppSettings.MinimumWindowHeight || width > AppSettings.MaximumWindowWidth || height > AppSettings.MaximumWindowHeight)
+            throw new InvalidOperationException($"窗体尺寸必须为 {AppSettings.MinimumWindowWidth}–{AppSettings.MaximumWindowWidth} × {AppSettings.MinimumWindowHeight}–{AppSettings.MaximumWindowHeight}");
+    }
+    internal void AcceptSaved(AppSettings settings)
+    {
+        original = settings;
+        MonitorServerPath = settings.MonitorServerPath; MonitorFfmpegPath = settings.MonitorFfmpegPath;
+        AdbPath = settings.AdbPath; AdbSerialsJson = JsonSerializer.Serialize(settings.AdbAllowedSerials, JsonDefaults.Options); ScrcpyPath = settings.ScrcpyPath; LdConsolePath = settings.LdConsolePath; LdBindingsJson = JsonSerializer.Serialize(settings.LdSerialBindings, JsonDefaults.Options); AgentBaseUrl = settings.AgentBaseUrl ?? ""; AgentSerial = settings.AgentSerial ?? "";
+        BasicApiPort = settings.BasicApiPort; AutomatorApiPort = settings.AutomatorApiPort; AutoConnect = settings.AutoConnect; AutoStartApi = settings.AutoStartApi;
+        Language = "zh-CN"; MainMaxSize = settings.MainMaxSize; MiniMaxSize = settings.MiniMaxSize; MainMaxFps = settings.MainMaxFps; MiniMaxFps = settings.MiniMaxFps;
+        MainBitRate = settings.MainBitRate; MiniBitRate = settings.MiniBitRate; ForceHardwareDecode = settings.ForceHardwareDecode; ShowFps = settings.ShowFps;
+        WindowWidth = settings.WindowWidth; WindowHeight = settings.WindowHeight; FileRoot = settings.FileRoot; CommandTimeoutSeconds = settings.CommandTimeoutSeconds;
+        Changed(string.Empty);
+    }
     public AppSettings ToSettings()
     {
         if (BasicApiPort is < 1024 or > 65535 || AutomatorApiPort is < 1024 or > 65535 || BasicApiPort == AutomatorApiPort) throw new InvalidOperationException("API 端口必须为不同的 1024–65535 整数");
-        if (MainMaxSize is < 64 or > 8192 || MiniMaxSize is < 64 or > 8192 || MainMaxFps is < 1 or > 240 || MiniMaxFps is < 1 or > 240) throw new InvalidOperationException("投屏尺寸或帧率超出有效范围");
+        if (MainMaxSize is < 180 or > 4096 || MiniMaxSize is < 180 or > 4096 || MainMaxFps is < 1 or > 120 || MiniMaxFps is < 1 or > 120) throw new InvalidOperationException("投屏尺寸必须为 180..4096 px，帧率必须为 1..120 FPS");
         if (MainBitRate is < 10000 or > 100000000 || MiniBitRate is < 10000 or > 100000000) throw new InvalidOperationException("码率必须为 10000–100000000 bit/s");
-        if (!double.IsFinite(WindowWidth) || !double.IsFinite(WindowHeight) || WindowWidth < AppSettings.MinimumWindowWidth || WindowHeight < AppSettings.MinimumWindowHeight || WindowWidth > AppSettings.MaximumWindowWidth || WindowHeight > AppSettings.MaximumWindowHeight)
-            throw new InvalidOperationException($"窗体尺寸必须为 {AppSettings.MinimumWindowWidth}–{AppSettings.MaximumWindowWidth} × {AppSettings.MinimumWindowHeight}–{AppSettings.MaximumWindowHeight}");
-        if (CommandTimeoutSeconds is < 1 or > 600) throw new InvalidOperationException("命令超时必须为 1–600 秒");
+        ValidateWindowSize(WindowWidth, WindowHeight);
+        if (CommandTimeoutSeconds is < 1 or > 300) throw new InvalidOperationException("命令超时必须为 1..300 秒");
         var bindings = JsonSerializer.Deserialize<Dictionary<int, string>>(LdBindingsJson, JsonDefaults.Options) ?? [];
         var adbSerials = JsonSerializer.Deserialize<string[]>(AdbSerialsJson, JsonDefaults.Options) ?? throw new InvalidOperationException("ADB授权串号必须是JSON数组");
         if (adbSerials.Any(serial => string.IsNullOrWhiteSpace(serial) || serial.StartsWith('-') || serial.Contains('\0') || serial.Any(char.IsWhiteSpace)) || adbSerials.Distinct(StringComparer.Ordinal).Count() != adbSerials.Length)
@@ -1039,6 +1068,7 @@ public sealed class SettingsEditor : ObservableObject
         if (bindings.Any(binding => binding.Key < 0 || binding.Key == 99999 || string.IsNullOrWhiteSpace(binding.Value))) throw new InvalidOperationException("雷电绑定必须使用有效实例编号与非空设备序列号");
         if (bindings.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count() != bindings.Count) throw new InvalidOperationException("不同雷电实例不能绑定相同设备序列号");
         if (!string.IsNullOrWhiteSpace(AgentBaseUrl) && string.IsNullOrWhiteSpace(AgentSerial)) throw new InvalidOperationException("配置 Agent 地址时必须同时指定唯一设备 serial");
+        if (!string.IsNullOrWhiteSpace(AgentBaseUrl) && (!Uri.TryCreate(AgentBaseUrl.Trim(), UriKind.Absolute, out var agentUri) || agentUri.Scheme is not ("http" or "https"))) throw new InvalidOperationException("Agent 地址必须是完整的 HTTP 或 HTTPS 地址");
         if (!string.IsNullOrWhiteSpace(AgentBaseUrl) && !adbSerials.Contains(AgentSerial.Trim(), StringComparer.Ordinal)) throw new InvalidOperationException("Agent串号必须位于ADB授权串号数组中");
         return original with { AdbPath = AdbPath.Trim(), AdbAllowedSerials = adbSerials, ScrcpyPath = ScrcpyPath.Trim(), MonitorServerPath = MonitorServerPath.Trim(), MonitorFfmpegPath = MonitorFfmpegPath.Trim(), LdConsolePath = LdConsolePath.Trim(), LdSerialBindings = bindings, AgentBaseUrl = string.IsNullOrWhiteSpace(AgentBaseUrl) ? null : AgentBaseUrl.Trim(), AgentSerial = string.IsNullOrWhiteSpace(AgentSerial) ? null : AgentSerial.Trim(), BasicApiPort = BasicApiPort, AutomatorApiPort = AutomatorApiPort, AutoConnect = AutoConnect, AutoStartApi = AutoStartApi, Language = "zh-CN", MainMaxSize = MainMaxSize, MiniMaxSize = MiniMaxSize, MainMaxFps = MainMaxFps, MiniMaxFps = MiniMaxFps, MainBitRate = MainBitRate, MiniBitRate = MiniBitRate, ForceHardwareDecode = ForceHardwareDecode, ShowFps = ShowFps, WindowWidth = WindowWidth, WindowHeight = WindowHeight, FileRoot = FileRoot.Trim(), CommandTimeoutSeconds = CommandTimeoutSeconds };
     }

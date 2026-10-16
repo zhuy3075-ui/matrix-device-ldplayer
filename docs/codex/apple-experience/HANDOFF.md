@@ -2,7 +2,14 @@
 
 更新：2026-10-17。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 最新裁决：AP042父链负实验
+## 最新执行：A09a设置工作区
+
+- 基线bc471bf，五源已按独立冻结精确集成：App7E438、MainE50C、VM4C7A、SettingsViewC023、Smoke50F78。仅保存校验/同Editor回填/逐轴几何、原页面重排与正式验收；Store/共享主题/Build.ps1/真实配置不改。
+- [设置报告](A09_SETTINGS_WORKSPACE.md)记录所有原失败。旧r03实际4PASS/12PRODUCT；候选green1为PDB失配旧产物、green2为真实390×640长JSON红，不能混同或覆盖。最终独立green3和主仓main1各225、MCP14/13NOTRUN、三拒参、16PASS/3066检查/1621任务终态与实际五源PDB通过；7直接自有进程/14流全排空，无kill/pending/保留/清理错，窗口0。主仓execution0865CA97…FE6B1F，原件artifacts/settings-workspace/main-r01。
+- 全部必需exec已终态。下一门仅独立终审、6份正式文档与三生成清单/完整包核对、精确14路径index审与同private feature push；实际Git/回执决定交付状态，不先写已推送。用户配置及两PNG保持，APK/SDK/二进制/本轮raw不上传；历史AP021归档分类仍开放。下面旧“待构建/待推送”小节是历史，不据此重复运行。
+- 后继仍含接口/工具、其余设置集成路径、终端/文本/文件、节点/截屏原生交互、完整GUI/DPI、真实应用GUI生命周期及最终双实例30分钟、RPA/MCP/抓包。额外实际超宽前置/maximized/原生picker/恢复/Agent网络未验；活动VM三项同步/列数沿原控件权威，不宣称全部外部配置意图已修。约13工作块/完整goal保持active，不减成此局部任务。
+
+## 上轮裁决：AP042父链负实验
 
 - 上一阶段已实际推送a96ae0e4c87ad625f7b754fefefb3954e345063b，feature同值、test49e4710保持；回执main artifacts/write-ownership/push-complete.json。下方A15c“待核包/未推送”是历史，不重做。
 - [父链对照结果](AP042_PARENT_CHAIN_RESULT.md)已获两份独立终态审：A/B均146→146→146、应用owner缺3/残留111，各4条原PRODUCT失败；B标准Window1→tabs12真实边成立且未预读tabs孩子。仅补父链不足，不合入实验C#，不关闭AP042/AP045，不恢复截图或错误坐标分支。
