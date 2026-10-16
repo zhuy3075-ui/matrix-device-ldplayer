@@ -1,5 +1,20 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / CMFA单实例共享安装首验
+
+- Goal：使用用户新提供APK继续真实应用链，固定SHA/包/专用1目标；原实例0、共享ADB与账号数据不改，不授权VPN或敏感权限。新增正式只读预检与显式生命周期入口，默认158及生产代码不变。
+- Context/Decision：现有ApplicationBatch安装为覆盖参数，先all-users含保留记录检查，再在实际Install调用处复核并持APK只读lease；只有精确版本/路径回读才owned，异常停止并留ledger，无自动清理。r2前台包边界误匹配经本地反例后仅两行收紧，r2原件保留。
+- Verification：r3独立158/51.16秒、主仓158/51.43秒，0警告错误，PDB三源与146输入/config前后相同。r1实读17步骤通过，但外层空error字段StrictMode失败保留未重跑；l01一次安装/版本211035/2.11.35.Meta/路径核对及启动进程成立，首次权限页占前台，主页断言FAIL；Stop/Uninstall/截图/GUI均NOT-RUN。
+- Evidence：详见[A07_CMFA_APPLICATIONS](codex/apple-experience/A07_CMFA_APPLICATIONS.md)。本机原件在独立树lifecycle-l01，5child终结、无超时kill、自有进程0，23目录采样/ADB/config保持。ledger owned=true、待人工复核，安装保留；不覆盖重装或自动补清理。
+- Next/Risks：AP-003与AP-036开放，先基于ledger重核后另立受限停止/卸载或恢复可靠GUI观察后拒绝非必要权限；当前Windows抓取失败不绕过。双实例同步、当前应用GUI、最终双实例30分钟及A08-A16不取消。仅正式测试/报告/README与清单限域提交，排除APK、本机配置、依赖和原始证据，无merge/release；实际push以Git记录为准。
+
+## 2026-10-16 / 用户提供CMFA包与当前版本只读接入
+
+- AP-035已实际push`01e5c10a7f14949b1124597479ea0b1a3611753d`，独审13路径/311源/314ZIP/158节Bundle通过，未合并发布，test备份原值。
+- 用户提供CMFA APK后独立官方AAPT2静态预检两次exit0：包com.github.metacubex.clash.meta、2.11.35.Meta/211035、min21/target35、仅ARM64，含VPN服务声明；未验签/安装/启动，不授权VPN或导入配置。它提供真实安装测试候选，不取消受控自有应用的后续需要。
+- 当前版本CLI在fresh仅实例1配置实际只读接入成功，PID75236/exit0/0.596秒，Android14/Ready/transport8，stderr0；前后ADB owner62248/birth/协议及主配置保持。原始证据artifacts/apk-cmfa-live/r00，不上传。尚未查同包/ABI、未安装，不冒充新版应用页/双实例或最终30分钟验收。
+- 下一步按HANDOFF继续同包保护与兼容性预检、当前应用页实测、AP-033输入源恢复；本补充为进行中日志，不属于已交付AP-035包或新的功能修复提交。
+
 ## 2026-10-16 / A13b数据库长路径修复
 
 - Goal：继续全测，先解除可稳定复现的AP-035，不用短目录掩盖原数据路径故障。三隔离树分别实现、编写正式回归、独立验证；只改CatalogRepository原生主库与备份路径，事务/schema/原位置不变。

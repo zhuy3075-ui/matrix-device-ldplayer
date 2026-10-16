@@ -12,6 +12,18 @@ using MatrixDevice.Core;
 using MatrixDevice.Features;
 using MatrixDevice.Host;
 
+if (args.Length > 0 && args[0] == "--application-preflight")
+{
+    try { await ApplicationPreflightAcceptance.RunAsync(args.Skip(1).ToArray()); }
+    catch (Exception ex) { Console.Error.WriteLine(ex); Environment.ExitCode = 1; }
+    return;
+}
+if (args.Length > 0 && args[0] == "--application-lifecycle")
+{
+    try { await ApplicationPreflightAcceptance.RunLifecycleAsync(args.Skip(1).ToArray()); }
+    catch (Exception ex) { Console.Error.WriteLine(ex); Environment.ExitCode = 1; }
+    return;
+}
 if (args.Length > 0 && args[0] == "--multi-acceptance")
 {
     try { await MultiInstanceAcceptance.RunAsync(args.Skip(1).ToArray()); }

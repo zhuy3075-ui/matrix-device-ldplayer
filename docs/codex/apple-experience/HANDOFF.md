@@ -2,6 +2,26 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
+## 最新执行：CMFA安装成功，权限页阻断后续
+
+本节优先于下方历史。用户提供的固定CMFA包已在专用实例1真实安装一次，版本211035/2.11.35.Meta、非系统base.apk路径及本轮owned证明成立；共享Start一次、主进程4564与background4590存在。但Android PermissionController GrantPermissionsActivity占前台，CMFA MainActivityAlias为PAUSED，主页效果断言FAIL。没有截图、Stop、Uninstall、grant或VPN操作，不把启动请求成功当主页成功；具体权限种类未确定。详见[A07_CMFA_APPLICATIONS](A07_CMFA_APPLICATIONS.md)，AP-003仍开放、AP-036为测试前置阻断，不归产品缺陷。
+
+安装仍保留，ledger owned=true、PENDING-MANUAL-REVIEW-NO-AUTOMATIC-CLEANUP。原件在`.worktrees/app-preflight-verifier/artifacts/app-preflight-verifier/lifecycle-l01/lifecycle/installation-ledger.json`，SHA `0D815ED2C25D0E2388B224EE1A49FB704D473E1982ACB9FACFB9B5B500B19AE6`。不得重跑完整安装模式覆盖它；下一步先重新证明冻结进程/owner/transport及本轮精确版本/路径，另立受限Stop/Uninstall用例，或恢复可靠观察后在真实GUI拒绝非必要权限。保留本次FAIL，不自动清包、不放宽主页断言、不代用户授权，也不借其实现VPN抓包。
+
+两个正式测试源已主仓整合：fixture CAD755...D1360，Program993914...D8D5D，仅两个新模式分发，不改生产及原158。r3独立158/51.16秒、主仓158/51.43秒，构建均0警告错误、PDB三源一致、146输入/config前后保持；原158名称顺序与物理输入集合也核同。r2正则误匹配已在测试证据逻辑中最小收紧，不能当生产功能修复。r1只读17步骤通过，外层StrictMode空字段错误原样保留；l01正式exit1/21.480秒、37步骤通过后主页FAIL，5子进程全终结、无超时kill，自有测试进程0。23目录采样及ADB62248/birth/path/hash/transport8保持，不外推所有数据无变化。
+
+当前无必需运行的exec子进程，执行锁归root。Windows Computer Use抓取两次超时后已停止Windows输入，不绕过Sky使用Win32/UIA/SendInput；当前ApplicationsView文件框/确认/进度、双实例同步与应用链仍未验，AP-033及最终双实例30分钟、A07余项/A08-A16继续active。正式测试、脱敏报告及源码清单限域核包/独审后推送原私有feature分支，不上传APK、配置、target/ledger原件或原始证据，不合并发布；实际提交以Git记录为准。
+
+## 早期准备：用户提供CMFA测试包
+
+AP-035已单独提交推送`01e5c10a7f14949b1124597479ea0b1a3611753d`，test备份不变；以下是推送后新开始的实机前置，不混入该修复验收。用户新提供`C:/Users/Administrator/Downloads/cmfa-2.11.35-meta-arm64-v8a-release.apk`，同意将其作为测试候选。官方固定AAPT2两次静态解析均exit0、无stderr；精确包名`com.github.metacubex.clash.meta`，版本`2.11.35.Meta`/211035，min21/target35/compile35，仅arm64-v8a原生库。文件48780036字节，SHA`AF7F05D8801798A8E75DE682E5F67070138BECB8623B7A341C3E5CD042A3753D`。有MAIN/LAUNCHER的MainActivityAlias，但badging无launchable行，须设备PM实证。它是VPN工具，TunService要求BIND_VPN_SERVICE；不授权VPN、不导入配置、不改代理或网络、不授敏感权限。静态声明不等于有效签名/安装兼容或已获权限。
+
+静态原件在`.worktrees/sqlite-path-tests/artifacts/apk-cmfa-inspect`，root已读完整报告；不上传APK或原始输出。当前无需先等待自建APK即可开展该第三方包的安装链路预检，但独立可控画面/参数回读等自有测试需求没有因此取消。JDK只有官方便携候选的来源/散列调查，没有下载、安装或执行；旧“已有Temurin”仍无路径证据。
+
+当前root `artifacts/apk-cmfa-live/r00`：仅1绑定的fresh配置，实际当前CLI PID75236正常exit0/0.596秒、stderr0，只读接入`emulator-5556`/transport8/Pixel8/Android14/Ready。实例1播放器63000、VBox68124，实例2关闭；原实例0未操作。前后host-only快照均ADB62248、同birth/path/SHA、协议0029，主profile仍E4E33；没有安装/卸载/启动APK或GUI操作。不能把这次CLI接入当当前ApplicationsView或双实例通过。
+
+下一步先用现有身份冻结后端只读检查专用1/2的ABI及同包；已有同包则保护原数据，不覆盖卸载。之后走当前应用页实际安装/精确列表版本/受控启动停止/仅本轮新装包卸载消失；没有VPN或配置操作许可。仍需恢复AP-033可靠真实输入前置、双实例同步四开关及最终双实例30分钟；所有后续源码修复独审后单独push。该补充属于进行中状态，尚未重新核包或单独交付。
+
 ## 最新执行：AP-035已限域离线修复
 
 本段优先于下方历史阶段。基于1b5bac0，唯一产品CatalogRepository修正Windows原生主库/备份路径，不搬移数据、不改事务/schema。新CatalogPathTests的8项追加在原150之后；原代码实际152/158、6条SQLite14。首修复f01运行旧DLL（PDB仍原源checksum），失败保留；只touch该自有源mtime后独立f02有效158/51.43秒，主仓一次158/51.76秒，0警告错误。两边PDB均核三冻结源码，145输入/配置前后保持、进程和自有临时目录清理。主仓四普通路径251/252/253/300的真实CLI也全exit0并独占再开；详见[A13报告](A13_SQLITE_PATH.md)，包/推送以实际交付记录为准。
