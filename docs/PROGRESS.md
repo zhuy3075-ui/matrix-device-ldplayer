@@ -1,5 +1,14 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / A07b2接口排空后恢复应用读取
+
+- Goal/Context：承接ebda58d及A07b1保留的API释放缺口；原Tick保留pending但API计数归零无通知。先在三个隔离树定点静审/冻结，原生产真实loopback HTTP与原350ms勾选路径取红，不触真实设备或共享ADB。
+- Baseline：r1a原12例8 PRODUCT-FAIL/4 PASS、12清理，真实计数归零5秒仍零List；原158通过。List失败例尚未进入首List及后续新意图，旧套/12页NOT-RUN。原件保持；本地审计首次空属性错误仅补守卫后审同证据，未重跑产品。
+- Files/Decision：生产仅ApiServiceManager/ApplicationsView 32+/2-，归零提示逐observer隔离，页面排原350ms且执行时重核source/runtime/关闭；全部门禁/全局活动定义不变。新fixture及Main唯一首hook保留19旧原件；r2原12路径加两个新事件合同，不能倒填原基线14例。详见[A07_API_DRAIN](codex/apple-experience/A07_API_DRAIN.md)。
+- Verification：独立Build总69.458秒，实际构建17.84秒/158项50.85秒；完整1000 Smoke148.325秒。主仓Build总72.155秒，实际构建20.24秒/158项51.08秒；完整Smoke144.498秒。均0警告错误，各14 PASS/496检查/100任务记录终态/16真实HTTP门/14清理，全部旧套及12页到达通过，原AP-033成因不因本次绿关闭。
+- Evidence：主仓报告352AB302...875B、独审1916917D...3C6A、DLL6947B826...A509；五次147输入、原143及19旧raw、PDB23、与独立147规范化全文/canonical、配置E4E33保持。异常observer后正常observer/落盘marker各1；真实唯一Pending操作在close请求后执行Completed且零List。无timeout/kill/清理错/owned残留；stderr15948字节旧已捕获诊断保留，不称空流。
+- Next/Risks：本功能独审后限域核包并单独push原私有feature，排除APK/配置/依赖/本轮raw及两PNG，不合并发布；具体commit/包摘要以Git及本机receipt为准。日志observer自身抛错未测，公开Demo不支持runtime热换故仅静审其guard。当前应用GUI/正文六尺寸、真实双实例同步、最终双实例30分钟与A08-A16全部继续，完整goal active。
+
 ## 2026-10-16 / CMFA本轮owned停止卸载实测
 
 - Goal/Context：承接已push的e5a44bd首验，原l01主页权限阻断FAIL保持；接受权限不是验证停止/卸载的前提。另立受限模式，原台账SHA与目标全部字段先验，现场版本/非系统路径与身份再证明后仅共享Stop/Uninstall，无重装、授权或GUI动作。

@@ -21,11 +21,20 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
     private int _automatorPort;
     private int activeRequests;
     public bool HasActiveRequests => Volatile.Read(ref activeRequests) != 0;
+    public event EventHandler? RequestsDrained;
     private async Task TrackRequestAsync(Func<Task> action)
     {
         Interlocked.Increment(ref activeRequests);
         try { await action(); }
-        finally { Interlocked.Decrement(ref activeRequests); }
+        finally
+        {
+            if (Interlocked.Decrement(ref activeRequests) == 0)
+                foreach (EventHandler observer in RequestsDrained?.GetInvocationList() ?? [])
+                {
+                    try { observer(this, EventArgs.Empty); }
+                    catch (Exception error) { log.Write("api-drain-notification-error", error.ToString()); }
+                }
+        }
     }
     public bool BasicRunning => _basic is not null;
     public bool AutomatorRunning => _automator is not null;

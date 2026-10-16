@@ -2,6 +2,20 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
+## 最新完成：API排空恢复应用读取
+
+本节优先于下方历史。A07b2单一修复已完成独立及主仓限域验收，执行锁归root，无必需运行的子进程；完整goal仍active。仅Host/ApplicationsView两生产源32+/2-，增加最后请求归零提示，页面在自身Dispatcher重核source/runtime/关闭后补排原350ms；不改变CanManage、身份/保护、Busy或全局活动定义。正式测试新fixture和Main唯一首hook保持19旧Smoke原件。
+
+原生产baseline-b01的r1a 12例8 PRODUCT-FAIL/4 PASS保留，旧套/12页当轮NOT-RUN；修复r2保留12路径并新增异常订阅/已排队后关闭两个公共事件合同，不倒填原基线14例。独立f01与主仓r01各14 PASS/496检查/100任务记录终态/16真实HTTP门/14清理，原158项、八旧专项、原应用及12页完整通过。root Build30508正常exit0/72.155秒（实际构建20.24秒、158项51.08秒），Smoke37868 exit0/144.498秒，无timeout/kill/清理错或owned残留；stderr15948字节旧已捕获诊断保留，不称零输出。
+
+四源冻结：Host7851505D510558256E58845F69A667D415469DFDCA4A50CAAC73CEFEDB4FC6AC，Applications3FDEB924EB114C409F23C975831DF855DC3A5B1950640077C30842D3358FE8F0，新fixture363694C78D1CD6D7AFAE5F5268712BF3B222D63FD30F7DB393C682AC448D2394，Main2669087FAD9D5C245D639C19033002373C89C16BF522729801AEE0D5C50E1C30。主仓五次147输入、其余143原raw/19旧原件、实际PDB23与原配置E4E33核同；147 canonical及规范化全文逐项对独立实际执行输入。主仓DLL6947B8266E6784A084248B37D0F7545D8054C3F115EBD71546DF5E532D64A509。
+
+主仓新报告SHA352AB302BB14877A1C8FEEFC2400F38742129C6D32C9EB859F60F00C43FE875B；独审1916917D8607A1BDA3A6FF09B75BF7C3DCC331486E9F728A365E6A0A68283C6A，实际末快照C7845604021EB18B6D060F0E551C09DDA75BD4932DD3ABC8973DAF033B7C4247。本机raw、r1/r1a/r2及delta/前置审计错误均保留，细节见[A07_API_DRAIN](A07_API_DRAIN.md)，不重复重跑取绿。两生产源、新fixture/Main、八相关文档及三清单冻结后核包/独审暂存，单功能push原私有feature；实际提交、包/refs以Git及ignored `artifacts/app-api-idle-main/push-complete.json`为准。本节不预写提交SHA。原test备份49e4710和两用户PNG保持；无merge/release/清worktree，APK/本机配置/依赖/本轮raw不上传，历史AP-021材料不净化。
+
+本轮仅自有Demo/真实loopback HTTP与逻辑WPF，无真实guest、共享ADB、Windows输入或权限动作。异常RequestsDrained observer已验证后续监听和同marker日志真正落盘；日志observer自身再抛错未测，不扩大日志模块。公开Demo不支持runtime热换，旧API回调身份守卫仅静审，实机热换仍未验。AP-033本次绿不关闭间歇输入源成因；nodes/colors0及最终设备页截图不冒充节点效果或应用正文六尺寸。
+
+下一步：继续A07正文响应式及当前ApplicationsView实际文件框/确认/进度、恢复可靠物理GUI观察前置；真实1/2同步、最终版本双实例30分钟、AP-003/AP-033/AP-036与A08-A16全部必交付。Windows Computer Use此前两次抓取超时，不用Win32/UIA/SendInput绕过；只读静态候选不能写成已复现。CMFA本轮测试安装已按上一阶段owned清理卸载、下载APK保留，旧权限页主页FAIL不改；不要重装、重接受权限或把共享层安装卸载算当前GUI通过。没有待用户问题，按安全推荐项继续。
+
 ## 最新执行：CMFA本轮新装包已停止并卸载
 
 首轮正式测试/报告已限域push `e5a44bd6b6885013e2f6bac609362e167c1bb58d`，test备份49e4710不变。后续[A07_OWNED_CLEANUP](A07_OWNED_CLEANUP.md)独立小阶段已完成：重新证明原台账及现场身份/版本/路径后，只对专用实例1执行共享Stop一次、Uninstall一次。没有重装、再启动、授权、VPN或GUI操作；首轮l01主页FAIL原样保留。

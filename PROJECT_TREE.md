@@ -22,6 +22,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- A06_NODE_RESPONSIVE.md
 |   |   |   |-- A06_RECONNECT_LOADING.md
 |   |   |   |-- A06_SCREENSHOT_RESPONSIVE.md
+|   |   |   |-- A07_API_DRAIN.md
 |   |   |   |-- A07_APPLICATION_IDENTITY.md
 |   |   |   |-- A07_APPLICATION_PENDING.md
 |   |   |   |-- A07_CMFA_APPLICATIONS.md
@@ -255,6 +256,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- Views/
 |   |   |   |-- ApiView.cs
 |   |   |   |-- AppleAppearanceSmoke.cs
+|   |   |   |-- ApplicationApiPendingSmoke.cs
 |   |   |   |-- ApplicationIdentitySmoke.cs
 |   |   |   |-- ApplicationManagementSmoke.cs
 |   |   |   |-- ApplicationPendingSmoke.cs

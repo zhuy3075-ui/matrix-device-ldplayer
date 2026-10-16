@@ -29,6 +29,7 @@ public partial class MainWindow
     private CheckBox applicationSystemToggle = null!;
     private Button applicationCancel = null!;
     private ICollectionView applicationRowsView = null!;
+    private ApiServiceManager? applicationApi;
     private DispatcherTimer? applicationReadTimer;
     private CancellationTokenSource? applicationCancellation;
     private bool applicationRunning;
@@ -91,9 +92,29 @@ public partial class MainWindow
         foreach (var grid in new[] { applications, tasks })
             foreach (var column in grid.Columns.Where(column => column.Width.IsAbsolute)) column.MinWidth = column.Width.Value;
         ViewModel.Devices.CollectionChanged += (_, _) => SyncApplicationTargets();
-        ViewModel.PropertyChanged += (_, _) => { SyncApplicationTargets(); RefreshApplicationControls(); if (!ViewModel.Busy && applicationReadPending && !applicationRunning) ScheduleApplicationRead(); };
+        ViewModel.PropertyChanged += (_, _) => { SyncApplicationApiSubscription(); SyncApplicationTargets(); RefreshApplicationControls(); if (!ViewModel.Busy && applicationReadPending && !applicationRunning) ScheduleApplicationRead(); };
+        Closed += (_, _) => { if (applicationApi is not null) applicationApi.RequestsDrained -= ApplicationRequestsDrained; applicationApi = null; };
         page.Loaded += (_, _) => SyncApplicationTargets(); page.IsVisibleChanged += (_, _) => { if (page.IsVisible && applicationReadPending) ScheduleApplicationRead(); };
+        SyncApplicationApiSubscription();
         SyncApplicationTargets(); RefreshApplicationControls(); return page;
+    }
+    private void SyncApplicationApiSubscription()
+    {
+        var current = closing || closeApproved ? null : ViewModel.Runtime.Api;
+        if (ReferenceEquals(applicationApi, current)) return;
+        if (applicationApi is not null) applicationApi.RequestsDrained -= ApplicationRequestsDrained;
+        applicationApi = current;
+        if (applicationApi is not null) applicationApi.RequestsDrained += ApplicationRequestsDrained;
+    }
+    private void ApplicationRequestsDrained(object? sender, EventArgs args)
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            if (closing || closeApproved || !ReferenceEquals(sender, applicationApi) || !ReferenceEquals(sender, ViewModel.Runtime.Api)) return;
+            RefreshApplicationControls();
+            if (applicationReadPending && !applicationRunning && !ViewModel.Busy) ScheduleApplicationRead();
+        }));
     }
     private static DataGrid ApplicationGrid(object source) => new() { ItemsSource = (System.Collections.IEnumerable)source, IsReadOnly = false, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Extended, HeadersVisibility = DataGridHeadersVisibility.Column };
     private static DataGridTemplateColumn ApplicationSelectionColumn(string selection, string? enabled = null)
