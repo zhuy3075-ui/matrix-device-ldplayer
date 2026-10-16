@@ -1,5 +1,13 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / A14a1版本化脚本参数绑定
+
+- Goal/Decision：修复“编辑参数已保存、步骤仍执行原literal”，显式executionContract.version=1及whole-field绑定，局部JSON保留null；原Scheduler前编译私有快照，VM在metadata/准备前完整验证，legacy保留。范围见[规格与原件](codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)。
+- Red：Core原169保持、新24为1绿23红（含新API缺失）；旧诊断14过但AP042真实146→146→146/owner缺3/残留111，后继NOT-RUN，未重跑。另立严格无窗VM业务原4例2PRODUCT红2PASS，同Product断言不削弱。
+- Verification：作者/独立/主仓均193/193及VM4通过，独立三入口拒绝/PDB36/156输入核同。主仓77400 exit0/73.440秒、193/51.24秒，VM45824 exit0/506ms；27原守卫保持/App为批准变更，原24Smoke不变，全部进程/双流终态、无timeout/清理错。
+- Evidence：独立execution733890447E661B497B6EC14A5355D0BEE231916D93513066FD6437955B5C5541；主仓execution55EF318F027DC4FCCD08BD1CFBE342844E90B3341E6DB5F33AE989FBAB00A888，VMsummaryFA77BE5372B96ED3FCE8A0C701F7D78489825FC175F0F07EC1E6D798F8619AE1，DLL44B290489CF93E927A5D04732B13E4D736FFD0FCB91829123B1239DC7515AAB6。样例两JSON只另验打包entry/字节/语法，不另称guest样例通过。
+- Next/Risks：核包/精确index独审后单功能推原私有feature，实际Git为准；不合并发布。AP042当前PRODUCT-FAIL、AP045官方输入分支停止、全部GUI/真实双实例/当前应用页安装卸载/最终30分钟及完整RPA作业身份/MCP/抓包仍开放，goal active。以下AP040/AP042历史通过不覆盖当前失败。
+
 ## 2026-10-16 / AP040应用反馈与当前实机前置
 
 - Goal/Decision：不把“读取后安装完成0”误判为APK安装失败；仅在摘要存在非零CompletedUnverified时保留原安装段。App唯一同步hook/new纯合同夹具直接核原函数，旧业务不动；[规格](codex/apple-experience/AP040_APPLICATION_FEEDBACK.md)。

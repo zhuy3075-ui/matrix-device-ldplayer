@@ -14,6 +14,19 @@ public partial class App : Application
         base.OnStartup(e);
         try
         {
+            if (e.Args.Contains("--verify-script-parameters", StringComparer.OrdinalIgnoreCase))
+            {
+                ValidateLayoutArguments(e.Args, "--verify-script-parameters", "脚本参数");
+                if (e.Args.Any(arg => arg.Equals("--width", StringComparison.OrdinalIgnoreCase) || arg.Equals("--height", StringComparison.OrdinalIgnoreCase) || arg.Equals("--screenshot", StringComparison.OrdinalIgnoreCase)))
+                    throw new ArgumentException("脚本参数 VM 验收无窗口，不接受 --width、--height 或 --screenshot。");
+                var scriptDirectoryIndex = Array.FindIndex(e.Args, arg => arg.Equals("--data-dir", StringComparison.OrdinalIgnoreCase));
+                var scriptDirectory = Path.GetFullPath(e.Args[scriptDirectoryIndex + 1]);
+                if (Directory.Exists(scriptDirectory) || File.Exists(scriptDirectory)) throw new ArgumentException("脚本参数 VM 验收必须使用尚不存在的独立 artifacts 目录。");
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                await ScriptParameterEditingSmoke.RunAsync(scriptDirectory, Dispatcher);
+                Shutdown(0);
+                return;
+            }
             var smoke = e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
             var shellVerification = e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase);
             var deviceLayoutVerification = e.Args.Contains("--verify-device-layout", StringComparer.OrdinalIgnoreCase);
@@ -140,7 +153,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-device-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--diagnose-offline-geometry", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
+            if (e.Args.Contains("--verify-script-parameters", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-device-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--diagnose-offline-geometry", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
             else MessageBox.Show(UiErrorPresentation.Describe(ex), "矩阵设备启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             try

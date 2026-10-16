@@ -55,9 +55,10 @@
 
 | ID | 级别/状态 | 事实与边界 | 处理/后续 |
 |---|---|---|---|
-| AP-042 | P1/组件与初始正文可达通过，整体未验 | 旧无头Tab没有ItemsHost；实际红三阶段同根仅1节点，5个可视正文owner不可达。最小标准Pane peer后独立及主仓同根146→71→146、5owner与状态样式通过，旧158/14/3E保持；AP043证初始设备正文外部可读 | [规格与原件](AP042_WORKSPACE_ACCESSIBILITY.md)；独审允许考虑仅正文源码的开发分支限域交付，仍须核包/index审。隐藏Tab的UIA SelectionPattern变化已声明；导航门与原null不关闭，不标官方控制或全GUI恢复 |
+| AP-042 | P1/最新PRODUCT-FAIL，开放；历史组件曾过 | 历史最小Pane peer后146→71→146及5owner曾通过；最新[A14a1旧链](A14_SCRIPT_PARAMETER_BINDINGS.md)实际146→146→146，三个应用owner缺失、旧owner残留111。原14类过，但后续AP040/新VM/几何NOT-RUN | [历史规格](AP042_WORKSPACE_ACCESSIBILITY.md)与AP043初始正文证据保留；不重跑失败链凑绿或推断环境根因。独立无窗VM业务不得替代该失败门；导航、原null、全GUI/实机仍开放 |
 | AP-043 | P1/初始正文改善已证，外部导航缺口开放 | 首轮F18整树null保留；[对照及AP045](AP043_SKY_AB.md)旧48/新200总节点含正文；另已交付D123显式激活后仍唯一click几何错误、无后置state，效果未知 | 精确owned清理/流终态，无截图/替代/重试；停止该GUI输入分支，待受支持诊断或外部条件变化，不将工具/环境/peer定因。应用导航/返回/正常Close和全GUI未过，继续其它安全实现而非缩小目标 |
 | AP-044 | P1/格式边界已离线复验，GUI未验 | 自动化picker原列.json，但Load只接受ZIP；实际红六非法格式均抛原InvalidDataException/提示不明确，其余163项过。r01编译错误另存不算产品红 | [格式边界](A08_SCRIPT_FORMAT.md)仅ZIP构造格式异常转中文400/1007、picker去.json；实现/独立/主仓各169通过，合法ZIP资源及Demo Tap1、拒绝Tap0过。未扩大到Entries/解压错误或支持通用脚本；GUI/真实设备和完整A08/A14不由此通过 |
+| AP-046 | P1/参数绑定业务独立及主仓有限域通过 | 原参数编辑仅保存、不影响实际步骤，JSON null丢失后错误回退默认并接纳运行；Core24原1绿23红含新API缺失，独立VM4原2PRODUCT红2绿 | [A14a1](A14_SCRIPT_PARAMETER_BINDINGS.md)显式V1全字段绑定、私有JSON选项保留null、同原Scheduler执行快照，VM在metadata前完整编译。作者/独立/主仓各193与同VM4过，旧169/24Smoke保持；非GUI、真实双实例或完整作业身份/MCP/抓包验收，AP042最新FAIL不覆盖 |
 
 ## 修复记录规则
 

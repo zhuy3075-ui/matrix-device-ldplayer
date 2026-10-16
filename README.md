@@ -102,9 +102,9 @@ API请求全部结束也会唤醒已有应用读取待办，不再依赖手动�
 
 本阶段独立及主仓应用正文各12项通过，含六尺寸三表首中末/全部列和单窄窗150%字形压力；后者使用自有控件本地字号覆盖，不是系统DPI或字体绑定保真验收。原Smoke调用链及12页、共享壳层六尺寸已通过；另立补验在设备指针前置和报告保存处失败，余11格未执行，不能宣称全GUI通过。原失败、诊断修正及主仓核验结果见[应用正文报告](docs/codex/apple-experience/A07_APPLICATION_RESPONSIVE.md)和[测量诊断记录](docs/codex/apple-experience/A07_TOOLTIP_DIAGNOSTICS.md)。真实双实例、当前安装卸载界面及最终30分钟仍待。
 
-离线画面诊断现有独立 `--diagnose-offline-geometry --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY --width 390 --height 640` 入口，必须使用尚不存在的artifacts目录，不接受`--screenshot`，不请求激活或操作指针/真实模拟器。受控行同代Offline可撤图但控件仍可见，旧公式可出现非有限坐标；增代对照保留合法图，详见[AP-041诊断](docs/codex/apple-experience/AP041_OFFLINE_DIAGNOSTICS.md)。现在该入口依次执行14类[报告出口契约](docs/codex/apple-experience/AP041_REPORT_RELIABILITY.md)、[正文无障碍契约](docs/codex/apple-experience/AP042_WORKSPACE_ACCESSIBILITY.md)及原几何诊断：原`device-layout.json`仅局部编码NaN/正负无穷为`{value:null,finite:false,kind:...}`，有限JSON、FAIL及原异常保持，全局JSON仍严格。独立与主仓各原158项、14类契约及原几何诊断均通过；诊断会故意注入8条预期报告错误并保留stderr，见独立profile内`device-layout-report-contract/summary.json`，不是运行故障。这只修复报告子项，不关闭原指针负例、完整GUI、双实例和最终长期稳定性缺口。
+离线画面诊断有独立 `--diagnose-offline-geometry --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY --width 390 --height 640` 入口，必须使用尚不存在的artifacts目录，不接受`--screenshot`，不请求激活或操作指针/真实模拟器。它依次执行14类[报告出口契约](docs/codex/apple-experience/AP041_REPORT_RELIABILITY.md)、[正文无障碍](docs/codex/apple-experience/AP042_WORKSPACE_ACCESSIBILITY.md)、[应用摘要](docs/codex/apple-experience/AP040_APPLICATION_FEEDBACK.md)和[原几何诊断](docs/codex/apple-experience/AP041_OFFLINE_DIAGNOSTICS.md)。`device-layout.json`仅局部编码非有限值为`{value:null,finite:false,kind:...}`，有限JSON、FAIL、原异常与全局严格JSON保持。历史阶段曾通过原158项、报告契约和几何诊断；最新复核止于AP042产品失败，后续未执行。报告契约自身故意注入的8条预期stderr与这次AP042失败是不同结果，不得混作无故障。完整GUI、双实例和最终长期稳定性缺口保持。
 
-工作区容器现在使用保留原视觉样式的标准Pane无障碍peer，使真实当前页控件可从根访问；原无头Tab的UIA SelectionPattern/ItemContainer不再提供，侧栏导航保持。自有WPF设备/应用往返及状态断言通过；[受控官方观察](docs/codex/apple-experience/AP043_SKY_AB.md)在相同共同依赖及实际运行时下，旧48个总节点止空Tab，新200个总节点含设备正文。不过应用导航点击返回输入几何错误、没有后置状态，不能确认切页或宣称官方控制/全GUI恢复；先前整树null也保留未定因。本次仅限正文可达源码改善，真实GUI安装卸载、双实例同步和最终30分钟仍未验收。
+工作区容器使用保留原视觉样式的标准Pane无障碍peer；原无头Tab的UIA SelectionPattern/ItemContainer不再提供，侧栏导航保持。历史阶段的自有WPF设备/应用往返曾通过；最新[A14a1旧链复核](docs/codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)却在AP042再次真实失败：根节点146→146→146，三个应用owner缺失、旧owner残留111，其后摘要与几何未执行，当前不承诺正文往返已恢复。[受控官方观察](docs/codex/apple-experience/AP043_SKY_AB.md)曾证旧48个总节点止空Tab、新200个总节点含设备正文，但导航点击仍报输入几何错误、无后置状态；原null与根因保持开放。真实GUI安装卸载、双实例同步和最终30分钟仍未验收。
 
 新增受限的CMFA实机测试入口，仅供固定摘要、已验证专用实例与新证据目录使用，不限制正式应用页的通用APK选择。独立及主仓158项回归通过；实例1真实共享安装、精确2.11.35.Meta/211035及启动进程成立，但首次权限页挡住主页，原流程如实FAIL。后续另立[本轮owned停止/卸载验证](docs/codex/apple-experience/A07_OWNED_CLEANUP.md)，实际两个包进程停止、安装保留后再卸载，普通及含保留记录查询和列表均缺包，51步骤通过。当前测试安装已移除、原APK保留，未再安装/启动或授权VPN/权限，也未改原FAIL；详见[首轮记录](docs/codex/apple-experience/A07_CMFA_APPLICATIONS.md)。这些是共享后端证据，当前GUI、双实例同步及最终30分钟仍待，默认离线测试不触发实机入口。
 
@@ -119,6 +119,10 @@ API请求全部结束也会唤醒已有应用读取待办，不再依赖手动�
 Automator 默认 `http://127.0.0.1:17171/`，路径允许 `/api/` 前缀。所有 27 条 POST 都包含 `serial`，响应 `{code:0,message:"ok",data:...}`。具体路由与字段以 `docs/reference/API.md` 第4节和源码 `AutomationService.Routes` 为准，swipe 使用 `steps`/`stepMs`。错误映射和本次差异见 `docs/ASSUMPTIONS.md`。
 
 `.jxscript` 是包含 `manifest.json` 和 `script.json` 的 ZIP。`examples/basic-example.jxscript` 可直接导入，对应可编辑文件在 `examples/basic/`；支持 `launchapp/launch`、`wait/sleep`、`click`、`swipe`。在专用设备上确认坐标后运行；取消表示结束，不能续跑。默认拒绝未知动作。参数与 Probability 的证据边界见假设表。
+
+新脚本可显式声明 `executionContract: {"version":1,"bindings":[{"stepIndex":0,"field":"value","parameterKey":"targetApp"}]}`，绑定步骤的完整 `value` 或等待动作的 `durationMs`。取值优先级为显式覆盖、参数Value、DefaultValue；显式null不回退，类型、范围或绑定无效时在运行前拒绝。新契约不接受Probability；未声明契约的旧包保持原字面量执行。格式、兼容与实际验证范围见[参数绑定](docs/codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)。
+
+`examples/parameterized/`是参数化包的两个JSON源文件，不是可直接导入的普通JSON。可运行 `Compress-Archive -Path ./examples/parameterized/*.json -DestinationPath ./artifacts/parameterized-example.zip` 生成ZIP，在自动化页导入，参数JSON字符串应保留引号，例如 `"com.android.settings"`。`--verify-script-parameters --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`仅运行无窗VM业务专项，不读用户配置；它不代表GUI点击、真实模拟器、完整作业/MCP或抓包验收。
 
 ## 数据与设备边界
 

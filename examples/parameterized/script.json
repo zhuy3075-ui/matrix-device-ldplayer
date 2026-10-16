@@ -1,0 +1,26 @@
+{
+  "steps": [
+    {
+      "action": "launchapp",
+      "value": "com.android.settings"
+    }
+  ],
+  "parameters": [
+    {
+      "key": "targetApp",
+      "type": "string",
+      "labelZh": "目标应用包名",
+      "defaultValue": "com.android.settings"
+    }
+  ],
+  "executionContract": {
+    "version": 1,
+    "bindings": [
+      {
+        "stepIndex": 0,
+        "field": "value",
+        "parameterKey": "targetApp"
+      }
+    ]
+  }
+}

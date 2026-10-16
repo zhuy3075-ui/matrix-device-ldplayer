@@ -18,13 +18,13 @@
 | A11 | P0/未开始 | 全部实现 | 冻结最终版本，独立单/双实例实机全路径和30分钟稳定性，完整回归 | 逐需求/控件/能力都有足够证据，失败/未验不计通过；环境不被误改 |
 | A12 | P0/未开始 | A11 | 最终审计与报告、问题/修改清单、README/完整源码清单、推送；AP-021历史验收材料归档分类 | 用户目标逐条完成证据；不把路径/SHA检查称为原始证据净化，保留用户文件、不改写Git历史；存在必需缺口不标goal完成；无merge/release |
 | A13 | P0/长路径和报告出口已修，完整执行未完成 | A01目录与既有版本 | 全功能逐控件测试、失败修复与问题清单；优先继续双实例同步、新版应用页安装卸载、完整GUI可靠性及最终30分钟 | [AP-035](codex/apple-experience/A13_SQLITE_PATH.md)独立/主仓158及四普通路径CLI通过；[AP-041诊断](codex/apple-experience/AP041_OFFLINE_DIAGNOSTICS.md)保持，[报告子项](codex/apple-experience/AP041_REPORT_RELIABILITY.md)实际红6PASS/8FAIL、同14类绿全过，独立/主仓各158及原390几何报告不变。原负例/S01/11NOTRUN、AP-033、实机与最终30分钟仍开放；每例步骤/预期/实际/证据齐全，每个修复独审后单独push |
-| A14 | P1/已追加，待实现 | A13a、A08；AI部分再依A15a/A15b与A16b | 复用设备/自动化/终端/接口职责；本地RPA包上传校验、参数、目标冻结、分发执行、作业状态/取消/回传；MCP脚本与指定应用动态分析 | 合法包真实效果回读，非法包零执行，逐目标不串扰，取消无新步骤；AI链路关联脚本/目标/采集产物。不执行未知代码或冒称沙箱 |
+| A14 | P1/a1参数绑定独立及主仓有限域通过；其余待实现 | A13a、A08；AI部分再依A15a/A15b与A16b | 复用设备/自动化/终端/接口职责；[a1显式契约绑定](codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)、本地RPA包上传校验、参数、目标冻结、分发执行、作业状态/取消/回传；MCP脚本与指定应用动态分析 | 原Core红170/193与VM2红2绿保留；作者/独立/主仓均193及VM4通过，独立三拒绝/PDB36保持，旧169与24Smoke不变。旧AP042最新PRODUCT-FAIL不替换。后续完整合法包效果回读、逐目标身份/作业/取消/回传与AI采集闭环仍必需；参数单项不替代GUI/实机或完整RPA，不执行未知代码或冒称沙箱 |
 | A15 | P2/已追加，待设计与最小接入验证 | A13a；脚本工具复用A14a的包契约 | A15a设计群控MCP工具、Schema、权限/错误/取消/限额；A15b提供供A14c使用的最小stdio接入与真实客户端验证 | 握手/列工具/调用/结果真实可达；逐台覆盖明确授权集合，未授权与身份变化拒绝；双实例不串扰，N目标仅离线逻辑证明，不外推23路容量 |
 | A16 | P3/已追加，初步调研完成，POC未运行 | A13a、独立测试应用/服务及采集权限 | A16a比较代理/HTTP Toolkit/VPN/原始包；A16b先验证受控方案，再实现指定实例会话、停止清理、分析/导出并供A14c使用 | 有官方依据与明确选型；自有请求对应实际捕获记录、目标隔离及停止/容量/退出清理均过。HTTPS/应用级隔离各自验证，无明文能力不报成功 |
 
-当前A13补验：[AP-042](codex/apple-experience/AP042_WORKSPACE_ACCESSIBILITY.md)组件红绿及主仓通过，原158/14/3E保持；[AP-043](codex/apple-experience/AP043_SKY_AB.md)受控对照Old48/New200总节点，证初始设备正文可读且实际两runtime模块一致，但应用导航官方click报坐标几何不可用，无后置state，立即停测并精确清理。原整树null仍未定因，整体验收未过；独审允许考虑仅正文可达的开发分支源码交付，仍依文档/核包/index及实际Git，不宣称全GUI恢复。转独立A08格式小目标，不重跑探测凑绿；真实GUI、双实例同步、应用GUI安装卸载和最终双实例30分钟、A08-A16仍保持必交付。
+当前A13补验：[AP-042](codex/apple-experience/AP042_WORKSPACE_ACCESSIBILITY.md)历史组件红绿与主仓曾通过，最新[A14a1旧链](codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)却146→146→146/应用owner缺3/旧残留111，后继NOT-RUN，当前PRODUCT-FAIL开放；[AP-043/AP045](codex/apple-experience/AP043_SKY_AB.md)初始正文可读但官方导航几何错误/无后置state亦保留。原null与根因未定，不重跑凑绿、不用独立无窗VM替代全GUI。真实GUI、双实例同步、应用GUI安装卸载和最终双实例30分钟、A08-A16仍必交付。
 
-最新A13进展：[AP040摘要](codex/apple-experience/AP040_APPLICATION_FEEDBACK.md)真实4红/2绿后最小条件修正，实现/独立/主仓各169及新6/原14/AP042/3E通过，待限域交付门；AP044已实际推9117fd2，不重做。当前实例1正式只读17步通过、2关闭，不替代双实例。[AP045诊断](codex/apple-experience/AP043_SKY_AB.md)显式激活后仍输入几何错误、无后置state，停止该GUI输入分支，不再自动重试或推断根因。A14需真正完成参数绑定、批次身份/任务/取消/回传及受限接口，不将格式拒绝或旧逐serial调度当闭环；原完整验收门保持。
+最新进展：[AP040摘要](codex/apple-experience/AP040_APPLICATION_FEEDBACK.md)已实际推f2d1717，AP044已推9117fd2，不重做；历史实例1只读17步/2关闭不替代当前双实例。[A14a1](codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)已在同一原Scheduler实现显式参数绑定，作者/独立/主仓各193与VM4通过；待核包/index和本阶段真实Git回执。批次身份/任务/取消/回传、受限接口和原完整验收门保持，不将单参数功能或旧逐serial调度当完整闭环。
 
 执行规则：一项先复现/定义预期，再小改、全基线、页面/安全实机、独立verifier、文档/清单、commit/push；独立实现worktree不共享写同一文件。单个拒绝点最多3轮review-fix；需要额外权限或不明风险时停止该动作，记录并继续其他安全工作，不向用户反复提问。
 

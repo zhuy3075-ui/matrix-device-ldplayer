@@ -891,6 +891,8 @@ if (liveIndex >= 0)
     });
 }
 
+ScriptParameterTests.Register(Test);
+
 var failures = 0; var totalTimer = Stopwatch.StartNew();
 foreach (var (name, run) in tests)
 {

@@ -808,6 +808,19 @@ public sealed class WorkspaceViewModel : ObservableObject
     private ScriptPackage ParameterizedPackage()
     {
         if (package is null) throw new InvalidOperationException("未导入脚本");
+        if (package.ExecutionContract is { Version: 1 })
+        {
+            return package with
+            {
+                Parameters = package.Parameters.Select(parameter =>
+                {
+                    var editor = Parameters.FirstOrDefault(value => value.Key == parameter.Key);
+                    if (editor is null) return parameter;
+                    using var document = JsonDocument.Parse(editor.Value);
+                    return parameter with { Value = document.RootElement.Clone() };
+                }).ToList()
+            };
+        }
         var clone = JsonNode.Parse(JsonSerializer.Serialize(package, JsonDefaults.Options))!.AsObject();
         if (clone["parameters"] is JsonArray array)
         {
@@ -826,8 +839,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         try
         {
             var targets = RequireTargets().ToList();
-            var selectedPackage = ParameterizedPackage();
-            ScriptPackageService.Validate(selectedPackage);
+            var selectedPackage = ScriptExecutionCompiler.Compile(ParameterizedPackage());
             var values = selectedPackage.Parameters.ToDictionary(parameter => parameter.Key, parameter => parameter.Value ?? parameter.DefaultValue ?? JsonSerializer.SerializeToElement<object?>(null));
             foreach (var row in targets) runtime.Metadata.Put("ScriptDeviceConfiguration", row.Serial + "\u001f" + selectedPackage.Manifest.Id, new ScriptDeviceParameters(row.Serial, selectedPackage.Manifest.Id, selectedPackage.Manifest.Version, values));
             Error = "";

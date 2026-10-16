@@ -1,0 +1,6 @@
+{
+  "id": "parameterized-settings",
+  "name": "参数化应用启动",
+  "version": "1.0",
+  "description": "通过显式版本契约绑定目标应用包名，默认打开系统设置。"
+}

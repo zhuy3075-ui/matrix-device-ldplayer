@@ -914,6 +914,50 @@
 
 ```
 
+## examples/parameterized/manifest.json
+
+```json
+{
+  "id": "parameterized-settings",
+  "name": "参数化应用启动",
+  "version": "1.0",
+  "description": "通过显式版本契约绑定目标应用包名，默认打开系统设置。"
+}
+
+```
+
+## examples/parameterized/script.json
+
+```json
+{
+  "steps": [
+    {
+      "action": "launchapp",
+      "value": "com.android.settings"
+    }
+  ],
+  "parameters": [
+    {
+      "key": "targetApp",
+      "type": "string",
+      "labelZh": "目标应用包名",
+      "defaultValue": "com.android.settings"
+    }
+  ],
+  "executionContract": {
+    "version": 1,
+    "bindings": [
+      {
+        "stepIndex": 0,
+        "field": "value",
+        "parameterKey": "targetApp"
+      }
+    ]
+  }
+}
+
+```
+
 ## global.json
 
 ```json
@@ -4185,6 +4229,19 @@ public partial class App : Application
         base.OnStartup(e);
         try
         {
+            if (e.Args.Contains("--verify-script-parameters", StringComparer.OrdinalIgnoreCase))
+            {
+                ValidateLayoutArguments(e.Args, "--verify-script-parameters", "脚本参数");
+                if (e.Args.Any(arg => arg.Equals("--width", StringComparison.OrdinalIgnoreCase) || arg.Equals("--height", StringComparison.OrdinalIgnoreCase) || arg.Equals("--screenshot", StringComparison.OrdinalIgnoreCase)))
+                    throw new ArgumentException("脚本参数 VM 验收无窗口，不接受 --width、--height 或 --screenshot。");
+                var scriptDirectoryIndex = Array.FindIndex(e.Args, arg => arg.Equals("--data-dir", StringComparison.OrdinalIgnoreCase));
+                var scriptDirectory = Path.GetFullPath(e.Args[scriptDirectoryIndex + 1]);
+                if (Directory.Exists(scriptDirectory) || File.Exists(scriptDirectory)) throw new ArgumentException("脚本参数 VM 验收必须使用尚不存在的独立 artifacts 目录。");
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                await ScriptParameterEditingSmoke.RunAsync(scriptDirectory, Dispatcher);
+                Shutdown(0);
+                return;
+            }
             var smoke = e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
             var shellVerification = e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase);
             var deviceLayoutVerification = e.Args.Contains("--verify-device-layout", StringComparer.OrdinalIgnoreCase);
@@ -4311,7 +4368,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-device-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--diagnose-offline-geometry", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
+            if (e.Args.Contains("--verify-script-parameters", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-device-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--diagnose-offline-geometry", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
             else MessageBox.Show(UiErrorPresentation.Describe(ex), "矩阵设备启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             try
@@ -16781,6 +16838,306 @@ public partial class MainWindow
 
 ```
 
+## src/MatrixDevice.Desktop/Views/ScriptParameterEditingSmoke.cs
+
+```csharp
+using System.ComponentModel;
+using System.IO;
+using System.IO.Compression;
+using System.Runtime.ExceptionServices;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Threading;
+using MatrixDevice.Core;
+using MatrixDevice.Features;
+using MatrixDevice.Host;
+
+namespace MatrixDevice.Desktop;
+
+internal static class ScriptParameterEditingSmoke
+{
+    internal static async Task RunAsync(string dataDirectory, Dispatcher dispatcher)
+    {
+        var application = Application.Current;
+        var directory = Path.Combine(dataDirectory, "script-parameter-editing");
+        if (application is null || !ReferenceEquals(application.Dispatcher, dispatcher) || !dispatcher.CheckAccess() || Thread.CurrentThread.GetApartmentState() != ApartmentState.STA
+            || !Path.IsPathFullyQualified(dataDirectory) || !Path.GetFullPath(dataDirectory).Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || Directory.Exists(dataDirectory) || File.Exists(dataDirectory) || application.Windows.Count != 0 || application.MainWindow is not null)
+            throw new InvalidOperationException("参数编辑契约仅限 fresh artifacts 自有 Demo/STA VM；Application 必须没有窗口。");
+        Directory.CreateDirectory(directory);
+        var reports = new List<object>(); var failures = new List<Exception>(); var classes = new HashSet<string>(StringComparer.Ordinal);
+        var names = new[] { "v1-edited-value-executes", "v1-wire-null-rejects-before-admission", "v1-invalid-json-edit-rejects", "legacy-edit-retains-literal-execution" };
+        var entryWindowCount = application.Windows.Count; var entryMainWindow = application.MainWindow;
+        Exception? failure = null; var windowsUnchanged = false;
+        try
+        {
+            await Case(names[0], true, false, "\"com.android.settings\"", false, "com.android.settings");
+            await Case(names[1], true, true, null, true, "com.matrix.demo");
+            await Case(names[2], true, false, "{", true, "com.matrix.demo");
+            await Case(names[3], false, false, "\"com.android.settings\"", false, "com.matrix.demo");
+        }
+        catch (Exception error) { failures.Add(error); classes.Add("FIXTURE-FAIL"); }
+        finally
+        {
+            windowsUnchanged = application.Windows.Count == entryWindowCount && entryWindowCount == 0 && application.MainWindow is null && ReferenceEquals(entryMainWindow, application.MainWindow);
+            if (!windowsUnchanged) { failures.Add(new InvalidOperationException("自有参数编辑 VM 创建了窗口或改变了 Application.MainWindow。")); classes.Add("FIXTURE-FAIL"); }
+            if (failures.Count > 0) failure = new AggregateException("脚本参数编辑契约未全部通过", failures);
+            try
+            {
+                File.WriteAllText(Path.Combine(directory, "summary.json"), JsonSerializer.Serialize(new
+                {
+                    status = failure is null ? "PASS-SCRIPT-PARAMETER-EDITING" : classes.Count == 1 ? classes.Single() : "MIXED-FAIL",
+                    failureClasses = classes.OrderBy(value => value).ToArray(), plannedCaseCount = names.Length, caseCount = reports.Count,
+                    reports, notRunCases = names.Skip(reports.Count).ToArray(), windowsUnchanged,
+                    applicationEntry = new { windowCount = entryWindowCount, mainWindowIsNull = entryMainWindow is null },
+                    applicationExit = new { windowCount = application.Windows.Count, mainWindowIsNull = application.MainWindow is null }, newWindowsShown = 0, nativeInputRequested = 0,
+                    scope = "Independent in-process STA WorkspaceViewModel ImportScriptAsync / ParameterEditor.Value / StartScriptAsync / original ScriptScheduler, forwarding only to an owned DemoDeviceBackend. No Window, GUI click, guest, ADB, API or screenshot acceptance.",
+                    completionEvidence = "Original StatusChanged terminal events plus returned public Tasks and every recorded Demo forwarding Task; no claim to access the private scheduler Run.Task.",
+                    offlineGeometry = "NOT-RUN", offlineGeometryReason = "Independent VM-only mode never enters geometry or GUI acceptance", error = failure?.ToString()
+                }, JsonDefaults.Options));
+            }
+            catch (Exception reportError) { Console.Error.WriteLine("SCRIPT-PARAMETER-EDITING-REPORT " + reportError); failure = Combine(failure, reportError); }
+        }
+        if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
+
+        async Task Case(string name, bool v1, bool wireNull, string? edit, bool reject, string expectedApp)
+        {
+            var state = new ScriptParameterEditingState(Path.Combine(directory, "c" + (reports.Count + 1).ToString("00")), dispatcher);
+            var caseClasses = new HashSet<string>(StringComparer.Ordinal); Exception? error = null; object? result = null; var cleaned = false; var initialized = false;
+            try
+            {
+                await state.Initialize(); initialized = true;
+                await state.Import(v1, wireNull);
+                state.Product(state.Backend.Calls("import").Length == 0, "真实导入仅解析/编辑，不调用后端");
+                var editor = state.Vm.Parameters.Single(); var importedValue = editor.Value;
+                if (wireNull) state.Product(importedValue == "null", "真实 ZIP 的显式 value:null 在参数表模型中保留，不回退合法 default");
+                if (edit is not null) editor.Value = edit;
+                var before = state.Values(); state.Watch();
+                await state.StartAndDrain(!reject);
+                var after = state.Values(); var runCalls = state.Backend.Calls("execute");
+                if (reject)
+                {
+                    state.Product(state.Vm.Error.StartsWith("脚本未启动：", StringComparison.Ordinal), "非法/显式 null 编辑显示启动前错误");
+                    state.Product(state.MetadataText() == state.BeforeMetadata && state.Metadata().Count == 0, "拒绝不写 ScriptDeviceConfiguration 元数据");
+                    state.Product(state.StatusEvents().Length == 0 && state.RowEvents().Length == 0 && state.LogEvents().Length == 0
+                        && state.Vm.Devices.All(row => state.Runtime.Scripts.GetStatus(row.Serial).State == ScriptRunState.Idle)
+                        && state.Vm.Devices.All(row => state.Runtime.Scripts.GetLogs(row.Serial).Count == 0), "拒绝无 Running、准备执行瞬态、调度日志或终态副作用");
+                    state.Product(runCalls.Length == 0, "拒绝期间实际 Demo 后端调用为零（不含独立准备/读回/清理）");
+                }
+                else
+                {
+                    state.Product(state.Vm.Error.Length == 0 && state.StatusEvents().Select(item => item.State).SequenceEqual(new[] { ScriptRunState.Running, ScriptRunState.Completed }), "真实原调度器唯一接纳 A 并完成");
+                    state.Product(runCalls.Length == 1 && runCalls[0].Operation == "StartApp" && runCalls[0].Serial == "DEMO-001" && runCalls[0].Subject == expectedApp, "实际后端只启动 A，使用规定的最终步骤值");
+                    var saved = state.Metadata();
+                    state.Product(saved.Count == 1 && saved[0].Serial == "DEMO-001" && saved[0].Values.TryGetValue("targetApp", out var value)
+                        && value.ValueKind == JsonValueKind.String && value.GetString() == "com.android.settings", "所选 A 的页面编辑值仍保存，未选 B 无运行配置");
+                }
+                state.Backend.Phase = "readback";
+                var a = await state.Finish(state.Backend.DumpAsync("DEMO-001", state.Lifetime.Token));
+                var b = await state.Finish(state.Backend.DumpAsync("DEMO-002", state.Lifetime.Token));
+                state.Product(a.PackageName == expectedApp && b.PackageName == "com.matrix.demo", "自有真实 Demo 节点读回对应执行结果且未选 B 不变");
+                state.Product(ReferenceEquals(state.Vm.CurrentDevice, state.A) && state.Vm.MainDevice is null && state.A.IsSelected && !state.B.IsSelected
+                    && state.Vm.Targets().SequenceEqual(new[] { state.A }) && !state.Vm.Busy && !state.Vm.Transferring, "编辑与执行不漂移所选 A、Current 或未指定 Main");
+                result = new { v1, wireNull, importedValue, editedValue = editor.Value, reject, expectedApp, before, after, runCalls, actualAppA = a.PackageName, actualAppB = b.PackageName };
+            }
+            catch (Exception caught) { error = caught; caseClasses.Add(initialized ? "FIXTURE-FAIL" : "PRECONDITION-FAIL"); Console.Error.WriteLine("SCRIPT-PARAMETER-EDITING " + name + " " + caught); }
+            finally
+            {
+                if (state.Products.Count > 0) { caseClasses.Add("PRODUCT-FAIL"); error = Combine(error, new AggregateException("原 VM 参数执行合同失败", state.Products)); }
+                try { await state.Cleanup(); cleaned = true; }
+                catch (Exception cleanup) { caseClasses.Add("CLEANUP-FAIL"); error = Combine(error, cleanup); Console.Error.WriteLine("SCRIPT-PARAMETER-EDITING-CLEANUP " + name + " " + cleanup); }
+                reports.Add(new { name, status = caseClasses.Count == 0 ? "PASS" : caseClasses.Count == 1 ? caseClasses.Single() : "MIXED-FAIL", failureClasses = caseClasses.OrderBy(value => value).ToArray(),
+                    initialized, cleaned, result, checks = state.Checks.ToArray(), products = state.Products.Select(item => item.Message).ToArray(), observations = state.Observations.ToArray(),
+                    statuses = state.StatusEvents(), rowStates = state.RowEvents(), logs = state.LogEvents(), backend = state.Backend.Calls(), forwardingDrained = state.Backend.Drained,
+                    backendDisposed = state.Backend.Disposed, tasks = state.TaskReport(), cleanupErrors = state.CleanupErrors.ToArray(), terminal = state.Terminal.Task.Status.ToString(), error = error?.ToString() });
+            }
+            foreach (var value in caseClasses) classes.Add(value);
+            if (error is not null) failures.Add(new InvalidOperationException(name, error));
+            if (!cleaned) throw new InvalidOperationException("自有 VM 清理失败，禁止继续接纳下一 case。", error);
+        }
+        static Exception Combine(Exception? prior, Exception next) => prior is null ? next : new AggregateException(prior, next);
+    }
+
+    private sealed class ScriptParameterEditingState(string directory, Dispatcher dispatcher)
+    {
+        internal readonly ScriptParameterEditingBackend Backend = new();
+        internal readonly CancellationTokenSource Lifetime = new(TimeSpan.FromSeconds(20));
+        internal readonly TaskCompletionSource<ScriptRunStatus> Terminal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly List<Exception> Products = []; internal readonly List<string> Checks = []; internal readonly List<object> Observations = [];
+        internal readonly List<string> CleanupErrors = [];
+        internal WorkspaceViewModel Vm = null!; internal MatrixRuntime Runtime = null!; internal string BeforeMetadata = "";
+        private RollingLog? log; private CatalogRepository? metadata; private ScriptScheduler? scripts; private InputCoordinator? input; private ApiServiceManager? api;
+        private readonly List<Task> tasks = []; private readonly object sync = new(); private readonly List<ScriptRunStatus> statuses = [];
+        private readonly List<object> rowEvents = []; private readonly List<object> logEvents = []; private bool watching;
+        internal DeviceRow A => Vm.Devices.Single(row => row.Serial == "DEMO-001"); internal DeviceRow B => Vm.Devices.Single(row => row.Serial == "DEMO-002");
+        internal async Task Initialize()
+        {
+            if (Directory.Exists(directory) || File.Exists(directory)) throw new InvalidOperationException("自有 case 目录已存在。");
+            Directory.CreateDirectory(directory);
+            var ownLog = new RollingLog(Path.Combine(directory, "logs")); log = ownLog;
+            var ownMetadata = new CatalogRepository(Path.Combine(directory, "db.sqlite3")); metadata = ownMetadata;
+            var catalog = new DeviceCatalog(Backend); var automation = new AutomationService(Backend, catalog); var scheduler = new ScriptScheduler(Backend); scripts = scheduler;
+            var coordinator = new InputCoordinator(catalog, Backend); input = coordinator; var services = new ApiServiceManager(catalog, Backend, automation, ownLog); api = services;
+            var settings = new AppSettings { Language = "zh-CN", AutoStartApi = false, AutoConnect = false, SyncMouse = false, SyncKeyboard = false };
+            Runtime = new MatrixRuntime { Backend = Backend, Devices = catalog, Automation = automation, Scripts = scheduler, Input = coordinator, Api = services,
+                Metadata = ownMetadata, Log = ownLog, Settings = settings, FrozenConnectionSettings = settings, SettingsStore = new SettingsStore(Path.Combine(directory, "AppConfig.json")), IsDemo = true };
+            bool ScriptBusy(string serial) => scheduler.GetStatus(serial).State is ScriptRunState.Running or ScriptRunState.Cancelling;
+            services.DeviceSnapshotProvider = Runtime.GetDevices; services.ScriptWriteBusy = ScriptBusy; services.AnyScriptWriteBusy = () => catalog.Snapshot.Any(device => ScriptBusy(device.Serial));
+            catalog.DeviceDisconnected += serial => scheduler.Stop(serial); scheduler.EntryAdded += (serial, entry) => ownLog.Write("script", entry.Message, serial);
+            Vm = new WorkspaceViewModel(Runtime, directory, true); await Finish(Vm.RefreshDevicesAsync());
+            if (!Vm.Demo || !Runtime.IsDemo || Backend.Inner.GetType() != typeof(DemoDeviceBackend) || !Backend.Inner.IsSimulation || Vm.Error.Length != 0
+                || Vm.Devices.Count != 2 || Vm.Devices.Any(row => !row.Info.Online) || services.BasicRunning || services.AutomatorRunning || services.DevicePorts.Count != 0 || services.HasActiveRequests)
+                throw new InvalidOperationException("一致自有 Demo VM/原目录/调度/后端且无 API 的前置未成立。");
+            Observations.Add(new { stage = "owned-runtime", concreteBackend = Backend.Inner.GetType().FullName, Runtime.IsDemo, Vm.Demo,
+                sameRecordingBackend = ReferenceEquals(Runtime.Backend, Backend), sameCatalog = ReferenceEquals(Runtime.Devices, catalog), sameScheduler = ReferenceEquals(Runtime.Scripts, scheduler),
+                sameAutomation = ReferenceEquals(Runtime.Automation, automation), sameInput = ReferenceEquals(Runtime.Input, coordinator), sameApi = ReferenceEquals(Runtime.Api, services),
+                settings.AutoStartApi, settings.AutoConnect, settings.SyncMouse, settings.SyncKeyboard, newWindowShown = false });
+            Vm.CurrentDevice = A; A.IsSelected = true; B.IsSelected = false; Vm.UpdateSelection();
+            if (!Vm.Targets().SequenceEqual(new[] { A }) || Vm.MainDevice is not null) throw new InvalidOperationException("原 VM 仅 A 目标前置未成立。");
+            Backend.Phase = "baseline";
+            var a = await Finish(Backend.DumpAsync(A.Serial, Lifetime.Token)); var b = await Finish(Backend.DumpAsync(B.Serial, Lifetime.Token));
+            if (a.PackageName != "com.matrix.demo" || b.PackageName != "com.matrix.demo" || Metadata().Count != 0) throw new InvalidOperationException("fresh Demo/元数据前置未成立。");
+        }
+        internal async Task Import(bool v1, bool wireNull)
+        {
+            var script = new Dictionary<string, object?>
+            {
+                ["steps"] = new[] { new { action = "launchapp", value = "com.matrix.demo" } },
+                ["parameters"] = new[] { new Dictionary<string, object?> { ["key"] = "targetApp", ["type"] = "string", ["value"] = wireNull ? null : "com.matrix.demo", ["defaultValue"] = "com.android.settings" } }
+            };
+            if (v1) script["executionContract"] = new { version = 1, bindings = new[] { new { stepIndex = 0, field = "value", parameterKey = "targetApp" } } };
+            var payload = JsonSerializer.SerializeToUtf8Bytes(script); var path = Path.Combine(directory, "actual-import.jxscript");
+            using (var file = File.Create(path))
+            using (var archive = new ZipArchive(file, ZipArchiveMode.Create))
+            {
+                Write("manifest.json", JsonSerializer.SerializeToUtf8Bytes(new { id = "parameter-editing", name = "自有参数执行", version = "1.0" })); Write("script.json", payload);
+                void Write(string name, byte[] bytes) { using var stream = archive.CreateEntry(name).Open(); stream.Write(bytes); }
+            }
+            using (var archive = ZipFile.OpenRead(path))
+            using (var stream = archive.GetEntry("script.json")!.Open())
+            using (var document = JsonDocument.Parse(stream))
+            {
+                var root = document.RootElement; var value = root.GetProperty("parameters")[0].GetProperty("value");
+                if ((value.ValueKind == JsonValueKind.Null) != wireNull || root.TryGetProperty("executionContract", out _) != v1) throw new InvalidOperationException("真实 ZIP 构造的 null/契约不符合夹具输入。");
+                Observations.Add(new { stage = "actual-zip-before-import", path, script = root.GetRawText(), v1, wireNull });
+            }
+            Backend.Phase = "import"; await Finish(Vm.ImportScriptAsync(path));
+            if (Vm.Error.Length != 0 || Vm.Parameters.Count != 1 || Vm.Parameters[0].Key != "targetApp" || Vm.Busy) throw new InvalidOperationException("真实原 ImportScriptAsync 未成功：" + Vm.Error);
+        }
+        internal void Watch()
+        {
+            BeforeMetadata = MetadataText(); watching = true; Runtime.Scripts.StatusChanged += OnStatus; Runtime.Scripts.EntryAdded += OnLog;
+            foreach (var row in Vm.Devices) row.PropertyChanged += OnRow;
+        }
+        internal async Task StartAndDrain(bool expectRun)
+        {
+            Backend.Phase = "execute"; await Finish(Vm.StartScriptAsync());
+            var accepted = StatusEvents().Any(item => item.State == ScriptRunState.Running);
+            if (expectRun) Product(accepted, "页面入口经原 StatusChanged 真实接纳运行，而非只返回 CompletedTask");
+            if (accepted) await Finish(Terminal.Task);
+            await Finish(dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle).Task);
+            if (!Backend.Drained) throw new InvalidOperationException("完成观测时仍有实际后端转发任务未终态。");
+        }
+        private void OnStatus(ScriptRunStatus value)
+        {
+            lock (sync) statuses.Add(value);
+            if (value.Serial == "DEMO-001" && value.State is ScriptRunState.Completed or ScriptRunState.Cancelled or ScriptRunState.Failed) Terminal.TrySetResult(value);
+        }
+        private void OnLog(string serial, ScriptLogEntry value) { lock (sync) logEvents.Add(new { serial, value.Timestamp, value.Message }); }
+        private void OnRow(object? sender, PropertyChangedEventArgs args)
+        {
+            if (args.PropertyName == nameof(DeviceRow.ScriptState) && sender is DeviceRow row) lock (sync) rowEvents.Add(new { row.Serial, row.ScriptState });
+        }
+        internal ScriptRunStatus[] StatusEvents() { lock (sync) return statuses.ToArray(); }
+        internal object[] LogEvents() { lock (sync) return logEvents.ToArray(); } internal object[] RowEvents() { lock (sync) return rowEvents.ToArray(); }
+        internal IReadOnlyList<ScriptDeviceParameters> Metadata() => Runtime.Metadata.GetAll<ScriptDeviceParameters>("ScriptDeviceConfiguration");
+        internal string MetadataText() => JsonSerializer.Serialize(Metadata().OrderBy(value => value.Serial, StringComparer.Ordinal).ToArray(), JsonDefaults.Options);
+        internal object Values() => new { metadata = MetadataText(), Vm.Error, Vm.Status, Vm.Busy, Vm.Transferring, current = Vm.CurrentDevice?.Serial, main = Vm.MainDevice?.Serial,
+            rows = Vm.Devices.Select(row => new { row.Serial, row.IsSelected, row.ScriptState, status = Runtime.Scripts.GetStatus(row.Serial), logs = Runtime.Scripts.GetLogs(row.Serial).ToArray() }).ToArray() };
+        internal void Product(bool condition, string message) { Checks.Add(message); if (!condition) Products.Add(new InvalidOperationException(message)); }
+        internal async Task Finish(Task task) { tasks.Add(task); await task.WaitAsync(TimeSpan.FromSeconds(5)); }
+        internal async Task<T> Finish<T>(Task<T> task) { tasks.Add(task); return await task.WaitAsync(TimeSpan.FromSeconds(5)); }
+        internal object[] TaskReport() => tasks.Select(task => (object)new { status = task.Status.ToString(), task.IsCompleted, task.IsCompletedSuccessfully }).ToArray();
+        internal async Task Cleanup()
+        {
+            var errors = new List<Exception>(); Backend.Phase = "cleanup"; Lifetime.Cancel();
+            try
+            {
+                if (Vm is not null) await Finish(Vm.ShutdownAsync());
+                else if (Runtime is not null) await Finish(Runtime.DisposeAsync().AsTask());
+                else
+                {
+                    if (api is not null) await Attempt(() => api.DisposeAsync().AsTask());
+                    if (input is not null) await Attempt(() => input.DisposeAsync().AsTask());
+                    if (scripts is not null) await Attempt(() => scripts.DisposeAsync().AsTask());
+                    await Attempt(() => Backend.DisposeAsync().AsTask());
+                    try { metadata?.Dispose(); } catch (Exception error) { errors.Add(error); }
+                    if (log is not null) await Attempt(() => log.DisposeAsync().AsTask());
+                }
+            }
+            catch (Exception error) { errors.Add(error); }
+            finally
+            {
+                if (watching)
+                {
+                    Runtime.Scripts.StatusChanged -= OnStatus; Runtime.Scripts.EntryAdded -= OnLog;
+                    foreach (var row in Vm.Devices) row.PropertyChanged -= OnRow;
+                }
+                Terminal.TrySetCanceled(); Lifetime.Dispose();
+            }
+            try { await Finish(dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle).Task); }
+            catch (Exception error) { errors.Add(error); }
+            if (tasks.Any(task => !task.IsCompleted) || !Terminal.Task.IsCompleted || !Backend.Drained || !Backend.Disposed) errors.Add(new InvalidOperationException("自有公开任务/TCS/实际后端任务未排空或未实际释放。"));
+            Observations.Add(new { stage = "cleanup", backendDisposed = Backend.Disposed, forwardingDrained = Backend.Drained, pendingPublicTasks = tasks.Count(task => !task.IsCompleted), terminal = Terminal.Task.Status.ToString() });
+            CleanupErrors.AddRange(errors.Select(error => error.ToString()));
+            if (errors.Count > 0) throw new AggregateException("自有参数编辑 VM 清理失败", errors);
+            async Task Attempt(Func<Task> action) { try { await Finish(action()); } catch (Exception error) { errors.Add(error); } }
+        }
+    }
+
+    private sealed record ScriptParameterEditingCall(string Phase, string Operation, string? Serial, string? Subject, string Status, bool Completed, string? Error);
+    private sealed class ScriptParameterEditingBackend : IDeviceBackend
+    {
+        private sealed class Call(string phase, string operation, string? serial, string? subject)
+        { internal readonly string Phase = phase, Operation = operation; internal readonly string? Serial = serial, Subject = subject; internal Task? Task; internal string? Error; }
+        internal readonly DemoDeviceBackend Inner = new(); private readonly object sync = new(); private readonly List<Call> calls = [];
+        internal string Phase { get; set; } = "initialize";
+        internal ScriptParameterEditingCall[] Calls(string? phase = null) { lock (sync) return calls.Where(call => phase is null || call.Phase == phase).Select(call => new ScriptParameterEditingCall(call.Phase, call.Operation, call.Serial, call.Subject, call.Task?.Status.ToString() ?? "SynchronousThrow", call.Task?.IsCompleted ?? call.Error is not null, call.Error ?? call.Task?.Exception?.ToString())).ToArray(); }
+        internal bool Drained { get { lock (sync) return calls.All(call => call.Task?.IsCompleted ?? call.Error is not null); } }
+        internal bool Disposed { get { lock (sync) return calls.Any(call => call.Operation == "Dispose" && call.Task?.IsCompletedSuccessfully == true); } }
+        private Task Forward(string operation, string? serial, string? subject, Func<Task> action)
+        {
+            var call = new Call(Phase, operation, serial, subject); lock (sync) calls.Add(call);
+            try { var task = action(); lock (sync) call.Task = task; return task; } catch (Exception error) { lock (sync) call.Error = error.ToString(); throw; }
+        }
+        private Task<T> Forward<T>(string operation, string? serial, string? subject, Func<Task<T>> action)
+        {
+            var call = new Call(Phase, operation, serial, subject); lock (sync) calls.Add(call);
+            try { var task = action(); lock (sync) call.Task = task; return task; } catch (Exception error) { lock (sync) call.Error = error.ToString(); throw; }
+        }
+        public Task<IReadOnlyList<DeviceInfo>> DiscoverAsync(CancellationToken ct = default) => Forward("Discover", null, null, () => Inner.DiscoverAsync(ct));
+        public Task<string> ShellAsync(string serial, string command, bool useRoot = false, CancellationToken ct = default) => Forward("Shell", serial, command, () => Inner.ShellAsync(serial, command, useRoot, ct));
+        public Task<byte[]> ScreenshotAsync(string serial, CancellationToken ct = default) => Forward("Screenshot", serial, null, () => Inner.ScreenshotAsync(serial, ct));
+        public Task<AndroidNode> DumpAsync(string serial, CancellationToken ct = default) => Forward("Dump", serial, null, () => Inner.DumpAsync(serial, ct));
+        public Task TapAsync(string serial, int x, int y, CancellationToken ct = default) => Forward("Tap", serial, $"{x},{y}", () => Inner.TapAsync(serial, x, y, ct));
+        public Task SwipeAsync(string serial, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default) => Forward("Swipe", serial, $"{x1},{y1},{x2},{y2},{durationMs}", () => Inner.SwipeAsync(serial, x1, y1, x2, y2, durationMs, ct));
+        public Task KeyEventAsync(string serial, int code, CancellationToken ct = default) => Forward("Key", serial, code.ToString(), () => Inner.KeyEventAsync(serial, code, ct));
+        public Task TextAsync(string serial, string text, CancellationToken ct = default) => Forward("Text", serial, text, () => Inner.TextAsync(serial, text, ct));
+        public Task<string> StartAppAsync(string serial, string packageName, string? activity = null, CancellationToken ct = default) => Forward("StartApp", serial, packageName, () => Inner.StartAppAsync(serial, packageName, activity, ct));
+        public Task<string> StopAppAsync(string serial, string packageName, CancellationToken ct = default) => Forward("StopApp", serial, packageName, () => Inner.StopAppAsync(serial, packageName, ct));
+        public Task<bool> ClearAppAsync(string serial, string packageName, CancellationToken ct = default) => Forward("ClearApp", serial, packageName, () => Inner.ClearAppAsync(serial, packageName, ct));
+        public Task<IReadOnlyList<AppInfo>> ListAppsAsync(string serial, bool showSystem = false, bool needVersion = true, CancellationToken ct = default) => Forward("ListApps", serial, null, () => Inner.ListAppsAsync(serial, showSystem, needVersion, ct));
+        public Task InstallAsync(string serial, string localPath, CancellationToken ct = default) => Forward("Install", serial, localPath, () => Inner.InstallAsync(serial, localPath, ct));
+        public Task UninstallAsync(string serial, string packageName, CancellationToken ct = default) => Forward("Uninstall", serial, packageName, () => Inner.UninstallAsync(serial, packageName, ct));
+        public Task PushAsync(string serial, string localPath, string remotePath, IProgress<double>? progress = null, CancellationToken ct = default) => Forward("Push", serial, remotePath, () => Inner.PushAsync(serial, localPath, remotePath, progress, ct));
+        public Task PullAsync(string serial, string remotePath, string localPath, IProgress<double>? progress = null, CancellationToken ct = default) => Forward("Pull", serial, remotePath, () => Inner.PullAsync(serial, remotePath, localPath, progress, ct));
+        public Task SetNodeTextAsync(string serial, NodeSelector selector, string text, CancellationToken ct = default) => Forward("SetNodeText", serial, text, () => Inner.SetNodeTextAsync(serial, selector, text, ct));
+        public ValueTask DisposeAsync() => new(Forward("Dispose", null, null, () => Inner.DisposeAsync().AsTask()));
+    }
+}
+
+```
+
 ## src/MatrixDevice.Desktop/Views/ScriptsView.cs
 
 ```csharp
@@ -19950,6 +20307,19 @@ public sealed class WorkspaceViewModel : ObservableObject
     private ScriptPackage ParameterizedPackage()
     {
         if (package is null) throw new InvalidOperationException("未导入脚本");
+        if (package.ExecutionContract is { Version: 1 })
+        {
+            return package with
+            {
+                Parameters = package.Parameters.Select(parameter =>
+                {
+                    var editor = Parameters.FirstOrDefault(value => value.Key == parameter.Key);
+                    if (editor is null) return parameter;
+                    using var document = JsonDocument.Parse(editor.Value);
+                    return parameter with { Value = document.RootElement.Clone() };
+                }).ToList()
+            };
+        }
         var clone = JsonNode.Parse(JsonSerializer.Serialize(package, JsonDefaults.Options))!.AsObject();
         if (clone["parameters"] is JsonArray array)
         {
@@ -19968,8 +20338,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         try
         {
             var targets = RequireTargets().ToList();
-            var selectedPackage = ParameterizedPackage();
-            ScriptPackageService.Validate(selectedPackage);
+            var selectedPackage = ScriptExecutionCompiler.Compile(ParameterizedPackage());
             var values = selectedPackage.Parameters.ToDictionary(parameter => parameter.Key, parameter => parameter.Value ?? parameter.DefaultValue ?? JsonSerializer.SerializeToElement<object?>(null));
             foreach (var row in targets) runtime.Metadata.Put("ScriptDeviceConfiguration", row.Serial + "\u001f" + selectedPackage.Manifest.Id, new ScriptDeviceParameters(row.Serial, selectedPackage.Manifest.Id, selectedPackage.Manifest.Version, values));
             Error = "";
@@ -21331,12 +21700,91 @@ public sealed class TransferQueue(IDeviceBackend backend) : IAsyncDisposable
 }
 ```
 
+## src/MatrixDevice.Features/Scripts/ScriptExecutionCompiler.cs
+
+```csharp
+using System.Text.Json;
+using MatrixDevice.Core;
+
+namespace MatrixDevice.Features;
+
+public static class ScriptExecutionCompiler
+{
+    public static ScriptPackage Compile(ScriptPackage package, IReadOnlyDictionary<string, JsonElement>? parameterOverrides = null)
+    {
+        ScriptPackageService.Validate(package);
+        if (package.ExecutionContract is null)
+        {
+            if (parameterOverrides is { Count: > 0 }) throw Invalid("旧脚本包不接受参数覆盖；请显式声明 version=1 的 executionContract。");
+            return ScriptPackageService.CloneForExecution(package);
+        }
+
+        var parameters = package.Parameters.ToDictionary(parameter => parameter.Key, StringComparer.Ordinal);
+        var overrides = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        if (parameterOverrides is not null)
+        {
+            foreach (var (key, value) in parameterOverrides)
+            {
+                if (string.IsNullOrWhiteSpace(key) || !parameters.TryGetValue(key, out var parameter))
+                    throw Invalid($"覆盖参数 '{key}' 未声明（区分大小写）。");
+                RequireValue(key, value, "覆盖值");
+                try { ScriptPackageService.ValidateValue(parameter, value, "Value"); }
+                catch (DeviceException error) { throw Invalid($"覆盖参数 {key} 的值 {value.GetRawText()} 不符合声明：{error.Message}"); }
+                overrides.Add(key, value.Clone());
+            }
+        }
+
+        var snapshot = ScriptPackageService.CloneForExecution(package);
+        var steps = snapshot.Steps.ToList();
+        foreach (var binding in snapshot.ExecutionContract!.Bindings!)
+        {
+            var parameter = parameters[binding.ParameterKey];
+            var value = overrides.TryGetValue(binding.ParameterKey, out var supplied) ? supplied
+                : parameter.Value.HasValue ? parameter.Value.Value
+                : parameter.DefaultValue.HasValue ? parameter.DefaultValue.Value
+                : throw Invalid($"步骤 {binding.StepIndex} 字段 {binding.Field} 的参数 {binding.ParameterKey} 缺少 Value 和 DefaultValue。");
+            RequireValue(binding.ParameterKey, value, $"步骤 {binding.StepIndex} 字段 {binding.Field}");
+            var step = steps[binding.StepIndex];
+            if (binding.Field == "value")
+            {
+                if (value.ValueKind != JsonValueKind.String) throw Invalid($"步骤 {binding.StepIndex} 字段 value 的参数 {binding.ParameterKey} 必须为完整 JSON 字符串，实际为 {value.GetRawText()}。");
+                steps[binding.StepIndex] = step with { Value = value.GetString() };
+            }
+            else
+            {
+                if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var duration) || duration < 0)
+                    throw Invalid($"步骤 {binding.StepIndex} 字段 durationMs 的参数 {binding.ParameterKey} 必须为非负 Int32 整数，实际为 {value.GetRawText()}。");
+                steps[binding.StepIndex] = step with { DurationMs = duration };
+            }
+        }
+        var resolved = snapshot with
+        {
+            Steps = steps,
+            Parameters = snapshot.Parameters.Select(parameter => overrides.TryGetValue(parameter.Key, out var value) ? parameter with { Value = value.Clone() } : parameter).ToList(),
+            ExecutionContract = null
+        };
+        try { ScriptPackageService.Validate(resolved); }
+        catch (DeviceException error) { throw Invalid($"参数绑定后的步骤或参数无效：{error.Message}"); }
+        return resolved;
+    }
+
+    private static void RequireValue(string key, JsonElement value, string source)
+    {
+        if (value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            throw Invalid($"参数 {key} 的{source}为 {value.ValueKind.ToString().ToLowerInvariant()}，不能回退或执行。");
+    }
+    private static DeviceException Invalid(string message) => new(message, 400, 1007);
+}
+
+```
+
 ## src/MatrixDevice.Features/Scripts/ScriptPackageService.cs
 
 ```csharp
 using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MatrixDevice.Core;
 
 namespace MatrixDevice.Features;
@@ -21381,6 +21829,20 @@ public sealed record ScriptPackage
     public ScriptManifest Manifest { get; init; } = new();
     public List<ScriptStep> Steps { get; init; } = [];
     public List<ScriptParameter> Parameters { get; init; } = [];
+    public ScriptExecutionContract? ExecutionContract { get; init; }
+}
+
+public sealed record ScriptExecutionContract
+{
+    public int Version { get; init; }
+    public List<ScriptParameterBinding>? Bindings { get; init; }
+}
+
+public sealed record ScriptParameterBinding
+{
+    public int StepIndex { get; init; } = -1;
+    public string Field { get; init; } = "";
+    public string ParameterKey { get; init; } = "";
 }
 
 public static class ScriptPackageService
@@ -21389,6 +21851,7 @@ public static class ScriptPackageService
     public const int MaximumJsonBytes = 4 * 1024 * 1024;
     private static readonly HashSet<string> Actions = new(StringComparer.OrdinalIgnoreCase)
     { "launchapp", "launch", "wait", "sleep", "click", "swipe" };
+    private static readonly JsonSerializerOptions ExecutionOptions = CreateExecutionOptions();
 
     public static ScriptPackage Load(string path)
     {
@@ -21428,7 +21891,7 @@ public static class ScriptPackageService
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         Validate(package);
         var manifest = JsonSerializer.SerializeToUtf8Bytes(package.Manifest, JsonDefaults.Options);
-        var script = JsonSerializer.SerializeToUtf8Bytes(package, JsonDefaults.Options);
+        var script = JsonSerializer.SerializeToUtf8Bytes(package, OptionsFor(package));
         if (manifest.Length > MaximumJsonBytes || script.Length > MaximumJsonBytes)
             throw Invalid("Serialized script JSON exceeds the package limit.");
         var fullPath = Path.GetFullPath(path);
@@ -21493,6 +21956,70 @@ public static class ScriptPackageService
             ValidateValue(parameter, parameter.DefaultValue, "DefaultValue");
             ValidateValue(parameter, parameter.Value, "Value");
         }
+        ValidateExecutionContract(package);
+    }
+
+    private static void ValidateExecutionContract(ScriptPackage package)
+    {
+        if (package.ExecutionContract is not { } contract) return;
+        if (contract.Version != 1) throw Invalid($"不支持脚本执行契约版本：{contract.Version}，仅支持 version=1。");
+        if (contract.Bindings is null) throw Invalid("执行契约 bindings 必须为数组。");
+        if (contract.Bindings.Count > 10000) throw Invalid($"执行契约绑定数量超限：{contract.Bindings.Count}，最多 10000。");
+        for (var index = 0; index < package.Steps.Count; index++)
+            if (package.Steps[index].Probability is not null) throw Invalid($"步骤 {index} 的 Probability 尚无受支持的执行语义；version=1 不接受非空概率。");
+        foreach (var parameter in package.Parameters)
+        {
+            if (parameter.Value is { ValueKind: JsonValueKind.Undefined }) throw Invalid($"参数 {parameter.Key} 的 Value 为 undefined，不能用于 version=1。");
+            if (parameter.DefaultValue is { ValueKind: JsonValueKind.Undefined }) throw Invalid($"参数 {parameter.Key} 的 DefaultValue 为 undefined，不能用于 version=1。");
+        }
+        var keys = package.Parameters.Select(parameter => parameter.Key).ToHashSet(StringComparer.Ordinal);
+        var fields = new HashSet<(int, string)>();
+        for (var index = 0; index < contract.Bindings.Count; index++)
+        {
+            var binding = contract.Bindings[index];
+            if (binding is null) throw Invalid($"绑定 {index} 不能为 null。");
+            if (binding.StepIndex < 0 || binding.StepIndex >= package.Steps.Count)
+                throw Invalid($"绑定 {index} 的 stepIndex={binding.StepIndex} 越界，步骤数量为 {package.Steps.Count}。");
+            if (string.IsNullOrWhiteSpace(binding.ParameterKey) || !keys.Contains(binding.ParameterKey))
+                throw Invalid($"绑定 {index} 的 parameterKey='{binding.ParameterKey}' 为空或未声明（区分大小写）。");
+            if (binding.Field is not ("value" or "durationMs")) throw Invalid($"绑定 {index} 的 field='{binding.Field}' 无效，仅支持 value 或 durationMs。");
+            if (!fields.Add((binding.StepIndex, binding.Field))) throw Invalid($"步骤 {binding.StepIndex} 的字段 {binding.Field} 重复绑定。");
+            var action = package.Steps[binding.StepIndex].Action.Trim().ToLowerInvariant();
+            if (binding.Field == "value" && action is not ("launch" or "launchapp" or "click" or "swipe") ||
+                binding.Field == "durationMs" && action is not ("wait" or "sleep"))
+                throw Invalid($"步骤 {binding.StepIndex} 的动作 {action} 不使用字段 {binding.Field}，不能绑定参数 {binding.ParameterKey}。");
+        }
+    }
+
+    internal static ScriptPackage CloneForExecution(ScriptPackage package)
+    {
+        var options = OptionsFor(package);
+        return JsonSerializer.Deserialize<ScriptPackage>(JsonSerializer.SerializeToUtf8Bytes(package, options), options)
+            ?? throw Invalid("脚本执行快照不能为空。");
+    }
+
+    private static JsonSerializerOptions OptionsFor(ScriptPackage package) => package.ExecutionContract is { Version: 1 } ? ExecutionOptions : JsonDefaults.Options;
+
+    private static JsonSerializerOptions CreateExecutionOptions()
+    {
+        var options = new JsonSerializerOptions(JsonDefaults.Options);
+        options.Converters.Add(new ExplicitNullElementConverter());
+        return options;
+    }
+
+    private sealed class ExplicitNullElementConverter : JsonConverter<JsonElement?>
+    {
+        public override bool HandleNull => true;
+        public override JsonElement? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            using var document = JsonDocument.ParseValue(ref reader);
+            return document.RootElement.Clone();
+        }
+        public override void Write(Utf8JsonWriter writer, JsonElement? value, JsonSerializerOptions options)
+        {
+            if (value is null) writer.WriteNullValue();
+            else value.Value.WriteTo(writer);
+        }
     }
 
     public static int[] ParseIntegers(string? value, int count, int stepIndex = -1)
@@ -21514,7 +22041,7 @@ public static class ScriptPackageService
             throw Invalid($"Invalid Android package name: '{value}'.");
     }
 
-    private static void ValidateValue(ScriptParameter parameter, JsonElement? value, string field)
+    internal static void ValidateValue(ScriptParameter parameter, JsonElement? value, string field)
     {
         if (value is not { } element || element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return;
         var type = parameter.Type?.Trim().ToLowerInvariant();
@@ -21556,7 +22083,14 @@ public static class ScriptPackageService
             if (bytes.Length + read > MaximumJsonBytes) throw Invalid($"ZIP JSON entry exceeds its read limit: {name}.");
             bytes.Write(buffer, 0, read);
         }
-        try { return JsonSerializer.Deserialize<T>(bytes.ToArray(), JsonDefaults.Options) ?? throw Invalid($"ZIP JSON is null: {name}."); }
+        try
+        {
+            var payload = bytes.ToArray();
+            var value = JsonSerializer.Deserialize<T>(payload, JsonDefaults.Options) ?? throw Invalid($"ZIP JSON is null: {name}.");
+            if (value is ScriptPackage { ExecutionContract.Version: 1 })
+                value = JsonSerializer.Deserialize<T>(payload, ExecutionOptions) ?? throw Invalid($"ZIP JSON is null: {name}.");
+            return value;
+        }
         catch (JsonException error) { throw Invalid($"Invalid JSON in {name}: {error.Message}"); }
     }
 
@@ -21603,10 +22137,12 @@ public sealed class ScriptScheduler(IDeviceBackend backend) : IAsyncDisposable
     public event Action<string, ScriptLogEntry>? EntryAdded;
 
     public Task RunAsync(string serial, ScriptPackage package, CancellationToken ct = default)
+        => RunAsync(serial, package, ct, null);
+
+    public Task RunAsync(string serial, ScriptPackage package, CancellationToken ct, IReadOnlyDictionary<string, JsonElement>? parameterOverrides)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(serial);
-        ScriptPackageService.Validate(package);
-        var snapshot = JsonSerializer.Deserialize<ScriptPackage>(JsonSerializer.Serialize(package, JsonDefaults.Options), JsonDefaults.Options)!;
+        var snapshot = ScriptExecutionCompiler.Compile(package, parameterOverrides);
         Task task;
         ScriptRunStatus? started = null;
         Run? launched = null;
@@ -28031,6 +28567,8 @@ if (liveIndex >= 0)
     });
 }
 
+ScriptParameterTests.Register(Test);
+
 var failures = 0; var totalTimer = Stopwatch.StartNew();
 foreach (var (name, run) in tests)
 {
@@ -28672,6 +29210,390 @@ internal sealed class FakeScreenVideoServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _stop.Cancel(); _listener.Stop(); await _accepting; await Task.WhenAll(_clients); _stop.Dispose();
+    }
+}
+
+```
+
+## tests/MatrixDevice.Tests/ScriptParameterTests.cs
+
+```csharp
+using System.Collections.Concurrent;
+using System.IO.Compression;
+using System.Reflection;
+using System.Runtime.ExceptionServices;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using MatrixDevice.Core;
+using MatrixDevice.Features;
+
+internal static class ScriptParameterTests
+{
+    public static void Register(Action<string, Func<Task>> test)
+    {
+        test("Script bindings wire roundtrip executes parameter Value through the original scheduler", async () =>
+        {
+            using var files = new PackageFiles();
+            await using var backend = new RecordingBackend(); await using var scheduler = new ScriptScheduler(backend);
+            var package = files.RoundTrip(Wire(value: "\"40,50\"", fallback: "\"60,70\""));
+            Check(backend.Writes.IsEmpty, "Import/save/reload invoked an input operation.");
+            await scheduler.RunAsync("DEMO-001", package);
+            Check(backend.Writes.Single() == new Write("DEMO-001", "click", "40,50"), "PRODUCT-WRONG-EFFECT: parameter Value did not reach the original backend call.");
+            Check(await backend.Taps("DEMO-001") == "Tap 1" && scheduler.GetStatus("DEMO-001").State == ScriptRunState.Completed, "Actual Demo execution did not complete.");
+        });
+        test("Script bindings missing Value uses DefaultValue after wire save and reload", async () =>
+        {
+            using var files = new PackageFiles(); await using var backend = new RecordingBackend(); await using var scheduler = new ScriptScheduler(backend);
+            var package = files.RoundTrip(Wire(fallback: "\"60,70\""));
+            await scheduler.RunAsync("DEMO-001", package);
+            Check(backend.Writes.Single().Value == "60,70", "PRODUCT-WRONG-EFFECT: missing Value did not use DefaultValue.");
+        });
+        test("Script bindings explicit JSON null presence survives wire save and reload", () =>
+        {
+            using var files = new PackageFiles();
+            var package = files.RoundTrip(Wire(value: "null", fallback: "\"60,70\""));
+            Check(package.Parameters.Single().Value is { ValueKind: JsonValueKind.Null }, "PRODUCT-NULL-PRESENCE: explicit JSON null collapsed into a missing Value.");
+            using var archive = ZipFile.OpenRead(files.SavedPath);
+            using var stream = archive.GetEntry("script.json")!.Open(); using var document = JsonDocument.Parse(stream);
+            Check(document.RootElement.GetProperty("parameters")[0].TryGetProperty("value", out var value) && value.ValueKind == JsonValueKind.Null, "Saved V1 ZIP omitted the explicit null Value.");
+            return Task.CompletedTask;
+        });
+        test("Script bindings explicit package null never falls back or admits a run", async () =>
+        {
+            using var files = new PackageFiles();
+            await RejectBeforeRun(files.RoundTrip(Wire(value: "null", fallback: "\"60,70\"")));
+        });
+        test("Script bindings absent sources and explicit null defaults reject before a run", async () =>
+        {
+            foreach (var wire in new[] { Wire(), Wire(fallback: "null") })
+            {
+                using var files = new PackageFiles(); await RejectBeforeRun(files.RoundTrip(wire));
+            }
+        });
+        test("Script bindings selected undefined package values reject as 400 rather than serializer failures", async () =>
+        {
+            using var files = new PackageFiles(); var package = files.RoundTrip(Wire(value: "\"40,50\"", fallback: "\"60,70\""));
+            var parameter = package.Parameters.Single();
+            await RejectBeforeRun(package with { Parameters = [parameter with { Value = default(JsonElement) }] });
+            await RejectBeforeRun(package with { Parameters = [parameter with { Value = null, DefaultValue = default(JsonElement) }] });
+        });
+        test("Script bindings present Value wins null Default and explicit override wins null Value", async () =>
+        {
+            using var files = new PackageFiles(); await using var backend = new RecordingBackend(); await using var scheduler = new ScriptScheduler(backend);
+            var package = files.RoundTrip(Wire(value: "\"40,50\"", fallback: "null"));
+            await scheduler.RunAsync("DEMO-001", package);
+            Check(backend.Writes.Single().Value == "40,50", "Present Value was replaced by its null DefaultValue.");
+            var explicitNull = files.RoundTrip(Wire(value: "null", fallback: "\"60,70\""));
+            await RunWithOverrides(scheduler, "DEMO-002", explicitNull, new Dictionary<string, JsonElement> { ["point"] = Element("\"80,90\"") });
+            Check(backend.Writes.Last().Value == "80,90" && await backend.Taps("DEMO-002") == "Tap 1", "Explicit override did not take precedence over null Value.");
+        });
+        test("Script bindings explicit overrides take precedence and reject null without fallback", async () =>
+        {
+            using var files = new PackageFiles(); await using var backend = new RecordingBackend(); await using var scheduler = new ScriptScheduler(backend);
+            var package = files.RoundTrip(Wire(value: "\"40,50\"", fallback: "\"60,70\""));
+            var overrides = new Dictionary<string, JsonElement> { ["point"] = Element("\"80,90\"") };
+            await RunWithOverrides(scheduler, "DEMO-001", package, overrides);
+            Check(backend.Writes.Single().Value == "80,90" && await backend.Taps("DEMO-001") == "Tap 1", "Override did not determine the actual Demo input.");
+            overrides["point"] = Element("null");
+            await RejectBeforeRun(package, overrides);
+            overrides["point"] = default;
+            await RejectBeforeRun(package, overrides);
+        });
+        test("Script bindings differentiated concurrent targets execute distinct values and leave third target unchanged", async () =>
+        {
+            using var files = new PackageFiles(); await using var backend = new RecordingBackend(); await using var scheduler = new ScriptScheduler(backend);
+            var package = files.RoundTrip(Wire(value: "\"40,50\"", fallback: "\"60,70\""));
+            Check(await backend.Taps("DEMO-003") == "Tap 0" && backend.Writes.IsEmpty, "Unselected third Demo did not start clean.");
+            await Task.WhenAll(RunWithOverrides(scheduler, "DEMO-001", package, new Dictionary<string, JsonElement> { ["point"] = Element("\"20,30\"") }),
+                RunWithOverrides(scheduler, "DEMO-002", package, new Dictionary<string, JsonElement> { ["point"] = Element("\"100,110\"") }));
+            Check(backend.Writes.Count == 2 && backend.Writes.Contains(new Write("DEMO-001", "click", "20,30")) && backend.Writes.Contains(new Write("DEMO-002", "click", "100,110")), "Parallel target parameters were mixed, dropped or duplicated.");
+            Check(await backend.Taps("DEMO-001") == "Tap 1" && await backend.Taps("DEMO-002") == "Tap 1" && await backend.Taps("DEMO-003") == "Tap 0", "Actual differentiated Demo state crossed target boundaries.");
+            Check(!backend.Writes.Any(write => write.Serial == "DEMO-003"), "Unselected third target received a write.");
+        });
+        test("Script bindings compiler freezes ordinary literal steps and preserves all source inputs", async () =>
+        {
+            using var files = new PackageFiles();
+            var package = files.RoundTrip(Wire(value: "\"40,50\"", fallback: "\"60,70\""));
+            var overrides = new Dictionary<string, JsonElement> { ["point"] = Element("\"80,90\"") };
+            var before = JsonSerializer.Serialize(package, JsonDefaults.Options); var overrideBefore = overrides["point"].GetRawText();
+            var compiled = Compile(package, overrides);
+            Check(compiled.Steps.Single().Value == "80,90", "Compiler did not produce the selected literal.");
+            var compiledJson = JsonSerializer.SerializeToElement(compiled, JsonDefaults.Options);
+            Check(!compiledJson.TryGetProperty("executionContract", out var contract) || contract.ValueKind == JsonValueKind.Null, "Compiled execution package can be rebound on scheduler entry.");
+            Check(before == JsonSerializer.Serialize(package, JsonDefaults.Options) && overrides["point"].GetRawText() == overrideBefore, "Compilation changed package or overrides.");
+            Check(!ReferenceEquals(compiled.Steps, package.Steps) && !ReferenceEquals(compiled.Parameters, package.Parameters) && !ReferenceEquals(compiled.Manifest, package.Manifest), "Execution snapshot shares mutable source collections or manifest.");
+            await using var backend = new RecordingBackend(); await using var scheduler = new ScriptScheduler(backend);
+            await scheduler.RunAsync("DEMO-001", compiled);
+            Check(backend.Writes.Single().Value == "80,90", "Scheduler rebound a previously compiled override to package Value.");
+        });
+        test("Script bindings accepted run is isolated from later package and override mutation", async () =>
+        {
+            using var files = new PackageFiles(); await using var backend = new RecordingBackend { HoldFirstTap = true }; await using var scheduler = new ScriptScheduler(backend);
+            var wire = Wire(value: "\"40,50\"");
+            wire["steps"]!.AsArray().Add(JsonNode.Parse("{\"action\":\"click\",\"value\":\"10,20\"}"));
+            wire["executionContract"]!["bindings"]!.AsArray().Add(Binding(1, "value", "point"));
+            var package = files.RoundTrip(wire); var overrides = new Dictionary<string, JsonElement> { ["point"] = Element("\"80,90\"") };
+            var running = RunWithOverrides(scheduler, "DEMO-001", package, overrides);
+            try
+            {
+                await backend.FirstTapEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                package.Steps.Clear(); package.Parameters.Clear(); overrides["point"] = Element("null");
+            }
+            finally { backend.ReleaseFirstTap.TrySetResult(); }
+            await running.WaitAsync(TimeSpan.FromSeconds(2));
+            Check(backend.Writes.Count == 2 && backend.Writes.All(write => write.Value == "80,90") && await backend.Taps("DEMO-001") == "Tap 2", "Accepted steps changed after source mutation.");
+            Check(package.Steps.Count == 0 && package.Parameters.Count == 0 && overrides["point"].ValueKind == JsonValueKind.Null, "Executor restored or modified caller-owned inputs.");
+        });
+        test("Script bindings version and binding shape errors reject before admission", async () =>
+        {
+            var invalid = new List<JsonObject>();
+            foreach (var version in new[] { 0, 2, -1 }) { var wire = Wire(value: "\"40,50\""); wire["executionContract"]!["version"] = version; invalid.Add(wire); }
+            var noVersion = Wire(value: "\"40,50\""); noVersion["executionContract"]!.AsObject().Remove("version"); invalid.Add(noVersion);
+            var noBindings = Wire(value: "\"40,50\""); noBindings["executionContract"]!.AsObject().Remove("bindings"); invalid.Add(noBindings);
+            var nullBindings = Wire(value: "\"40,50\""); nullBindings["executionContract"]!["bindings"] = null; invalid.Add(nullBindings);
+            foreach (var bindings in new[] { "[null]", "[{\"field\":\"value\",\"parameterKey\":\"point\"}]", "[{\"stepIndex\":-1,\"field\":\"value\",\"parameterKey\":\"point\"}]", "[{\"stepIndex\":1,\"field\":\"value\",\"parameterKey\":\"point\"}]", "[{\"stepIndex\":0,\"field\":\"Value\",\"parameterKey\":\"point\"}]", "[{\"stepIndex\":0,\"field\":\"value\",\"parameterKey\":\"Point\"}]", "[{\"stepIndex\":0,\"field\":\"value\",\"parameterKey\":\" \"}]" })
+            { var wire = Wire(value: "\"40,50\""); wire["executionContract"]!["bindings"] = JsonNode.Parse(bindings); invalid.Add(wire); }
+            var duplicate = Wire(value: "\"40,50\""); duplicate["executionContract"]!["bindings"]!.AsArray().Add(Binding(0, "value", "point")); invalid.Add(duplicate);
+            foreach (var wire in invalid) await RejectWire(wire);
+        });
+        test("Script bindings fields must be consumed by the selected action", async () =>
+        {
+            var waitValue = Wire(value: "\"40,50\""); waitValue["steps"]![0] = JsonNode.Parse("{\"action\":\"wait\",\"durationMs\":0}");
+            await RejectWire(waitValue);
+            foreach (var action in new[] { "click", "swipe", "launch", "launchapp" })
+            {
+                var wire = DurationWire("0"); wire["steps"]![0] = new JsonObject { ["action"] = action, ["value"] = action is "launch" or "launchapp" ? "com.matrix.demo" : action == "click" ? "10,20" : "10,20,30,40,100" };
+                await RejectWire(wire);
+            }
+        });
+        test("Script bindings nonnull Probability rejects only the new execution contract", async () =>
+        {
+            foreach (var probability in new[] { 0, 0.5, 1 })
+            {
+                var wire = Wire(value: "\"40,50\""); wire["steps"]![0]!["probability"] = probability;
+                await RejectWire(wire);
+            }
+        });
+        test("Script bindings resolved action syntax is validated before a Running state", async () =>
+        {
+            foreach (var (action, literal, value) in new[] { ("click", "10,20", "not-coordinates"), ("launch", "com.matrix.demo", "invalid package"), ("launchapp", "com.matrix.demo", "1.bad"), ("swipe", "10,20,30,40,100", "10,20,30,40,0") })
+            {
+                var wire = Wire(value: JsonSerializer.Serialize(value)); wire["steps"]![0] = new JsonObject { ["action"] = action, ["value"] = literal };
+                await RejectWire(wire);
+            }
+        });
+        test("Script bindings full Value refuses JSON coercion and undefined override values", async () =>
+        {
+            foreach (var value in new[] { "42", "true", "[]", "{}", "\"\"" })
+            {
+                var wire = Wire(value: value, fallback: "\"60,70\""); wire["parameters"]![0]!.AsObject().Remove("type"); await RejectWire(wire);
+            }
+        });
+        test("Script bindings duration accepts zero and Int32 maximum without changing literal package", async () =>
+        {
+            foreach (var value in new[] { "0", "2147483647" })
+            {
+                using var files = new PackageFiles(); var package = files.RoundTrip(DurationWire(value));
+                var compiled = Compile(package, null);
+                Check(compiled.Steps.Single().DurationMs == int.Parse(value, System.Globalization.CultureInfo.InvariantCulture) && package.Steps.Single().DurationMs == 0, "Int32 duration binding or source isolation failed.");
+            }
+            using var runnableFiles = new PackageFiles(); await using var backend = new RecordingBackend(); await using var scheduler = new ScriptScheduler(backend);
+            await scheduler.RunAsync("DEMO-001", runnableFiles.RoundTrip(DurationWire("0")));
+            Check(scheduler.GetStatus("DEMO-001").State == ScriptRunState.Completed && backend.Writes.IsEmpty, "Zero-duration wait did not complete without input.");
+        });
+        test("Script bindings duration rejects negative overflow fraction exponent and nonnumeric values", async () =>
+        {
+            foreach (var value in new[] { "-1", "2147483648", "1.5", "1.0", "1e0", "\"1\"", "true", "[]", "{}", "null" }) await RejectWire(DurationWire(value));
+        });
+        test("Script bindings nonzero duration reaches the original wait and cancellation prevents its next action", async () =>
+        {
+            using var files = new PackageFiles(); await using var backend = new RecordingBackend(); await using var scheduler = new ScriptScheduler(backend);
+            var wire = DurationWire("10000"); wire["steps"]!.AsArray().Add(JsonNode.Parse("{\"action\":\"click\",\"value\":\"10,20\"}"));
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            scheduler.EntryAdded += (_, entry) => { if (entry.Message.StartsWith("步骤 1/2：", StringComparison.Ordinal)) entered.TrySetResult(); };
+            var package = files.RoundTrip(wire); var running = scheduler.RunAsync("DEMO-001", package);
+            try
+            {
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                await Task.Delay(50);
+                Check(!running.IsCompleted && backend.Writes.IsEmpty, "PRODUCT-WRONG-EFFECT: bound nonzero duration did not wait before the next action.");
+            }
+            finally
+            {
+                scheduler.Stop("DEMO-001");
+                await running.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            Check(scheduler.GetStatus("DEMO-001").State == ScriptRunState.Cancelled && backend.Writes.IsEmpty && await backend.Taps("DEMO-001") == "Tap 0", "Bound wait cancellation ran its next action or did not become terminal Cancelled.");
+            Check(Compile(package, null).Steps[0].DurationMs == 10000, "Bound nonzero duration did not preserve its exact Int32 value.");
+        });
+        test("Script bindings overrides respect declared type numeric bounds and exact keys", async () =>
+        {
+            using var files = new PackageFiles(); var wire = DurationWire("0"); wire["parameters"]![0]!["type"] = "int"; wire["parameters"]![0]!["min"] = 0; wire["parameters"]![0]!["max"] = 5;
+            var package = files.RoundTrip(wire);
+            foreach (var overrides in new[]
+            {
+                new Dictionary<string, JsonElement> { ["delay"] = Element("6") },
+                new Dictionary<string, JsonElement> { ["delay"] = Element("\"2\"") },
+                new Dictionary<string, JsonElement> { ["Delay"] = Element("2") },
+                new Dictionary<string, JsonElement> { ["unknown"] = Element("2") }
+            }) await RejectBeforeRun(package, overrides);
+        });
+        test("Script bindings ordinary literal actions and parameterized launch and swipe use the existing backend", async () =>
+        {
+            using var files = new PackageFiles(); await using var backend = new RecordingBackend(); await using var scheduler = new ScriptScheduler(backend);
+            var wire = Wire(value: "\"10,20,30,40,100\""); wire["steps"] = JsonNode.Parse("[{\"action\":\"launchapp\",\"value\":\"com.matrix.demo\"},{\"action\":\"swipe\",\"value\":\"1,2,3,4,50\"},{\"action\":\"click\",\"value\":\"15,25\"}]");
+            wire["parameters"]!.AsArray().Add(new JsonObject { ["key"] = "app", ["type"] = "string", ["defaultValue"] = "com.android.settings" });
+            wire["executionContract"]!["bindings"] = new JsonArray(Binding(0, "value", "app"), Binding(1, "value", "point"));
+            await scheduler.RunAsync("DEMO-001", files.RoundTrip(wire));
+            Check(backend.Writes.SequenceEqual(new[] { new Write("DEMO-001", "launch", "com.android.settings"), new Write("DEMO-001", "swipe", "10,20,30,40,100"), new Write("DEMO-001", "click", "15,25") }), "Parameterized launch/swipe or unbound literal call changed.");
+            Check((await backend.DumpAsync("DEMO-001")).PackageName == "com.android.settings" && await backend.Taps("DEMO-001") == "Tap 2", "Original Demo engine did not observe launch and both input effects.");
+        });
+        test("Script bindings legacy packages retain Probability raw steps and nullable values after resource-bearing import", async () =>
+        {
+            using var files = new PackageFiles(); await using var backend = new RecordingBackend(); await using var scheduler = new ScriptScheduler(backend);
+            var wire = Wire(value: "null", fallback: "\"60,70\""); wire.Remove("executionContract"); wire["steps"]![0]!["probability"] = 0;
+            var package = files.RoundTrip(wire);
+            Check(package.Parameters.Single().Value is null && package.Steps.Single().Probability == 0, "Legacy nullable/Probability interpretation changed.");
+            await scheduler.RunAsync("DEMO-001", package);
+            Check(backend.Writes.Single().Value == "10,20" && await backend.Taps("DEMO-001") == "Tap 1", "Legacy parameters or Probability acquired new execution meaning.");
+            wire["executionContract"] = null;
+            await scheduler.RunAsync("DEMO-002", files.RoundTrip(wire));
+            Check(backend.Writes.Last().Value == "10,20" && await backend.Taps("DEMO-002") == "Tap 1", "Explicit null contract no longer uses the legacy path.");
+            await RunWithOverrides(scheduler, "DEMO-001", package, new Dictionary<string, JsonElement>());
+            Check(backend.Writes.Last().Value == "10,20" && await backend.Taps("DEMO-001") == "Tap 2", "Empty overrides changed legacy execution.");
+        });
+        test("Script bindings nonempty overrides on a legacy package reject rather than silently disappear", async () =>
+        {
+            using var files = new PackageFiles(); var wire = Wire(value: "\"40,50\""); wire.Remove("executionContract");
+            await RejectBeforeRun(files.RoundTrip(wire), new Dictionary<string, JsonElement> { ["point"] = Element("\"80,90\"") });
+        });
+        test("Script bindings scoped null handling never changes global JsonDefaults behavior", () =>
+        {
+            var options = JsonDefaults.Options; var converters = options.Converters.ToArray(); var ignore = options.DefaultIgnoreCondition;
+            var legacyBefore = JsonSerializer.Serialize(new ScriptParameter { Key = "probe", Value = null }, options);
+            using var files = new PackageFiles(); files.RoundTrip(Wire(value: "null", fallback: "\"60,70\""));
+            var legacyAfter = JsonSerializer.Deserialize<ScriptParameter>("{\"key\":\"probe\",\"value\":null}", options)!;
+            Check(ReferenceEquals(options, JsonDefaults.Options) && options.DefaultIgnoreCondition == ignore && options.Converters.SequenceEqual(converters), "V1 parsing changed global serializer configuration.");
+            Check(legacyAfter.Value is null && legacyBefore == JsonSerializer.Serialize(new ScriptParameter { Key = "probe", Value = null }, options), "V1 converter leaked to ordinary model serialization.");
+            return Task.CompletedTask;
+        });
+    }
+
+    private static JsonObject Wire(string? value = null, string? fallback = null)
+    {
+        var parameter = new JsonObject { ["key"] = "point", ["type"] = "string" };
+        if (value is not null) parameter["value"] = JsonNode.Parse(value);
+        if (fallback is not null) parameter["defaultValue"] = JsonNode.Parse(fallback);
+        return new JsonObject
+        {
+            ["steps"] = JsonNode.Parse("[{\"action\":\"click\",\"value\":\"10,20\"}]"),
+            ["parameters"] = new JsonArray(parameter),
+            ["executionContract"] = new JsonObject { ["version"] = 1, ["bindings"] = new JsonArray(Binding(0, "value", "point")) }
+        };
+    }
+    private static JsonObject DurationWire(string value)
+    {
+        var wire = Wire(); wire["steps"] = JsonNode.Parse("[{\"action\":\"wait\",\"durationMs\":0}]");
+        wire["parameters"] = new JsonArray(new JsonObject { ["key"] = "delay", ["value"] = JsonNode.Parse(value) });
+        wire["executionContract"]!["bindings"] = new JsonArray(Binding(0, "durationMs", "delay")); return wire;
+    }
+    private static JsonObject Binding(int index, string field, string key) => new() { ["stepIndex"] = index, ["field"] = field, ["parameterKey"] = key };
+    private static JsonElement Element(string json) { using var document = JsonDocument.Parse(json); return document.RootElement.Clone(); }
+    private static Task RunWithOverrides(ScriptScheduler scheduler, string serial, ScriptPackage package, IReadOnlyDictionary<string, JsonElement> overrides)
+    {
+        var method = typeof(ScriptScheduler).GetMethod("RunAsync", [typeof(string), typeof(ScriptPackage), typeof(CancellationToken), typeof(IReadOnlyDictionary<string, JsonElement>)]);
+        if (method is null) throw new InvalidOperationException("CONTRACT-NOT-IMPLEMENTED: RunAsync(string, ScriptPackage, CancellationToken, IReadOnlyDictionary<string, JsonElement>).");
+        return (Task)Invoke(method, scheduler, [serial, package, CancellationToken.None, overrides])!;
+    }
+    private static ScriptPackage Compile(ScriptPackage package, IReadOnlyDictionary<string, JsonElement>? overrides)
+    {
+        var type = typeof(ScriptPackage).Assembly.GetType("MatrixDevice.Features.ScriptExecutionCompiler");
+        var method = type?.GetMethod("Compile", BindingFlags.Public | BindingFlags.Static, binder: null, types: [typeof(ScriptPackage), typeof(IReadOnlyDictionary<string, JsonElement>)], modifiers: null);
+        if (method is null) throw new InvalidOperationException("CONTRACT-NOT-IMPLEMENTED: ScriptExecutionCompiler.Compile(ScriptPackage, IReadOnlyDictionary<string, JsonElement>).");
+        return (ScriptPackage)Invoke(method, null, [package, overrides])!;
+    }
+    private static object? Invoke(MethodInfo method, object? target, object?[] arguments)
+    {
+        try { return method.Invoke(target, arguments); }
+        catch (TargetInvocationException error) when (error.InnerException is not null) { ExceptionDispatchInfo.Capture(error.InnerException).Throw(); throw; }
+    }
+    private static async Task RejectWire(JsonObject wire)
+    {
+        using var files = new PackageFiles(); ScriptPackage package;
+        try { package = files.RoundTrip(wire); }
+        catch (DeviceException error) { Check(error.Status == 400 && error.Code == 1007, "Invalid wire was not rejected as 400/1007."); return; }
+        await RejectBeforeRun(package);
+    }
+    private static async Task RejectBeforeRun(ScriptPackage package, IReadOnlyDictionary<string, JsonElement>? overrides = null)
+    {
+        await using var backend = new RecordingBackend(); await using var scheduler = new ScriptScheduler(backend); var statuses = new List<ScriptRunStatus>(); scheduler.StatusChanged += statuses.Add;
+        DeviceException? failure = null;
+        try { if (overrides is null) await scheduler.RunAsync("DEMO-001", package); else await RunWithOverrides(scheduler, "DEMO-001", package, overrides); }
+        catch (DeviceException error) { failure = error; }
+        Check(failure is { Status: 400, Code: 1007 }, "PRODUCT-INVALID-ADMITTED: invalid bound input was not rejected as 400/1007 before scheduling.");
+        Check(backend.Writes.IsEmpty && statuses.Count == 0 && scheduler.GetStatus("DEMO-001").State == ScriptRunState.Idle && scheduler.GetLogs("DEMO-001").Count == 0, "Rejected bindings touched the backend or created a Running/log state.");
+        Check(await backend.Taps("DEMO-001") == "Tap 0" && await backend.Taps("DEMO-002") == "Tap 0" && await backend.Taps("DEMO-003") == "Tap 0", "Rejected bindings changed a Demo target.");
+    }
+    private static void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
+
+    private sealed class PackageFiles : IDisposable
+    {
+        private readonly string directory = Path.Combine(Path.GetTempPath(), "matrix-script-binding-tests-" + Guid.NewGuid().ToString("N"));
+        public string SavedPath => Path.Combine(directory, "saved.jxscript");
+        public ScriptPackage RoundTrip(JsonObject wire)
+        {
+            Directory.CreateDirectory(directory); var path = Path.Combine(directory, "source.jxscript");
+            using (var archive = ZipFile.Open(path, ZipArchiveMode.Create))
+            {
+                Write("manifest.json", "{\"id\":\"binding-test\",\"name\":\"Binding test\",\"version\":\"author-42\"}");
+                Write("script.json", wire.ToJsonString()); Write("resources/not-executable.txt", "Attached data is not code.");
+                void Write(string name, string text) { using var writer = new StreamWriter(archive.CreateEntry(name).Open()); writer.Write(text); }
+            }
+            var imported = ScriptPackageService.Load(path);
+            ScriptPackageService.Save(SavedPath, imported); var loaded = ScriptPackageService.Load(SavedPath);
+            Check(loaded.Manifest.Version == "author-42", "Execution contract reused the manifest author version.");
+            File.Delete(path); return loaded;
+        }
+        public void Dispose() { foreach (var file in new[] { Path.Combine(directory, "source.jxscript"), SavedPath }) if (File.Exists(file)) File.Delete(file); if (Directory.Exists(directory)) Directory.Delete(directory); }
+    }
+    private sealed record Write(string Serial, string Action, string Value);
+    private sealed class RecordingBackend : IDeviceBackend
+    {
+        private readonly DemoDeviceBackend first = new();
+        private readonly DemoDeviceBackend third = new();
+        public ConcurrentQueue<Write> Writes { get; } = new();
+        public bool HoldFirstTap { get; init; }
+        public TaskCompletionSource FirstTapEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstTap { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int taps;
+        public bool IsSimulation => true;
+        private (DemoDeviceBackend Backend, string Serial) Target(string serial) => serial switch { "DEMO-001" or "DEMO-002" => (first, serial), "DEMO-003" => (third, "DEMO-001"), _ => throw new InvalidOperationException("Unknown fixture target: " + serial) };
+        public async Task<string> Taps(string serial) => (await DumpAsync(serial)).ChildNodeList[1].Text!;
+        public async Task TapAsync(string serial, int x, int y, CancellationToken ct = default)
+        {
+            Writes.Enqueue(new(serial, "click", $"{x},{y}"));
+            if (HoldFirstTap && Interlocked.Increment(ref taps) == 1) { FirstTapEntered.TrySetResult(); await ReleaseFirstTap.Task.WaitAsync(ct); }
+            var target = Target(serial); await target.Backend.TapAsync(target.Serial, x, y, ct);
+        }
+        public Task SwipeAsync(string serial, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default)
+        { Writes.Enqueue(new(serial, "swipe", $"{x1},{y1},{x2},{y2},{durationMs}")); var target = Target(serial); return target.Backend.SwipeAsync(target.Serial, x1, y1, x2, y2, durationMs, ct); }
+        public Task<string> StartAppAsync(string serial, string packageName, string? activity = null, CancellationToken ct = default)
+        { Writes.Enqueue(new(serial, "launch", packageName)); var target = Target(serial); return target.Backend.StartAppAsync(target.Serial, packageName, activity, ct); }
+        public Task<AndroidNode> DumpAsync(string serial, CancellationToken ct = default) { var target = Target(serial); return target.Backend.DumpAsync(target.Serial, ct); }
+        public async Task<IReadOnlyList<DeviceInfo>> DiscoverAsync(CancellationToken ct = default) => (await first.DiscoverAsync(ct)).Concat((await third.DiscoverAsync(ct)).Take(1).Select(info => info with { Serial = "DEMO-003" })).ToArray();
+        public Task<string> ShellAsync(string serial, string command, bool useRoot = false, CancellationToken ct = default) => throw new InvalidOperationException("Scripts must not gain arbitrary shell execution.");
+        public Task<byte[]> ScreenshotAsync(string serial, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task KeyEventAsync(string serial, int code, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task TextAsync(string serial, string text, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<string> StopAppAsync(string serial, string packageName, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<bool> ClearAppAsync(string serial, string packageName, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<AppInfo>> ListAppsAsync(string serial, bool showSystem = false, bool needVersion = true, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task InstallAsync(string serial, string localPath, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task UninstallAsync(string serial, string packageName, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task PushAsync(string serial, string localPath, string remotePath, IProgress<double>? progress = null, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task PullAsync(string serial, string remotePath, string localPath, IProgress<double>? progress = null, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task SetNodeTextAsync(string serial, NodeSelector selector, string text, CancellationToken ct = default) => throw new NotSupportedException();
+        public async ValueTask DisposeAsync() { ReleaseFirstTap.TrySetResult(); await first.DisposeAsync(); await third.DisposeAsync(); }
     }
 }
 

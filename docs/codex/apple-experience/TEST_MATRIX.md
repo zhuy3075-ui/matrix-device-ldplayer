@@ -20,7 +20,7 @@
 | DEV-LAYOUT 设备正文 | 六尺寸原DataGrid/虚拟长列表/冻结选择动作/三动作44/14信息边缘与原值/主控自然滚动 | 599/600、919/920边界；MainA/CurrentB/隐藏勾选/原滚动意图；新wheel不被旧恢复覆盖 | 独立PASS-OFFLINE-WPF：[A05b1](A05_DEVICE_RESPONSIVE.md)，六正文889或847检查、纯几何命令调用0；主仓两390各889。非实机、全值同时像素或其它页面小屏通过 |
 | DEV-OFFLINE-DIAG 离线诊断 | 独立严格Demo新入口，原发布图绑定到MainA/CurrentB；同代与增代row Offline对照 | 窗口实际390×640、六快照只读、非有限分类/Empty/null标准JSON、Task/进程清理；三输入反例预创建拒绝 | PASS-OWN-DEMO-DIAGNOSTIC：[AP-041](AP041_OFFLINE_DIAGNOSTICS.md)独立/主仓各158及新390/27记录检查/22Task过；Catalog仍Ready，不是原指针套、原日志出口修复、实机或S01恢复 |
 | DEV-REPORT 验收日志 | 同一原device-layout出口有限全文不变，NaN/正负无穷及Point/Size/Rect/Empty可写标准JSON | 原FAIL/phase/异常及清理聚合保留，真实I/O/不支持类型/两factory失败保留stderr；全局仍严格 | PASS-DEVICE-LAYOUT-REPORT-CONTRACT：[报告修复](AP041_REPORT_RELIABILITY.md)实际红6/8、同14类绿全过，独立/主仓各158、原3E几何/22Task/cleanup保持；8条注入预期错误不等于无stderr。仅日志子项，不关闭原S01/11NOTRUN、实机或完整GUI |
-| WORKSPACE-UIA 正文无障碍 | 原实际工作区根peer与真实owner可达；同根设备→应用→设备更新、名称/ID/角色/禁用状态正确，旧页不残留 | 12导航仅结构、无Invoke/Focus/OS输入/后端调用，恢复选中/输入/模板/Style；官方Sky另验 | [AP-042](AP042_WORKSPACE_ACCESSIBILITY.md)组件红绿及主仓原契约过；[AP043/AP045](AP043_SKY_AB.md)新初始200总节点含正文，显式激活后唯一click仍几何错误，无freshstate/效果未知。停该GUI输入分支，不重复或推断根因；返回/正常Close/原null未解，不当整体验收/全GUI/实机通过 |
+| WORKSPACE-UIA 正文无障碍 | 原实际工作区根peer与真实owner可达；同根设备→应用→设备更新、名称/ID/角色/禁用状态正确，旧页不残留 | 12导航仅结构、无Invoke/Focus/OS输入/后端调用，恢复选中/输入/模板/Style；官方Sky另验 | 最新PRODUCT-FAIL：[A14a1旧链](A14_SCRIPT_PARAMETER_BINDINGS.md)146→146→146，应用owner缺3、旧残留111，其后摘要/新VM/几何NOT-RUN；历史[AP042](AP042_WORKSPACE_ACCESSIBILITY.md)组件过与[AP043/AP045](AP043_SKY_AB.md)初始正文证据不改写。导航几何错误/原null根因未定，独立无窗VM不替代全GUI/实机 |
 | MAIN-01 主控 | 已连接行控制→主控画面；主页/返回/任务/音量；单点/滑动坐标实际效果 | MainA/CurrentB、主控离线、脚本冲突、切换/关闭/拖动中断；不影响另一目标 | NOT-RUN |
 | MAIN-02 主控 | 同步点击滑动和同步按键各自只作用明确勾选其他设备 | 未连接/旧transport目标拒绝；不监听原生雷电窗口/不冒充物理键盘镜像 | NOT-RUN |
 | MAIN-UI 主控路由与截图守卫 | 实际Image路由Tap/Swipe/同步B，核Demo副作用与冻结snapshot；同一主控关闭/离页/失活后拒绝新截图任务 | resize/失捕/离线/忙/各代次/正文滚动/同形不同像素/父留白与捕获拖出均零新输入；已接纳截图可完成但不接纳第二轮 | 独立及主仓代表尺寸PASS-OFFLINE-WPF：[A05b1](A05_DEVICE_RESPONSIVE.md)；默认内部gutter不适用，实际外侧留白已测。不是物理点击、Android、自动timer或ADB wire证明；MAIN-01/02实机仍NOT-RUN |
@@ -53,6 +53,8 @@
 | TEXT-01 文本 | 粘贴、加载文本文件、明确单/多目标发送中文/英文/空格/换行，测试包回读一致 | 文件选择取消/坏编码、空串/离线/旧目标拒绝、输入模式不支持如实报错；无账号页面使用 | NOT-RUN |
 | SCRIPT-01 自动化 | 导入有效jxscript、清单/参数→单/双目标运行→步骤/回传→完成 | 无效ZIP/动作/参数、取消2秒内不再执行、重复启动/目标变化/步骤失败隔离 | NOT-RUN |
 | SCRIPT-FORMAT 自动化格式边界 | 实际Load接受合法ZIP的.json后缀与附带资源，导入Tap0、显式调度Tap1；picker只列jxscript/zip | 六非法非ZIP格式中文400/1007且Tap0，I/O/内层JSON/动作/压缩大小保持原错误；仅ZIP构造catch，不覆盖全部损坏归档 | [A08a/AP044](A08_SCRIPT_FORMAT.md)实际red163/169仅六格式红；实现/独立/主仓各169全过，原158不变。PASS-OFFLINE-PACKAGE-BOUNDARY，不代替GUI文件选择、SCRIPT-01实机或完整RPA |
+| SCRIPT-PARAM 参数执行 | V1真实ZIP Load/Save/Load→原Scheduler，Value/默认/覆盖的实际差异动作、A/B隔离及未指定第三目标零动作 | null不回退、类型/范围/字段/版本/Probability拒绝；深快照/旧包/等待取消保持，全局JSON不变 | [A14a1/AP046](A14_SCRIPT_PARAMETER_BINDINGS.md)Core原红170/193保留，作者/独立/主仓各193通过、原169精确保持。仅参数绑定合同，不代表jobId/transport pin竞态、GUI或guest执行已验 |
+| SCRIPT-PARAM-VM 参数编辑业务 | 真实ZIP导入→原ParameterEditor编辑→StartScriptAsync→原Scheduler→自有Demo节点效果；legacy保存编辑但执行literal | null/非法JSON在metadata、准备状态、日志与后端调用前拒绝；公共任务/转发与Dispose清理、无窗口/用户配置/API | 同四例原2PRODUCT红2PASS，作者/独立/主仓4PASS；独立三入口拒绝、PDB36和旧24Smoke保持。无Window/物理输入/文件选择器/尺寸或实机，不替代SCRIPT-01、AP042与全RPA |
 | API-01 接口 | 普通网关/设备端口/自动化启动，health/devices、请求实际设备效果与响应一致 | 端口占用/服务拥有权/停后排空、错误状态、旧transport/未授权拒绝 | NOT-RUN |
 | API-02 接口 | 当前UI方法/路径/body编辑→发送→结果；设备地址双击复制 | 格式坏值、超时、日志脱敏；停止设备端口不误认为关模拟器；当前无归档/密钥显示/专用取消入口 | NOT-RUN |
 | API-03 接口 | 27条自动化路由逐一正常/坏输入/目标隔离 | 私有agent、节点setText/ROM等缺支持要NOT-IMPLEMENTED或BLOCKED，不以501当业务成功 | NOT-RUN |

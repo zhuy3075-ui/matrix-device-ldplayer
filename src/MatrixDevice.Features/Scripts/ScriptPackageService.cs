@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MatrixDevice.Core;
 
 namespace MatrixDevice.Features;
@@ -45,6 +46,20 @@ public sealed record ScriptPackage
     public ScriptManifest Manifest { get; init; } = new();
     public List<ScriptStep> Steps { get; init; } = [];
     public List<ScriptParameter> Parameters { get; init; } = [];
+    public ScriptExecutionContract? ExecutionContract { get; init; }
+}
+
+public sealed record ScriptExecutionContract
+{
+    public int Version { get; init; }
+    public List<ScriptParameterBinding>? Bindings { get; init; }
+}
+
+public sealed record ScriptParameterBinding
+{
+    public int StepIndex { get; init; } = -1;
+    public string Field { get; init; } = "";
+    public string ParameterKey { get; init; } = "";
 }
 
 public static class ScriptPackageService
@@ -53,6 +68,7 @@ public static class ScriptPackageService
     public const int MaximumJsonBytes = 4 * 1024 * 1024;
     private static readonly HashSet<string> Actions = new(StringComparer.OrdinalIgnoreCase)
     { "launchapp", "launch", "wait", "sleep", "click", "swipe" };
+    private static readonly JsonSerializerOptions ExecutionOptions = CreateExecutionOptions();
 
     public static ScriptPackage Load(string path)
     {
@@ -92,7 +108,7 @@ public static class ScriptPackageService
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         Validate(package);
         var manifest = JsonSerializer.SerializeToUtf8Bytes(package.Manifest, JsonDefaults.Options);
-        var script = JsonSerializer.SerializeToUtf8Bytes(package, JsonDefaults.Options);
+        var script = JsonSerializer.SerializeToUtf8Bytes(package, OptionsFor(package));
         if (manifest.Length > MaximumJsonBytes || script.Length > MaximumJsonBytes)
             throw Invalid("Serialized script JSON exceeds the package limit.");
         var fullPath = Path.GetFullPath(path);
@@ -157,6 +173,70 @@ public static class ScriptPackageService
             ValidateValue(parameter, parameter.DefaultValue, "DefaultValue");
             ValidateValue(parameter, parameter.Value, "Value");
         }
+        ValidateExecutionContract(package);
+    }
+
+    private static void ValidateExecutionContract(ScriptPackage package)
+    {
+        if (package.ExecutionContract is not { } contract) return;
+        if (contract.Version != 1) throw Invalid($"不支持脚本执行契约版本：{contract.Version}，仅支持 version=1。");
+        if (contract.Bindings is null) throw Invalid("执行契约 bindings 必须为数组。");
+        if (contract.Bindings.Count > 10000) throw Invalid($"执行契约绑定数量超限：{contract.Bindings.Count}，最多 10000。");
+        for (var index = 0; index < package.Steps.Count; index++)
+            if (package.Steps[index].Probability is not null) throw Invalid($"步骤 {index} 的 Probability 尚无受支持的执行语义；version=1 不接受非空概率。");
+        foreach (var parameter in package.Parameters)
+        {
+            if (parameter.Value is { ValueKind: JsonValueKind.Undefined }) throw Invalid($"参数 {parameter.Key} 的 Value 为 undefined，不能用于 version=1。");
+            if (parameter.DefaultValue is { ValueKind: JsonValueKind.Undefined }) throw Invalid($"参数 {parameter.Key} 的 DefaultValue 为 undefined，不能用于 version=1。");
+        }
+        var keys = package.Parameters.Select(parameter => parameter.Key).ToHashSet(StringComparer.Ordinal);
+        var fields = new HashSet<(int, string)>();
+        for (var index = 0; index < contract.Bindings.Count; index++)
+        {
+            var binding = contract.Bindings[index];
+            if (binding is null) throw Invalid($"绑定 {index} 不能为 null。");
+            if (binding.StepIndex < 0 || binding.StepIndex >= package.Steps.Count)
+                throw Invalid($"绑定 {index} 的 stepIndex={binding.StepIndex} 越界，步骤数量为 {package.Steps.Count}。");
+            if (string.IsNullOrWhiteSpace(binding.ParameterKey) || !keys.Contains(binding.ParameterKey))
+                throw Invalid($"绑定 {index} 的 parameterKey='{binding.ParameterKey}' 为空或未声明（区分大小写）。");
+            if (binding.Field is not ("value" or "durationMs")) throw Invalid($"绑定 {index} 的 field='{binding.Field}' 无效，仅支持 value 或 durationMs。");
+            if (!fields.Add((binding.StepIndex, binding.Field))) throw Invalid($"步骤 {binding.StepIndex} 的字段 {binding.Field} 重复绑定。");
+            var action = package.Steps[binding.StepIndex].Action.Trim().ToLowerInvariant();
+            if (binding.Field == "value" && action is not ("launch" or "launchapp" or "click" or "swipe") ||
+                binding.Field == "durationMs" && action is not ("wait" or "sleep"))
+                throw Invalid($"步骤 {binding.StepIndex} 的动作 {action} 不使用字段 {binding.Field}，不能绑定参数 {binding.ParameterKey}。");
+        }
+    }
+
+    internal static ScriptPackage CloneForExecution(ScriptPackage package)
+    {
+        var options = OptionsFor(package);
+        return JsonSerializer.Deserialize<ScriptPackage>(JsonSerializer.SerializeToUtf8Bytes(package, options), options)
+            ?? throw Invalid("脚本执行快照不能为空。");
+    }
+
+    private static JsonSerializerOptions OptionsFor(ScriptPackage package) => package.ExecutionContract is { Version: 1 } ? ExecutionOptions : JsonDefaults.Options;
+
+    private static JsonSerializerOptions CreateExecutionOptions()
+    {
+        var options = new JsonSerializerOptions(JsonDefaults.Options);
+        options.Converters.Add(new ExplicitNullElementConverter());
+        return options;
+    }
+
+    private sealed class ExplicitNullElementConverter : JsonConverter<JsonElement?>
+    {
+        public override bool HandleNull => true;
+        public override JsonElement? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            using var document = JsonDocument.ParseValue(ref reader);
+            return document.RootElement.Clone();
+        }
+        public override void Write(Utf8JsonWriter writer, JsonElement? value, JsonSerializerOptions options)
+        {
+            if (value is null) writer.WriteNullValue();
+            else value.Value.WriteTo(writer);
+        }
     }
 
     public static int[] ParseIntegers(string? value, int count, int stepIndex = -1)
@@ -178,7 +258,7 @@ public static class ScriptPackageService
             throw Invalid($"Invalid Android package name: '{value}'.");
     }
 
-    private static void ValidateValue(ScriptParameter parameter, JsonElement? value, string field)
+    internal static void ValidateValue(ScriptParameter parameter, JsonElement? value, string field)
     {
         if (value is not { } element || element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return;
         var type = parameter.Type?.Trim().ToLowerInvariant();
@@ -220,7 +300,14 @@ public static class ScriptPackageService
             if (bytes.Length + read > MaximumJsonBytes) throw Invalid($"ZIP JSON entry exceeds its read limit: {name}.");
             bytes.Write(buffer, 0, read);
         }
-        try { return JsonSerializer.Deserialize<T>(bytes.ToArray(), JsonDefaults.Options) ?? throw Invalid($"ZIP JSON is null: {name}."); }
+        try
+        {
+            var payload = bytes.ToArray();
+            var value = JsonSerializer.Deserialize<T>(payload, JsonDefaults.Options) ?? throw Invalid($"ZIP JSON is null: {name}.");
+            if (value is ScriptPackage { ExecutionContract.Version: 1 })
+                value = JsonSerializer.Deserialize<T>(payload, ExecutionOptions) ?? throw Invalid($"ZIP JSON is null: {name}.");
+            return value;
+        }
         catch (JsonException error) { throw Invalid($"Invalid JSON in {name}: {error.Message}"); }
     }
 

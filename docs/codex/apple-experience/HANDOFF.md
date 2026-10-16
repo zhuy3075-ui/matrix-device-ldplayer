@@ -2,7 +2,18 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 当前执行：AP040摘要通过，待限域交付
+## 当前执行：A14a1参数绑定有限域通过，准备单功能交付
+
+- AP040已实际提交推送`f2d171744c9296e7cbb4314f63649a0b4374408a`，远端feature同值、test仍49e4710；ignored回执`artifacts/application-feedback-main/push-complete.json`记录15路径及核包。下方“待交付”为历史，不重做。
+- 上一goal轮有实际摘要修复/验证/推送和只读17步证据，分类为progress。当前f2d独立`script-parameter-bindings-fix`的Core red-r01已实际编译成功/0警告错，原169名序PASS、新24一绿23红（含新API缺失单列），child77276 exit1/76.987秒；[A14a1规格](A14_SCRIPT_PARAMETER_BINDINGS.md)存原始结果。
+- 唯一旧diagnostic原14PASS但AP042应用owner3缺/残留111，child65260 exit1/1.187秒；AP040/新VM/几何NOTRUN，不当VM红、不重跑、不弱化旧链。两个独审准建立独立严格VM-only入口；App旧链恢复HEAD，新入口在任何目录/runtime前拒无Demo/混mode/截图并实际验证三门，禁真实配置/窗口/guest/API。
+- 新入口red-r02只编译44564 exit0/15.335秒；VM59176 exit1/565ms，真实四例2PRODUCT红2PASS，0window/4cleanup/公共与forward任务终态/原流完整无timeout。summary C8566FA4...39C2A、execution9DE2F1DF...55BE，作者tree ignored artifacts/ap046/red-r02-vm含终态后原八源/四DLL+PDB；原r01永久保留。四fixture/core24/App入口在红绿间冻结不改。
+- 作者/独立/主仓实际193+VM4均过；独立Build43700 exit0/74.776秒及PDB36/156输入/旧24/三拒绝已核。root八源raw精确集成后Build77400 exit0/73.440秒、193/51.24秒；VM45824 exit0/506ms，4PASS、42公共任务/4cleanup/0Window。root execution55EF318F...A888、VMsummaryFA77BE53...19AE1、DLL44B29048...AAB6；完整摘要见规格，原raw在artifacts/script-bindings-main。27原守卫不变，App为已批准改变，不称28全原样。全部必需exec结束/锁root。
+- 下一门只冻结本阶段8源码、2样例JSON及7正式文档，核完整包/三生成清单与精确20路径index，独审后推原私有feature；尚未实际Git前不预写成功，不合并发布。README/问题表/矩阵已明确AP042最新PRODUCT-FAIL，不拿新无窗业务替代。两用户PNG/配置/APK/二进制和本轮raw排除，历史AP021材料保持。
+- V1局部JSON选项保留missing/null，whole-field绑定只用于消费该字段的动作；页面完整编译早于metadata和准备状态。编译后普通执行快照不二次重绑，仍同Scheduler。后续job/task与expectedTransport队列pin、MCP/采集及原全部实机/GUI/30分钟均保持，不称完整RPA闭环。
+- 当前不再次安装CMFA、授权权限或开启VPN；官方GUI输入分支在AP045几何错误后停止，未获支持诊断/外部变化不重试，不用替代输入绕过。仍可继续安全代码与自有Demo验证，goal active。
+
+## 历史：AP040摘要通过，待限域交付
 
 - AP044已真实交付9117fd29fb0f6f9522112c645bd70da0e9b942a9，feature远端同值、test49e4710不变。回执artifacts/script-format-main/push-complete.json SHA05EA9C66F1EDD9D3A3F62D9FD9DE4F17423C3D2EE7491BE849CFF1B6913F5D7D，13路径/328源/331ZIP/165段已独审；不要按历史重做它。
 - AP040只改ApplicationsView摘要条件段，App在原14/AP042后加同步纯夹具hook、原Geometry仍后置；新6case直接调用实际formatter，不导航/后端/输入或造异步任务。作者红4PRODUCT/2PASS及全部输入/所记context保持；原169/14/AP042过，红Geometry NOTRUN。绿/独立/主仓均6PASS/原3E/23旧Smoke保持，详见[摘要规格](AP040_APPLICATION_FEEDBACK.md)。

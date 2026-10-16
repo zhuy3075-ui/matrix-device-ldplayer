@@ -31,6 +31,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- A07_TOOLTIP_DIAGNOSTICS.md
 |   |   |   |-- A08_SCRIPT_FORMAT.md
 |   |   |   |-- A13_SQLITE_PATH.md
+|   |   |   |-- A14_SCRIPT_PARAMETER_BINDINGS.md
 |   |   |   |-- AP008_DEPENDENCIES.md
 |   |   |   |-- AP033_INPUT_DIAGNOSTICS.md
 |   |   |   |-- AP040_APPLICATION_FEEDBACK.md
@@ -197,7 +198,10 @@ MatrixDevice.Reconstructed/
 |   |-- basic/
 |   |   |-- manifest.json
 |   |   +-- script.json
-|   +-- basic-example.jxscript
+|   |-- basic-example.jxscript
+|   +-- parameterized/
+|       |-- manifest.json
+|       +-- script.json
 |-- global.json
 |-- MatrixDevice.slnx
 |-- NuGet.Config
@@ -300,6 +304,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- ResponsiveScreenshotSmoke.cs
 |   |   |   |-- ResponsiveShellSmoke.cs
 |   |   |   |-- ScreenshotView.cs
+|   |   |   |-- ScriptParameterEditingSmoke.cs
 |   |   |   |-- ScriptsView.cs
 |   |   |   |-- SettingsView.cs
 |   |   |   |-- ShellSimplificationSmoke.cs
@@ -334,6 +339,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- MatrixDevice.Features.csproj
 |   |   |-- packages.lock.json
 |   |   +-- Scripts/
+|   |       |-- ScriptExecutionCompiler.cs
 |   |       |-- ScriptPackageService.cs
 |   |       +-- ScriptScheduler.cs
 |   +-- MatrixDevice.Host/
@@ -369,7 +375,8 @@ MatrixDevice.Reconstructed/
 |       |-- MultiInstanceAcceptance.cs
 |       |-- packages.lock.json
 |       |-- Program.cs
-|       +-- ScreenVideoTests.cs
+|       |-- ScreenVideoTests.cs
+|       +-- ScriptParameterTests.cs
 +-- tools/
     |-- Build.ps1
     |-- csc-managed.cmd

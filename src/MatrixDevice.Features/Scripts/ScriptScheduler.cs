@@ -27,10 +27,12 @@ public sealed class ScriptScheduler(IDeviceBackend backend) : IAsyncDisposable
     public event Action<string, ScriptLogEntry>? EntryAdded;
 
     public Task RunAsync(string serial, ScriptPackage package, CancellationToken ct = default)
+        => RunAsync(serial, package, ct, null);
+
+    public Task RunAsync(string serial, ScriptPackage package, CancellationToken ct, IReadOnlyDictionary<string, JsonElement>? parameterOverrides)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(serial);
-        ScriptPackageService.Validate(package);
-        var snapshot = JsonSerializer.Deserialize<ScriptPackage>(JsonSerializer.Serialize(package, JsonDefaults.Options), JsonDefaults.Options)!;
+        var snapshot = ScriptExecutionCompiler.Compile(package, parameterOverrides);
         Task task;
         ScriptRunStatus? started = null;
         Run? launched = null;
