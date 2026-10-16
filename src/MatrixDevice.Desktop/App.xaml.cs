@@ -14,6 +14,13 @@ public partial class App : Application
         base.OnStartup(e);
         try
         {
+            if (e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
+            {
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                await MatrixDevice.Desktop.MainWindow.RunLiveDualSyncAcceptanceAsync(e.Args);
+                Shutdown(0);
+                return;
+            }
             if (e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase))
             {
                 ValidateLayoutArguments(e.Args, "--verify-script-workspace", "自动化工作区");
@@ -175,7 +182,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase))
+            if (e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(ex);
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;

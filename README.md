@@ -14,6 +14,8 @@
 
 已删除重复的实例快捷表单：应用安装、卸载、启停统一到“应用”，文字发送使用“文本”。已连接行的“控制”打开列表旁主控面板，保留主页、返回、任务、音量和投屏，关闭面板归还列表宽度。“同步点击滑动”只复制主控嵌入画面的手势；“同步按键”只复制程序内主页/返回/任务/音量键，二者目标都是列表明确勾选的其他设备，不监听雷电原生窗口，也不等于物理键盘镜像或文字广播。含未连接目标时拒绝同步。各独立页面选择不暗中互相授权。历史入口去重见[上轮报告](docs/codex/device-action-dedup/REPORT.md)。模拟器数量不等同于可控设备数量；官方能力、限制和删除建议见[统一管理调研](docs/testing/unified-devices/OFFICIAL-RESEARCH.md)，窗口行为变更见[一键启动报告](docs/testing/one-click-start/REPORT.md)。
 
+[真实双实例补验](docs/codex/apple-experience/A13_DUAL_INSTANCE_SYNC.md)已取得专用实例1/2的14项VM-SDK实际效果有限通过：主控A/当前B、两同步开关四种组合的点击/滑动/主页，以及取消勾选后的隔离反例，均由节点和PNG复核。原业务路径未改，不用分别发送两次命令冒充同步。外层脚本误读成功报告省略的null字段，原outer1保留；离线2正例/6拒例报告合同复验通过，不称原外层整轮通过。正式入口`--verify-live-dual-sync`只接受已核定的两台专用实例、固定雷电身份与新鲜manifest，不是任意设备测试入口；默认构建不会触发真实设备。主仓原209项、十一严格早拒、旧VM9与十二自有WPF案例及清理获独审通过，构建3警告/0错误。完整物理GUI、文字输入、当前应用页安装卸载和最终双实例30分钟仍待，不由这14项代替。
+
 完整文件清单见 `PROJECT_TREE.md`；全部源码文本见 `SOURCE_BUNDLE.md`；对应文件摘要见 `SOURCE_MANIFEST.json`。这三个文件由 `tools/New-SourcePackage.ps1` 生成，源码 ZIP 位于 `artifacts/`。
 
 全面验收与界面重设计正在按[当前计划](plan.md)实施；目标、技术边界、视觉/命名及依赖任务分别见[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[UI规格](docs/UI_SPEC.md)、[任务表](docs/TASKS.md)。当前测试范围见[功能矩阵](docs/codex/apple-experience/TEST_MATRIX.md)、[逐控件目录](docs/codex/apple-experience/CONTROL_CATALOG.md)和[问题清单](docs/codex/apple-experience/DEFECTS.md)，进展见[阶段记录](docs/PROGRESS.md)。已修复主控A/当前B时投屏错目标的代码路径，增加主控身份与进程所有权守卫，见[A02独立离线验收](docs/codex/apple-experience/A02_MAIN_TARGET.md)；真实外部投屏仍待验。这是进行中的工作，149项和三尺寸Demo不代表本轮全功能/实机/窄屏已通过。

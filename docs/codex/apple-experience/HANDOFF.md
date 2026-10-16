@@ -2,6 +2,17 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
+## 当前执行：A13b真实双实例同步补验
+
+- 本阶段已获独立有限验收：专用1/2真实VM-SDK四态点击/滑动/主页及未勾选反例共14项通过。原业务输入路径未改，正式新增App早入口及LiveDualSyncAcceptance.cs；主仓两源与实机冻结源字节一致，App B3F81ECA...860F92、fixture6223A491...DB4F3E。完整规格、全部历史失败/取舍及原件位置见[A13报告](A13_DUAL_INSTANCE_SYNC.md)。
+- 真正实机证据在独立树real-dual-sync/artifacts/live-dual-sync/ready-r02：live25120 exit0/190.016秒，129步骤/64帧/14实际语义效果、505完整目录/2030epoch/三native与双tid、23实例业务字段保持、508条list2/launch0获独审；八次单目标header准备不计同步，正式swipe以重取baseline证明。134owned/pending0/唯一Dispose/after Matrix0，未停止任何模拟器。
+- 原外层outer1/livePassed=false必须保留：StrictMode读取成功JSON省略的null error导致AP052，executionF368FD49...3E8980、summary16E93F20...52334。另立只读report-audit-r01实际2正例/6拒例及158原件核对获独审，audit4D9C9B70...BA232；没有改原回执或重复设备操作。原r03/r04的FAIL/NOT-RUN也不翻绿。
+- 主仓唯一offline-r01/session84458已terminal outer0：Build36156 exit0/73.956秒，原209 exact/51.28秒，实际3警告/0错；11个fake server1/1早拒、旧VM9及十二own-WPF全过。14child28raw终态排空、无timeout/kill/清理错，实际两源PDB/164输入/原162raw/27旧Smoke/用户3及candidate/main各46保持，独立终态审通过。原27仅源码保真，不是执行27模式；WPF12只是自动化页代表，不是12页面。
+- 主仓原件artifacts/live-dual-sync-main/offline-r01：executionE8424CDEB331D15262F75DD3DE1041FE444DD3BDDD00C6F16FEA2605442E68B7、after7C58CBC5FA5B30ECCBAFDA96990A67C88254486FF2D0EDE440271C58843D0772、workspace2CAC7F49...215B5。当前DLL489DE35D...427D0/PDB8CEBAB65...954DE。所有必需exec均终态，不能重跑旧基线凑数。
+- 本阶段源码、实际证据与文档已完成有限验收；交付门为既有工具生成清单与ZIP、精确stage11及api_idle_verify只读独立核包、原授权私有feature单项commit/push，是否已交付必须读取实际Git及最新本机回执，不从意图推断。两用户PNG及data配置不动，不进包；core.autocrlf=true，index按clean-normalized核，不冒称CRLF原字节相等。无merge/release/PR。
+- 完整目标仍active：本阶段不是物理GUI、文字输入、应用GUI安装卸载或最终双实例30分钟通过；AP042/AP045、其它页面/DPI、RPA全闭环、MCP实际接入和抓包继续必需。官方Sky恢复后capture超时分支仍停止外部Windows输入，不用Win32/UIA/SendInput绕过。
+- MCP设计A4349C98...7CEC3只在独立mcp-interface-design树获有限设计审，未集成/SDK/MCP运行，不混本阶段。下一功能优先当前应用GUI生命周期/完整GUI可靠性；最终30分钟须等最终版本冻结。完整计划和剩余分组继续由TASKS跟踪。
+
 ## 当前执行：A08b自动化工作区
 
 - A14a2已真实提交并推送77366305c34c8c7246c2d10f637ef9498b73b366；下方该任务“待推送”为历史，不重做。当前A08四源已精确主仓集成并最终代表通过；两用户PNG及配置原样，不进入提交。下一门仅文档/核包/精确index审核与单功能push，以实际Git为准。

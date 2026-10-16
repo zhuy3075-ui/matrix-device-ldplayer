@@ -72,6 +72,9 @@
 |---|---|---|---|
 | AP-048 | P1/自有WPF/Demo独立及主仓有限域通过 | 原七例六尺寸有裁剪/44命中/长字段阅读红，390×640长摘要及目标、真实100高错误栏使正文被挤出；记录列另有State MultiBinding测试强转与disabled enabledHit误oracle，已分别归类不当产品 | [A08b](A08_SCRIPT_WORKSPACE.md)复用原四视图及全部5/8列，有限摘要与结果全文阅读；原取消按钮迁到记录标题释放一行。独立/主仓各原209、VM9及十二组实际控件全过；390参数/记录98、日志88、结果118。原生picker/物理输入/实机/DPI及完整GUI仍未验，不扩大为全页验收 |
 | AP-049 | P2/同任务日志选中项丢失已有限域复验 | 实际Scheduler在第二TCS门38→39日志，同JobId，原ListBox选中12→-1、Reset1/Add39；滚动offset8及锚点y1保持，不扩大成全部滚动损坏 | [A08b](A08_SCRIPT_WORKSPACE.md)同源entry引用尾窗增量、切来源重载，保留500/重复文案。独立/主仓十二例含原实证与真实575步500尾窗隔离全过，选中12→12/Reset0，首日志77→78、选B不混A；不以此关闭其它GUI/真实设备验收 |
+| AP-050 | P2/夹具角色修正已获实机有限复验 | r03真实双实例首个00-tap原判Source A无效果，但独审图/节点确认A已进搜索页，exact search_src_text为AutoCompleteTextView且聚焦，B节点/PNG保持；夹具只认精确EditText类 | [A13实机原件](A13_DUAL_INSTANCE_SYNC.md)保留live-r02 FAIL/13NOTRUN。r04精确角色+Focused及两Ready模式获独审；r05四态及未勾选tap真实语义均获独审，修正的是测试oracle，不是产品点击缺陷。原outer1属AP052，不扩大到GUI/文字或30分钟 |
+| AP-051 | P2/滑动准备前置已获实机有限复验 | r04真实Ready首轮00-swipe发前原四锚点门未过：横屏Settings大header占至409，inner仅311高，3title含裁剪第三；正式swipe未发送，不能归为产品手势失败 | [A13实机记录](A13_DUAL_INSTANCE_SYNC.md)保留ready-r01 FAIL/12NOTRUN。r05实际八次单目标header准备，各例每台至多一次，重取baseline后原四锚点/映射/效果判据保持；独审四态正式swipe真实变化，未把setup折叠算同步，不改显示/阈值或循环取绿。原outer1另列AP052，完整GUI仍未验 |
+| AP-052 | P2/成功报告字段消费已获独立离线复验 | ready-r02五child均0、夹具16completed含14真实效果且独审通过；外层StrictMode读取不存在的summary.error报PropertyNotFoundException。JsonDefaults省略null是既有合同，非产品动作失败 | [A13记录](A13_DUAL_INSTANCE_SYNC.md)保留原outer1/livePassed=false。另立只读合同审计实际2正例/6严格拒例及158原件长度/SHA保持，audit4D9C9B70...BA232获独审；仅允许省略/null，真实错误/错误类型/缺必要字段仍拒，不改原件或重跑设备，不认证GUI |
 
 ## 修复记录规则
 

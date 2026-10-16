@@ -1,5 +1,30 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / A13b四态真实效果与成功报告门禁
+
+- Main：唯一session84458已terminal outer0，Build36156/73.956秒，原209 exact/51.28秒、3warnings0err（两fixture编译+既有测试警告），十一fake早拒、旧VM9/505ms和十二own-WPF/25.956秒均过。14child28raw排空，无timeout/kill/清理错，源/PDB/产物与用户文件守卫同，实际终态独审有限通过；31managed PNG及六尺寸presentation有效，非物理GUI。executionE8424CDE...42E68B7、after7C58CBC5...D0772、workspace2CAC7F49...215B5。Report只读audit4D9C9B70...BA232另获独审，2正例/6拒例及158原件保持，原outer1不翻绿；核包与私有feature单项交付以实际Git回执为准，不合并发布。
+- Latest：独立原件审已有限通过本次14项真实VM-SDK效果，64帧与129step/四态及未勾选路由、准备后baseline、505目录/2030epoch/三native、23业务字段和单owner清理均核实。原outer1/livePassed=false仍保留，另列AP052仅离线复验成功JSON合同，不重跑设备。两源现已字节精确集成主仓B3/6223，尚未主仓Build/推送；下文“独审进行中/未集成”为本阶段历史。
+- Verification：r05夹具6223A491...DB4F3E/AppB3经静审，唯一offline-r03原209/51.34秒及十一早拒均过，12child24raw终态排空，实际增量2条fixture警告/0错误；源码/PDB及主仓保护获独审。execution FD2CBBD6...231799，after03835E84...5AEDF。
+- Actual：Ready.r02包装器FEB71510...37C22唯一session8665已终态outer1；5child均exit0/10raw排空，live25120实际190.016秒。夹具报告PASS-LIVE-VM-SDK-NOT-GUI，四组合点击/滑动/主页及未勾选点击/主页共14效果、bootstrap/runtime均completed，NOT-RUN空；仅1/2、零launch/无模拟器stop，134owned/pending0且runtime唯一Dispose完成。
+- Failure：外层actual-live-report在StrictMode下读取成功JSON省略的null error字段而报PropertyNotFoundException；原outer1/livePassed=false保留，不直接改写回执或重发设备。execution F368FD496AEFC94D67CE86A2E0C13A213297A9E66626B57E797DEFC67D3E8980，summary16E93F20FD5A65EB871585159E34AEC0B4D1D919A3D0FA00156FA9A89F152334。独立终态复核进行中，须从实际PNG/节点核14效果，尤其将header准备后的baseline与正式swipe分开，不能只信summary。
+- Next/Risks：源仍仅隔离树，未主仓集成或提交；全部必需exec已终态。用户问剩余工作，按约14个验收块说明，不把部分离线完成或本次功能层效果当完整GUI/文字同步/应用GUI安装卸载/最终双实例30分钟完成；完整目标继续active。
+
+## 2026-10-16 / A13b真实双实例首轮与AP-050
+
+- Latest：r04FA834C/AppB3静审后唯一offline-r02原209/51.26秒、11早拒全过，12child24raw终态，实际增量2warnings/0err，原件独审通过（execution3D66769B...AB3C51/afterF8157C1F...165E9）。唯一Ready实测session72824终态outer1，00-tap正式通过，00-swipe发前因横屏大标题/三锚点不足而停，原FAIL/12NOTRUN保留；不是产品swipe失败。五child10raw全排空、零launch/同epoch双tid/23行与源产物保护/唯一Dispose获独审。execution31B25BF0...3ACF0F/summary8CC69B53...6B838；r05仅一次安全outer-header准备，原四锚点/正式effects不降，待新静审/离线/实机，不覆盖已知缺口。
+- Progress：上轮离线209/八早拒实际完成并独审，属于progress。本轮已实际启动专用2一次并完成双目标TCP/VBox准入及runtime，原0不动；真实运行而非未执行计划。完整[A13证据与取舍](codex/apple-experience/A13_DUAL_INSTANCE_SYNC.md)。
+- First failure：driver r01启动早期MainModule为null，未到fixture；原false终态/流未知不改，后观察两owned PID missing。只修采集顺序与原Process/SafeHandle所有权后，新driver r02唯一执行，session51935终态outer1；五child/十raw完整排空、无timeout/kill，host/CLI后审全过。
+- Actual result：r03冷启2/双准入过，00-tap后A实际进入搜索页，B节点与PNG均保持；夹具精确EditText类判据错拒AutoCompleteTextView，原FAIL/13NOTRUN仍保留，登记AP-050不称产品点击无效。独审已核15步骤hash、同5037 epoch、23目录仅2启动变化、源及三保护保持、runtime唯一Dispose/pending0及宿主0。execution2BCA5491...1AE9B、summary5A109475...2492A。
+- Next/Risks：r04仅搜索角色和两台Ready严格续验，禁止关闭/重复launch2，原冷启/映射/四态/清理保持；新冻结审/离线及真实效果另验。当前exec已终态，未主仓集成/提交；应用GUI/全GUI/最终双实例30分钟及A14-A16仍必需，不以本轮局部事实关闭原失败。
+
+## 2026-10-16 / A13b真实双实例前置
+
+- Goal/Decision：A08b已实际推6cb127d；转真实同步补验，保持Main1/Current2及四开关组合客观效果，不用直接分别发命令替代同步。规格、范围与原件见[A13双实例同步](codex/apple-experience/A13_DUAL_INSTANCE_SYNC.md)。
+- Verification：主仓真实实例1正式只读17步通过，3子进程exit0/6raw终态，独审核原生5037 epoch、23目录/163+3及实际加载程序集保持，owned0。当前1Ready/SDK34/boot1/ARM64广告+bridge、PM普通及-u未见CMFA；2仍关闭，非同步/安装或GUI通过。execution DC9B4695...DBD36、summary C20346E5...C14CA。
+- Failures：wrapper r01命令行运行保护拒绝、r02CIM/原生出生差4tick拒绝保留，正式child未运行；root用同原生来源exact前后核等根修，未容差。Sky恢复实例1后capture仍超时，外部Windows输入继续停止。
+- Offline：两源r01/r02静态拒绝原件保留，r03对creation Task一次快照冻结清理所有权，App/Exercise保持；fixture8D5D1B46...96897B获有限静审批准。唯一session33405 outer0，Build43772/76.192秒，原209精确名称顺序/51.65秒及八严格早拒均过，九子进程18原流全终态排空、无timeout/kill/清理错、owned0。实际3警告/0错，不写零警告；164输入/27旧Smoke/两源PDB和main163+3/46编译文件守卫保持。execution02E34E9A...F34540、after13500787...D106B4，另一独立reviewer实际核原流/PDB/保护后有限通过；27旧Smoke只源码保真，不是执行证据。
+- Next/Risks：本轮只执行离线检查，未启动2、未操作host/guest/GUI；主仓生产代码未集成、未提交推送。重新采样实际manifest及原生epoch、审有界宿主包装器再实机，严禁杀启动模拟器后代树。全部必需exec已结束，原保护文件不变；GUI、应用安装卸载、最终双实例30分钟及完整目标继续开放，不发布未验源码。
+
 ## 2026-10-16 / A08b自动化工作区与日志阅读
 
 - Goal/Decision：复用原参数/记录/日志和原运行/取消命令，四视图分配有限正文；保留5/8列、长文全文与44逻辑命中区。原同源日志整表Reset使选中项12→-1，改引用尾窗增量；原滚动锚点未丢失，不扩大故障。
