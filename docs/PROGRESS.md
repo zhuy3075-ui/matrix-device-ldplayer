@@ -1,5 +1,29 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / 应用正文有限域验收与独立入口缺口
+
+- Goal/Context：解AP037/038/039并保留所有旧失败；不继续猜测修改生产，不把编译或源文件数量当运行覆盖。AppView局部响应式及共享字符串Tooltip Wrap保留，业务tail/API/350ms/身份门禁不变。
+- Decision/Files：d01证实七点Ideal/Display差异，d02证实历史633与当前505域不同且1当前字号前提未满足；只修测试测量mode、首次本地字形注入与当前完整域判据。冻结四源App2C9853/Theme567766/MainA752/fixture7248精确导入主仓。
+- Verification：独立c02及主仓r01各158/0警告错误、新12/2890/12清理/111后端Task终态，原17源Smoke调用链及12页过。root Build15420 exit0/71.867秒（实际19.92秒+158的51.12秒），Smoke41364 exit0/164.976秒；当前505字体成员含344隐藏全1.5，diag均无错/不变，133图核，root直接实读原JSON及目视390图，非真实DPI/字体绑定验收。
+- Evidence：root报告5F864A7E...AF3B7F、独审3EA80FE0...3EE1BE、末快照D2451427...6793FA，DLL4058AD1A...AB1757；5次148/144原raw/20旧源/API/Main/PDB24与配置E4E33保持，所有流与进程终态/owned0。stderr15945B及外层nodes/colors0保留，不宣称零诊断或全功能通过。
+- Next/Risks：20是冻结Smoke源数，另三独立入口由s01补验；6壳层格各135过，但首设备offline指针前置和报告序列化双失败，后11格NOT-RUN，AP041独立跟踪，不能归咎环境或与AP019/020/033合并。独审只批准原私有开发分支有限域交付，核包/暂存/提交以实际记录为准，不合并发布。下一步安全诊断Source/几何/非有限值和原失败报告，AP040反馈文案、实机双实例/安装卸载/最终30分钟及A08-A16继续，goal active。
+
+## 2026-10-16 / A07d提示字形测量诊断及限域修正
+
+- Goal/Context：上一turn的A07c三轮有实证进展，继续保持完整目标；先解AP-038而非对产品做第四次猜测修补。新app-tooltip-verifier保留原树及f03所有证据，原147基线、20旧源与原158名序冻结。
+- Decision/Files：只增只读诊断，d01保留原断言；143诊断/0error、全程状态保持，7个版本图完整可见，实际Display高17/原Ideal高30.48。两独审和root判A仅七点成立。随后只在隔离fix树改ReadTooltip测量为实际mode的9参构造及两条诊断描述，Culture/宽/font/DPI/原高度predicate/+1保持，生产未再改。
+- Verification：d01原12=5PASS7红/旧20NOT-RUN不回填。corrected-c01 Build83584 exit0/64.301秒、158/51.46秒/0警告错误；Smoke4872 exit1/23.187秒，新12=11PASS、12清理、2887检查/111后端List Task终态。常规六尺寸与三表首中末全数据列阅读过，232诊断/error0/状态保持、133图核；唯一glyph最终Fonts合取红未归因，其后/旧20/12页NOT-RUN。
+- Evidence：d01报告6447387D...1C5B3/独审006892AE...061B67；c01报告90A45356...0EDBE/独审6DA67566...405E9/末快照DB6B5887...D602B，148+其余144/20旧/PDB24/主配置与原流/进程保持，原件均冻结。详见[A07_TOOLTIP_DIAGNOSTICS](codex/apple-experience/A07_TOOLTIP_DIAGNOSTICS.md)。
+- Next/Risks：AP-039只读观测Count/不匹配Key/当前Page归属/字体值来源和倍率，先判断再改；不从36个18号文本样本认全部150%，不先过滤Fonts或施加字体取绿。当前独审仍拒绝交付，主仓仍1de5136、未导入/Build/核包/暂存/push候选。真实GUI、双实例同步/安装卸载、最终30分钟和A08-A16仍全部必交付，goal active，无待用户问题。
+
+## 2026-10-16 / A07c应用正文候选三轮验收未过
+
+- Goal/Context：承接已推1de5136，仅隔离验证应用正文六尺寸、原表阅读/选择与批次反馈；保留20旧Smoke、API/350ms和全部业务门禁。原b01为11例10记录红/1绿，截图证实390宽裁剪，不能把未知Tooltip组合断言都归因产品。
+- Files/Decision：fix树ApplicationsView重排同三表、44命中/焦点/长值，第三轮仅增共享ToolTip字符串数据模板以修实证NoWrap裁剪；tests树新ResponsiveApplicationsSmoke及Main唯一首hook。r3纠正无Content选择列的隐藏glyph误读，原hit/绑定及实际字段断言保留。未导入主仓生产。
+- Verification：f01启动MultiBinding强转异常已保留，单行改原BindingBase后f02有4PASS/8报红；f03原158/0警告错误，新12例5PASS7报红、2033检查/111后端List Task终态/12清理。六尺寸geometry/targets/tasks通过，真实取消、失败恢复、状态/焦点及84/96表头选择通过；应用版本Tip高度测量仍红，其后/完整150%/旧20和全12页NOT-RUN。
+- Evidence：f03报告1EE72CC5...A806、独审C54D18C6...9B8C、末快照08839E65...2F1D；148输入/其余144/20旧/API/Main全文/PDB24/配置E4E33保持，进程和四流终态。源码/PDB/DLL及三轮失败保留，细节见[A07_APPLICATION_RESPONSIVE](codex/apple-experience/A07_APPLICATION_RESPONSIVE.md)。
+- Next/Risks：独审拒绝，不做本阶段第四轮；不替换主程序/不核包/不提交push未验候选。主仓HEAD仍1de5136。下一独立诊断保留原断言，记录实际排版mode/测量/clip及自有Tooltip图像，先区分测量差异与真实裁剪。真实GUI、双实例同步/安装卸载、最终30分钟和A08-A16不取消，完整goal active，无待用户问题。
+
 ## 2026-10-16 / A07b2接口排空后恢复应用读取
 
 - Goal/Context：承接ebda58d及A07b1保留的API释放缺口；原Tick保留pending但API计数归零无通知。先在三个隔离树定点静审/冻结，原生产真实loopback HTTP与原350ms勾选路径取红，不触真实设备或共享ADB。

@@ -45,6 +45,11 @@
 | AP-034 | P1/脚本、传输与API排空恢复已独立及主仓离线修复 | 原12例7红证明脚本/稳定Push丢pending；另有API最后请求归零无通知，A07b2原12例8红，真实HTTP排空后仍无List | [A07b1](A07_APPLICATION_PENDING.md)历史12/310保持；[A07b2](A07_API_DRAIN.md)仅Host通知与页面补排原350ms，独立/主仓各14/496/14清理及158/旧套/12页通过，147输入/19旧源/PDB核同。保留全部门禁与失败不循环，日志双故障未测；正文、真实runtime热换、Android/物理GUI及双实例仍开放，不称所有刷新已完成 |
 | AP-035 | P1/已独立及主仓离线修复 | 原db252/journal260初始化SQLite14已复现；新正式原代码152/158有6真红。原生路径未扩展；首修复验证还遭旧产物，PDB核原源后保留该失败 | [A13报告](A13_SQLITE_PATH.md)：唯一产品主库/备份Windows扩展路径，原位置/事务不变。有效独立158/51.43秒、主仓158/51.76秒且PDB三源一致，主仓四普通长路径CLI通过；迁移/拒绝/文件释放覆盖。完整GUI/AP-033、UNC、非Windows及真实双实例不由本项关闭 |
 | AP-036 | P1/实机验收前置阻断，非产品缺陷定论 | 新装CMFA已取得精确包进程，但Android权限请求页占前台，主页效果断言真实FAIL | [CMFA首验](A07_CMFA_APPLICATIONS.md)保留l01 FAIL及原ledger；后续[独立c01](A07_OWNED_CLEANUP.md)停止/卸载成功不解决或关闭主页前置。当前测试安装已移除，未授权限/VPN，未重跑启动；恢复可靠GUI观察后另测，不把权限页当主页 |
+| AP-037 | P1/应用布局有限域修复验过，关联补验保持 | 原应用固定双栏在390宽挤出操作，命中不足44；长字段/Tooltip阅读不完整 | [A07c](A07_APPLICATION_RESPONSIVE.md)/[A07d](A07_TOOLTIP_DIAGNOSTICS.md)原红保留；c02及主仓r01各158、新12/2890/12清理，六应用尺寸三表首中末/全列、取消/恢复/选择/焦点过，原17源Smoke链/12页过。限域独审批准开发分支交付，s01/AP041及真实双实例/GUI仍开放；不把共享Theme间接风险或全GUI缺口关闭 |
+| AP-038 | P1/七点模式误判已实证，最小测试修正验过 | 旧测量用Ideal、实际版本Tooltip为Display，143宽下30.48与17高度不一致 | [A07d](A07_TOOLTIP_DIAGNOSTICS.md)d01原5PASS7红保持，7图完整尾-long支持判据A。只改测量用实际mode，宽/font/DPI/高度predicate/+1不变；独立及主仓新12全过、各232诊断/error0/133图核。仅解释这七点，不扩大到全部Tooltip/DPI，旧失败不回填 |
+| AP-039 | P1/字形试验范围及输入已修正，主仓有限域验过 | c01在原Fonts.Count>20与全部历史Key当前字号=baseline×1.5合取处失败 | [A07d](A07_TOOLTIP_DIAGNOSTICS.md)原117失配保留；7248夹具首次setter本地覆盖+当前完整域判据后，c02与root-r01各12/2890/12清理过，当前505含344隐藏全登记/1.5/0缺失失配、历史128保留，末transform/SameCalls/glyph图过。非DPI/字体绑定保真，不推重置时点；s01/AP041与真实GUI仍开放 |
+| AP-040 | P2/已观察，待独立专项修正 | 读取应用后的批次摘要仍无条件包含“安装命令完成（包名未核验）0”，信息重复且易被理解成执行过安装 | c02自有glyph图及ApplicationsView原ApplicationBatchSummary证实该安装专属零计数字段总被拼接；本轮布局候选未改业务tail，不混入修复。后续按实际Operation/非零状态展示必要结果，并测试List/Install/混合失败取消，不因此否定本轮布局阅读或冒称安装发生 |
+| AP-041 | P1/设备指针前置及失败报告缺失，独立诊断待做 | s01首device390×640的offline-reject未达OS/WPF指针一致前置，随后非有限Double使原JSON报告再次失败 | [s01](A07_TOOLTIP_DIAGNOSTICS.md)6壳层格通过、设备首格FAIL、11格NOT-RUN，原stderr/图片/15输入快照保留。Report序列化问题明确；实际异常字段、无图/NaN及环境/样式影响未定因，不与AP019/020/033合并。下一阶段先无新增原生输入记录Source/像素/几何/有限性，不能跳原负例或重跑凑绿；当前UI仅候选整合，非全GUI通过 |
 
 ## 修复记录规则
 

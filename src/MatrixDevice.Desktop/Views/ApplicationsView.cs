@@ -40,13 +40,15 @@ public partial class MainWindow
     private FrameworkElement BuildAppsPage()
     {
         var page = Page(); applicationPage = page;
-        var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
-        var title = Label(LocalizationService.PageDisplayName("应用")); title.Name = "PageHeading"; title.FontSize = 20; heading.Children.Add(title);
-        applicationSummary = new TextBlock { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
+        var heading = Toolbar(); heading.Margin = new Thickness(0, 0, 0, 6);
+        var title = Label(LocalizationService.PageDisplayName("应用")); title.Name = "PageHeading"; title.FontSize = 20; title.Margin = new Thickness(0, 0, 12, 0); heading.Children.Add(title);
+        applicationSummary = new TextBlock { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
         heading.Children.Add(applicationSummary); DockPanel.SetDock(heading, Dock.Top); page.Children.Add(heading);
-        var content = new Grid(); content.ColumnDefinitions.Add(new() { Width = new GridLength(228), MinWidth = 180 });
-        content.ColumnDefinitions.Add(new() { Width = new GridLength(12) }); content.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star), MinWidth = 200 }); page.Children.Add(content);
-        var targetPanel = new DockPanel(); applicationTargetPanel = targetPanel; content.Children.Add(targetPanel);
+        var content = new Grid { Name = "ApplicationWorkspace", ClipToBounds = true };
+        content.ColumnDefinitions.Add(new() { Width = new GridLength(228), MinWidth = 180 });
+        content.ColumnDefinitions.Add(new() { Width = new GridLength(12) }); content.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star), MinWidth = 200 });
+        content.RowDefinitions.Add(new()); content.RowDefinitions.Add(new() { Height = new GridLength(182) });
+        var targetPanel = new DockPanel(); applicationTargetPanel = targetPanel; Grid.SetRowSpan(targetPanel, 2); content.Children.Add(targetPanel);
         var targetTitle = Label("目标模拟器"); DockPanel.SetDock(targetTitle, Dock.Top); targetPanel.Children.Add(targetTitle);
         var targetToolbar = Toolbar();
         targetToolbar.Children.Add(Button("\uE14E", "全选可用", () => { foreach (var row in applicationTargets.Where(row => row.Available)) row.IsSelected = true; }));
@@ -56,7 +58,6 @@ public partial class MainWindow
         targetText.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis); targetText.SetBinding(FrameworkElement.ToolTipProperty, new Binding(nameof(ApplicationTargetRow.Caption)));
         targetText.SetValue(FrameworkElement.MarginProperty, new Thickness(2, 6, 2, 6));
         targets.Columns.Add(new DataGridTemplateColumn { Header = "模拟器 / 连接状态", CellTemplate = new DataTemplate { VisualTree = targetText }, IsReadOnly = true, Width = new DataGridLength(1, DataGridLengthUnitType.Star) }); targetPanel.Children.Add(targets);
-        var body = new DockPanel(); Grid.SetColumn(body, 2); content.Children.Add(body);
         var toolbar = Toolbar(); toolbar.Margin = new Thickness(0, 0, 0, 6);
         toolbar.Children.Add(ApplicationButton("\uE72C", "读取应用", ReadApplicationListsAsync, CanManageApplicationTargets));
         toolbar.Children.Add(ApplicationButton("\uE898", "安装 APK", ChooseApplicationPackagesAsync, CanManageApplicationTargets));
@@ -67,36 +68,97 @@ public partial class MainWindow
         more.ContextMenu = menu; more.Click += (_, _) => { menu.PlacementTarget = more; menu.IsOpen = true; }; toolbar.Children.Add(more);
         applicationSystemToggle = new CheckBox { Content = "系统应用", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 8, 0) };
         applicationSystemToggle.Checked += (_, _) => { applicationRowsView.Refresh(); RefreshApplicationControls(); }; applicationSystemToggle.Unchecked += (_, _) => { applicationRowsView.Refresh(); RefreshApplicationControls(); }; toolbar.Children.Add(applicationSystemToggle);
-        DockPanel.SetDock(toolbar, Dock.Top); body.Children.Add(toolbar);
-        var taskPanel = new DockPanel { Margin = new Thickness(0, 10, 0, 0), Height = 182 };
-        var taskHeading = new DockPanel { Margin = new Thickness(0, 0, 0, 5) };
+        DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
+        var panes = new Grid { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 0, 6) };
+        DockPanel.SetDock(panes, Dock.Top); page.Children.Add(panes);
+        var status = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+        var taskHeading = new DockPanel { Margin = new Thickness(0, 0, 0, 3) };
         applicationCancel = Button("\uE71A", "停止后续", () => { applicationCancellation?.Cancel(); applicationResult.Text = "停止已请求，当前项完成后不再执行后续任务；已完成项不回滚。"; });
         applicationCancel.IsEnabled = false; DockPanel.SetDock(applicationCancel, Dock.Right); taskHeading.Children.Add(applicationCancel);
         applicationProgress = new ProgressBar { Minimum = 0, Maximum = 1, Height = 5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
-        taskHeading.Children.Add(applicationProgress); DockPanel.SetDock(taskHeading, Dock.Top); taskPanel.Children.Add(taskHeading);
-        applicationResult = new TextBlock { Text = "未执行任务", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 5) }; DockPanel.SetDock(applicationResult, Dock.Top); taskPanel.Children.Add(applicationResult);
+        taskHeading.Children.Add(applicationProgress); DockPanel.SetDock(taskHeading, Dock.Top); status.Children.Add(taskHeading);
+        applicationResult = new TextBlock { Text = "未执行任务", TextWrapping = TextWrapping.Wrap };
+        status.Children.Add(new ScrollViewer { Content = applicationResult, MinHeight = 24, MaxHeight = 32, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        DockPanel.SetDock(status, Dock.Top); page.Children.Add(status);
         var tasks = ApplicationGrid(applicationTasks); TextColumn(tasks, "模拟器", nameof(ApplicationTaskRow.Serial), 120); TextColumn(tasks, "操作", nameof(ApplicationTaskRow.Operation), 72);
         TextColumn(tasks, "应用 / 文件", nameof(ApplicationTaskRow.Subject), 210); TextColumn(tasks, "状态", nameof(ApplicationTaskRow.State), 106);
         tasks.Columns.Add(new DataGridTextColumn { Header = "结果", Binding = new Binding(nameof(ApplicationTaskRow.Message)), IsReadOnly = true, Width = new DataGridLength(1, DataGridLengthUnitType.Star), MinWidth = 220 });
-        taskPanel.Children.Add(tasks); DockPanel.SetDock(taskPanel, Dock.Bottom); body.Children.Add(taskPanel);
+        tasks.Margin = new Thickness(0, 10, 0, 0); Grid.SetColumn(tasks, 2); Grid.SetRow(tasks, 1); content.Children.Add(tasks);
         applicationRowsView = CollectionViewSource.GetDefaultView(applicationRows);
         applicationRowsView.Filter = value => value is InstalledApplicationRow row && (applicationSystemToggle.IsChecked == true || !row.App.IsSystem);
         var applications = ApplicationGrid(applicationRowsView); var appSelection = ApplicationSelectionColumn(nameof(InstalledApplicationRow.IsSelected));
-        var selectVisible = new CheckBox { ToolTip = "全选或清除可见应用", HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0) };
+        var selectVisible = new CheckBox { ToolTip = "全选或清除可见应用", MinWidth = 44, MinHeight = 44, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0) };
+        LocalizationService.Bind(selectVisible, System.Windows.Automation.AutomationProperties.NameProperty, "全选或清除可见应用");
         selectVisible.Checked += (_, _) => { foreach (var row in applicationRowsView.Cast<InstalledApplicationRow>()) row.IsSelected = true; };
         selectVisible.Unchecked += (_, _) => { foreach (var row in applicationRowsView.Cast<InstalledApplicationRow>()) row.IsSelected = false; };
         appSelection.Header = selectVisible; applications.Columns.Add(appSelection);
         TextColumn(applications, "模拟器", nameof(InstalledApplicationRow.TargetName), 135); TextColumn(applications, "序列号", nameof(InstalledApplicationRow.Serial), 125);
         applications.Columns.Add(new DataGridTextColumn { Header = "包名", Binding = new Binding(nameof(InstalledApplicationRow.PackageName)), Width = new DataGridLength(1, DataGridLengthUnitType.Star), MinWidth = 190, IsReadOnly = true });
-        TextColumn(applications, "名称", nameof(InstalledApplicationRow.Name), 150); TextColumn(applications, "版本", nameof(InstalledApplicationRow.Version), 95); TextColumn(applications, "类型", nameof(InstalledApplicationRow.Kind), 70); body.Children.Add(applications);
+        TextColumn(applications, "名称", nameof(InstalledApplicationRow.Name), 150); TextColumn(applications, "版本", nameof(InstalledApplicationRow.Version), 95); TextColumn(applications, "类型", nameof(InstalledApplicationRow.Kind), 70);
+        applications.FrozenColumnCount = 1; applications.ColumnHeaderHeight = 48; Grid.SetColumn(applications, 2); content.Children.Add(applications);
         foreach (var grid in new[] { applications, tasks })
+        {
             foreach (var column in grid.Columns.Where(column => column.Width.IsAbsolute)) column.MinWidth = column.Width.Value;
+            foreach (var column in grid.Columns.OfType<DataGridTextColumn>())
+            {
+                var textStyle = new Style(typeof(TextBlock), column.ElementStyle);
+                textStyle.Setters.Add(new Setter(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis));
+                textStyle.Setters.Add(new Setter(ToolTipProperty, column.Binding));
+                column.ElementStyle = textStyle;
+            }
+        }
+        foreach (var button in toolbar.Children.OfType<Button>().Concat(targetToolbar.Children.OfType<Button>()).Append(applicationCancel)) { button.MinWidth = 44; button.MinHeight = 44; }
+        applicationSystemToggle.MinHeight = 44; applicationSystemToggle.MinWidth = 44;
+        var paneButtons = new Dictionary<string, ToggleButton>(); var selectedPane = "目标"; var narrow = false; var updatingPanes = false;
+        foreach (var caption in new[] { "目标", "应用", "任务" })
+        {
+            panes.ColumnDefinitions.Add(new());
+            var button = new ToggleButton { MinWidth = 44, MinHeight = 44, Height = 44, Margin = new Thickness(0, 0, caption == "任务" ? 0 : 4, 0), Padding = new Thickness(6, 0, 6, 0), IsChecked = caption == selectedPane };
+            button.SetResourceReference(StyleProperty, "SegmentedToggle");
+            LocalizationService.Bind(button, ContentControl.ContentProperty, caption); LocalizationService.Bind(button, ToolTipProperty, caption);
+            LocalizationService.Bind(button, System.Windows.Automation.AutomationProperties.NameProperty, caption);
+            button.Checked += (_, _) => { if (!updatingPanes) { selectedPane = caption; ArrangeApplications(); } };
+            button.Unchecked += (_, _) => { if (!updatingPanes && selectedPane == caption) ArrangeApplications(); };
+            Grid.SetColumn(button, paneButtons.Count); paneButtons.Add(caption, button); panes.Children.Add(button);
+        }
+        content.SizeChanged += (_, _) => ArrangeApplications(); content.Loaded += (_, _) => ArrangeApplications(); page.Children.Add(content);
         ViewModel.Devices.CollectionChanged += (_, _) => SyncApplicationTargets();
         ViewModel.PropertyChanged += (_, _) => { SyncApplicationApiSubscription(); SyncApplicationTargets(); RefreshApplicationControls(); if (!ViewModel.Busy && applicationReadPending && !applicationRunning) ScheduleApplicationRead(); };
         Closed += (_, _) => { if (applicationApi is not null) applicationApi.RequestsDrained -= ApplicationRequestsDrained; applicationApi = null; };
         page.Loaded += (_, _) => SyncApplicationTargets(); page.IsVisibleChanged += (_, _) => { if (page.IsVisible && applicationReadPending) ScheduleApplicationRead(); };
         SyncApplicationApiSubscription();
         SyncApplicationTargets(); RefreshApplicationControls(); return page;
+
+        void ArrangeApplications()
+        {
+            if (content.ActualWidth <= 0) return;
+            var targetFocus = targetPanel.IsKeyboardFocusWithin; var appFocus = applications.IsKeyboardFocusWithin; var taskFocus = tasks.IsKeyboardFocusWithin; var paneFocus = panes.IsKeyboardFocusWithin;
+            var next = content.ActualWidth < 640;
+            if (next != narrow)
+            {
+                if (next) { if (targetFocus) selectedPane = "目标"; else if (appFocus) selectedPane = "应用"; else if (taskFocus) selectedPane = "任务"; }
+                narrow = next;
+                content.ColumnDefinitions[0].Width = narrow ? new GridLength(1, GridUnitType.Star) : new GridLength(228); content.ColumnDefinitions[0].MinWidth = narrow ? 0 : 180;
+                content.ColumnDefinitions[1].Width = new GridLength(narrow ? 0 : 12);
+                content.ColumnDefinitions[2].MinWidth = narrow ? 0 : 200; content.ColumnDefinitions[2].Width = narrow ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+                content.RowDefinitions[1].Height = new GridLength(narrow ? 0 : 182);
+                Grid.SetColumn(applications, narrow ? 0 : 2); Grid.SetColumn(tasks, narrow ? 0 : 2); Grid.SetRow(tasks, narrow ? 0 : 1); Grid.SetRowSpan(targetPanel, narrow ? 1 : 2);
+                tasks.Margin = narrow ? new Thickness(0) : new Thickness(0, 10, 0, 0);
+            }
+            panes.Visibility = narrow ? Visibility.Visible : Visibility.Collapsed; targetTitle.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+            targetPanel.Visibility = !narrow || selectedPane == "目标" ? Visibility.Visible : Visibility.Collapsed;
+            applications.Visibility = !narrow || selectedPane == "应用" ? Visibility.Visible : Visibility.Collapsed;
+            tasks.Visibility = !narrow || selectedPane == "任务" ? Visibility.Visible : Visibility.Collapsed;
+            updatingPanes = true;
+            try { foreach (var (caption, button) in paneButtons) button.IsChecked = caption == selectedPane; }
+            finally { updatingPanes = false; }
+            if (narrow && (targetFocus && selectedPane != "目标" || appFocus && selectedPane != "应用" || taskFocus && selectedPane != "任务")) paneButtons[selectedPane].Focus();
+            else if (!narrow && paneFocus)
+            {
+                var focusTarget = selectedPane == "目标" ? targets : selectedPane == "任务" ? tasks : applications;
+                if (!focusTarget.Focus()) (applicationCancel.IsEnabled ? applicationCancel : more).Focus();
+            }
+        }
     }
     private void SyncApplicationApiSubscription()
     {
@@ -116,13 +178,17 @@ public partial class MainWindow
             if (applicationReadPending && !applicationRunning && !ViewModel.Busy) ScheduleApplicationRead();
         }));
     }
-    private static DataGrid ApplicationGrid(object source) => new() { ItemsSource = (System.Collections.IEnumerable)source, IsReadOnly = false, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Extended, HeadersVisibility = DataGridHeadersVisibility.Column };
+    private static DataGrid ApplicationGrid(object source) => new() { ItemsSource = (System.Collections.IEnumerable)source, MinRowHeight = 46, IsReadOnly = false, AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, SelectionMode = DataGridSelectionMode.Extended, HeadersVisibility = DataGridHeadersVisibility.Column };
     private static DataGridTemplateColumn ApplicationSelectionColumn(string selection, string? enabled = null)
     {
         var check = new FrameworkElementFactory(typeof(CheckBox)); check.SetBinding(ToggleButton.IsCheckedProperty, TwoWay(selection)); check.SetValue(FrameworkElement.MarginProperty, new Thickness(0));
         check.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center); check.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+        check.SetValue(FrameworkElement.MinWidthProperty, 44d); check.SetValue(FrameworkElement.MinHeightProperty, 44d);
+        check.SetBinding(System.Windows.Automation.AutomationProperties.NameProperty, new Binding(enabled is null ? nameof(InstalledApplicationRow.PackageName) : nameof(ApplicationTargetRow.Caption)) { StringFormat = "选择 {0}" });
         if (enabled is not null) check.SetBinding(UIElement.IsEnabledProperty, new Binding(enabled));
-        return new DataGridTemplateColumn { Header = "选择", CellTemplate = new DataTemplate { VisualTree = check }, Width = 44, IsReadOnly = true };
+        var cellStyle = new Style(typeof(DataGridCell), Application.Current.TryFindResource(typeof(DataGridCell)) as Style); cellStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(0)));
+        var headerStyle = new Style(typeof(DataGridColumnHeader), Application.Current.TryFindResource(typeof(DataGridColumnHeader)) as Style); headerStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(0)));
+        return new DataGridTemplateColumn { Header = "选择", CellTemplate = new DataTemplate { VisualTree = check }, Width = 48, MinWidth = 48, CanUserResize = false, IsReadOnly = true, CellStyle = cellStyle, HeaderStyle = headerStyle };
     }
     private AsyncCommand ApplicationCommand(Func<Task> execute, Func<bool> enabled)
     {

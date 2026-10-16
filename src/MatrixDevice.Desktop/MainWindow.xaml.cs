@@ -341,6 +341,7 @@ public partial class MainWindow : Window
     public async Task RunSmokeAsync(string? screenshotPath = null)
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("启动验收仅允许显式演示模式");
+        await VerifyResponsiveApplicationsAsync();
         await VerifyApplicationApiPendingAsync();
         await VerifyApplicationPendingAsync();
         await VerifyReconnectedDebugLoadingAsync();
