@@ -21,7 +21,7 @@ public partial class MainWindow
 {
     private FrameworkElement BuildScriptPage()
     {
-        var page = Page(); var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE8E5", "导入脚本包", async () => { var dialog = new OpenFileDialog { Filter = "脚本包|*.jxscript;*.zip;*.json|所有文件|*.*" }; if (dialog.ShowDialog(this) == true) await ViewModel.ImportScriptAsync(dialog.FileName); })); toolbar.Children.Add(Button("\uE768", "运行所选", ViewModel.StartScriptCommand)); toolbar.Children.Add(Button("\uE71A", "停止所选", ViewModel.StopScriptCommand)); DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
+        var page = Page(); var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE8E5", "导入脚本包", async () => { var dialog = new OpenFileDialog { Filter = "脚本包|*.jxscript;*.zip|所有文件|*.*" }; if (dialog.ShowDialog(this) == true) await ViewModel.ImportScriptAsync(dialog.FileName); })); toolbar.Children.Add(Button("\uE768", "运行所选", ViewModel.StartScriptCommand)); toolbar.Children.Add(Button("\uE71A", "停止所选", ViewModel.StopScriptCommand)); DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
         var summary = BoundText(nameof(WorkspaceViewModel.PackageSummary), true); summary.FontWeight = FontWeights.SemiBold; summary.Margin = new Thickness(0, 10, 0, 8); DockPanel.SetDock(summary, Dock.Top); page.Children.Add(summary);
         var targets = BoundText(nameof(WorkspaceViewModel.TargetContext), true); DockPanel.SetDock(targets, Dock.Top); page.Children.Add(targets);
         var grid = new Grid { Margin = new Thickness(0, 10, 0, 0) }; grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(230) }); grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); grid.RowDefinitions.Add(new RowDefinition());

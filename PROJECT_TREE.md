@@ -29,6 +29,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- A07_CMFA_APPLICATIONS.md
 |   |   |   |-- A07_OWNED_CLEANUP.md
 |   |   |   |-- A07_TOOLTIP_DIAGNOSTICS.md
+|   |   |   |-- A08_SCRIPT_FORMAT.md
 |   |   |   |-- A13_SQLITE_PATH.md
 |   |   |   |-- AP008_DEPENDENCIES.md
 |   |   |   |-- AP033_INPUT_DIAGNOSTICS.md

@@ -59,7 +59,7 @@ public static class ScriptPackageService
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         using var file = File.OpenRead(path);
         if (file.Length > MaximumArchiveBytes) throw Invalid($"Script archive exceeds {MaximumArchiveBytes} bytes.");
-        using var archive = new ZipArchive(file, ZipArchiveMode.Read);
+        using var archive = OpenArchive(file);
         if (archive.Entries.Count > 128) throw Invalid("Script archive has more than 128 entries.");
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         long total = 0;
@@ -76,6 +76,15 @@ public static class ScriptPackageService
         package = package with { Steps = package.Steps ?? [], Parameters = package.Parameters ?? [] };
         Validate(package);
         return package;
+    }
+
+    private static ZipArchive OpenArchive(Stream file)
+    {
+        try { return new ZipArchive(file, ZipArchiveMode.Read); }
+        catch (InvalidDataException)
+        {
+            throw Invalid("脚本包格式无效：仅支持包含 manifest.json 和 script.json 的 ZIP 脚本包（.jxscript/.zip）；暂不支持顶层 JSON、Python 或 JavaScript。");
+        }
     }
 
     public static void Save(string path, ScriptPackage package)

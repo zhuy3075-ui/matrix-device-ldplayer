@@ -2,7 +2,15 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 当前执行：AP-043对照结束，转A08脚本包边界
+## 当前执行：A08a格式边界通过，待限域交付
+
+- AP042已实际提交并推送cf79fe3cc0542407b496f9a4aecd685fe8be9ee9；feature远端同值，test49e4710不变。回执artifacts/workspace-accessibility-main/push-complete.json SHA142262C99C743F2D232BCA29E473ABABA3F3244E3067C9B7F9E70D3424A3459D，15路径/327源/330ZIP/165段已独审核。不要按下方历史重推该阶段；初始正文可达不是AP043导航或全GUI通过。
+- AP044两独立树从2ca固定起，root机械apply四文件到cf79，三源码raw均精确同：Service3A6A6C4DEEB53E15B8B6487FBEC6854F7CAB8CA6B142523CBCC58099DBED94F0、ScriptsView9B51882DA3AE05C24924D2C183E8F6AC3132D261E5ED04DA7699E604F9ADDD6B、Program00010907DEB9EAEB704FDBE7DB4C6F7D02A68521C26F46B5CC2455FDFEB19755。窄catch仅ZIP构造，不吞I/O/Entries/内层JSON/动作校验；picker仅去.json，不拒绝合法ZIP的该后缀或资源。详见[A08a](A08_SCRIPT_FORMAT.md)。
+- r01夹具编译失败/原r02六格式红保留；实现169通过、独立Build27708 exit0/77.523秒及实际169/52.98秒，PDB与原158名序核同。独立execution0DEA30AB136663B056CDCF35BB873F777B48E49DC43DB8616B12F587A8381A90。主仓session14536已terminal，Build63972 exit0/76.764秒、169/51.86秒，0警告错误；三源码前后同、七guards无差、双流完整/无timeout，execution C53F38CDDBEEB5284B5E90CCF873478C2AA35C0573874DA28399E8C9A4182173，DLL D123D120C8235431A2330EB43984B319EA839D8B0471879F24A6141489CE00A5。全部必需Build/GUI已结束，锁归root，不重跑。
+- 下一门只冻结正式10路径、核完整包/三生成清单与精确13 index后独审，按原私有feature单独commit/push；尚未实际记录前不称已推A08。不合并发布；配置/用户PNG/APK/SDK/二进制及本轮raw排除，历史AP021保持。
+- 用户CMFA仍AF7F05D8...A3753D，可安装启动已有实证，不因重申可用重复安装、授权或开VPN。AP043输入效果未知/无freshstate、AP040、AP041/S01/11NOTRUN、全GUI/双实例同步/应用GUI安装卸载/最终30分钟、真实DPI及A08余项/A09-A16继续；未满足完整目标。AP040只读准备不算修复。
+
+## 历史：AP-043对照结束，转A08脚本包边界
 
 - AP043仅复用冻结二进制，无新Build或生产改动。Old session86146与New session11102均terminal父0/child-1，精确自有externalKill，无timeout/runnerKill/清理错，双raw均0B且完整；所有必需GUI/exec已结束。不复用旧window或索引。
 - 相同probe-bin共同44和实际coreclr/wpfgfx两模块下，Old48个总节点止空Tab，New200个总节点包含真实设备正文/筛选/表格。独立核原Release46/共同44/七guards全同。New应用入口21的官方点击失败isError=true、`coordinate input geometry is unavailable`，无后置state，切页效果未知；不重试/截图恢复/外部输入绕过。

@@ -1,5 +1,12 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / A08a脚本包格式边界
+
+- Goal/Context：AP042仅正文源码改善已实际推送cf79fe3，远端同值、test49e4710不变；AP043导航缺口仍开放。本阶段从2ca独立树修复自动化picker宣称JSON而实际只接受ZIP的矛盾，不扩展脚本语言。
+- Decision/Files：仅ScriptPackageService的ZIP构造InvalidDataException转中文400/1007、ScriptsView移除支持格式中的.json、Program新增11项及[规格](codex/apple-experience/A08_SCRIPT_FORMAT.md)；I/O、Entries/解压、内层JSON、验证和限额不改。
+- Verification：r01夹具编译9错保留，不作产品红；仅3处显式构造修正后r02为163/169，恰六非法格式契约失败。实现169/72.044秒，独立169/77.523秒；主仓Build63972 exit0/76.764秒、169项51.86秒，0警告错误，三源码raw前后同，七guards无差，全部进程/双流终态且无timeout。
+- Evidence/Next：root execution C53F38CDDBEEB5284B5E90CCF873478C2AA35C0573874DA28399E8C9A4182173，DLL D123D120C8235431A2330EB43984B319EA839D8B0471879F24A6141489CE00A5；原件ignored artifacts/script-format-main/main-r01。待文档/完整核包/精确index独审后单功能推私有feature，实际Git为准；GUI选择器、A08其它页、全RPA/MCP/抓包及原真实双实例/应用GUI/最终30分钟保持，goal active。
+
 ## 2026-10-16 / AP-043受控对照与导航失败
 
 - Goal/Decision：按独审计划在同一冻结共同目录顺序替换Old/New两DLL/PDB，各一次官方纯文本首读；不Build、不改生产、不触guest。详见[受控对照](codex/apple-experience/AP043_SKY_AB.md)。

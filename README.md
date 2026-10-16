@@ -20,6 +20,8 @@
 
 2026-10-16新增任务R11-R14/A13-A16已纳入上述文档：继续全功能/双实例/安装卸载/最终30分钟验收，并规划终控台RPA闭环、群控MCP接入及指定模拟器抓包。最近[真实实例复核](docs/codex/list-console/LIVE_RECHECK_2026-10-16.md)为实例1冷启动及8项限域Live通过，不是全控件通过。现有脚本为受限ZIP格式，产品尚无群控MCP server或完整抓包会话；[抓包初步调研](docs/codex/automation-expansion/CAPTURE_RESEARCH.md)已比较方案，POC未运行，不把规划当实现。
 
+自动化导入选择器现在只列出`.jxscript/.zip`。加载器对ZIP构造阶段识别出的非归档格式给出中文400/1007错误，不执行顶层JSON、Python或JavaScript；合法ZIP按内容读取，即使后缀为`.json`或包含合法附带资源也保持兼容。I/O、归档内JSON、动作验证及原限额保持原边界，不能把这项修改称为所有损坏ZIP的统一处理。实现方、独立方和主仓各169项通过，包含合法包实际Demo点击和非法内容零点击；[格式边界报告](docs/codex/apple-experience/A08_SCRIPT_FORMAT.md)保留原红测。GUI文件对话框实开、真实设备和完整RPA闭环仍待验收。
+
 Windows数据库长路径初始化已按原位置修复，不搬移数据或关闭事务。独立及主仓正式回归均158/158，实际CLI的251/252/253/300字符普通路径均通过；迁移备份、未来版本拒绝与文件释放也有回归，见[长路径报告](docs/codex/apple-experience/A13_SQLITE_PATH.md)。完整GUI的输入源问题、真实双实例同步、新版应用页安装卸载和最终双实例30分钟仍待，不由本项离线结果替代。
 
 ## 构建与运行

@@ -16672,7 +16672,7 @@ public partial class MainWindow
 {
     private FrameworkElement BuildScriptPage()
     {
-        var page = Page(); var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE8E5", "导入脚本包", async () => { var dialog = new OpenFileDialog { Filter = "脚本包|*.jxscript;*.zip;*.json|所有文件|*.*" }; if (dialog.ShowDialog(this) == true) await ViewModel.ImportScriptAsync(dialog.FileName); })); toolbar.Children.Add(Button("\uE768", "运行所选", ViewModel.StartScriptCommand)); toolbar.Children.Add(Button("\uE71A", "停止所选", ViewModel.StopScriptCommand)); DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
+        var page = Page(); var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE8E5", "导入脚本包", async () => { var dialog = new OpenFileDialog { Filter = "脚本包|*.jxscript;*.zip|所有文件|*.*" }; if (dialog.ShowDialog(this) == true) await ViewModel.ImportScriptAsync(dialog.FileName); })); toolbar.Children.Add(Button("\uE768", "运行所选", ViewModel.StartScriptCommand)); toolbar.Children.Add(Button("\uE71A", "停止所选", ViewModel.StopScriptCommand)); DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
         var summary = BoundText(nameof(WorkspaceViewModel.PackageSummary), true); summary.FontWeight = FontWeights.SemiBold; summary.Margin = new Thickness(0, 10, 0, 8); DockPanel.SetDock(summary, Dock.Top); page.Children.Add(summary);
         var targets = BoundText(nameof(WorkspaceViewModel.TargetContext), true); DockPanel.SetDock(targets, Dock.Top); page.Children.Add(targets);
         var grid = new Grid { Margin = new Thickness(0, 10, 0, 0) }; grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(230) }); grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); grid.RowDefinitions.Add(new RowDefinition());
@@ -21260,7 +21260,7 @@ public static class ScriptPackageService
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         using var file = File.OpenRead(path);
         if (file.Length > MaximumArchiveBytes) throw Invalid($"Script archive exceeds {MaximumArchiveBytes} bytes.");
-        using var archive = new ZipArchive(file, ZipArchiveMode.Read);
+        using var archive = OpenArchive(file);
         if (archive.Entries.Count > 128) throw Invalid("Script archive has more than 128 entries.");
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         long total = 0;
@@ -21277,6 +21277,15 @@ public static class ScriptPackageService
         package = package with { Steps = package.Steps ?? [], Parameters = package.Parameters ?? [] };
         Validate(package);
         return package;
+    }
+
+    private static ZipArchive OpenArchive(Stream file)
+    {
+        try { return new ZipArchive(file, ZipArchiveMode.Read); }
+        catch (InvalidDataException)
+        {
+            throw Invalid("脚本包格式无效：仅支持包含 manifest.json 和 script.json 的 ZIP 脚本包（.jxscript/.zip）；暂不支持顶层 JSON、Python 或 JavaScript。");
+        }
     }
 
     public static void Save(string path, ScriptPackage package)
@@ -27325,6 +27334,112 @@ Test("script errors propagate and per-device logs stay at 500", async () =>
     var steps = Enumerable.Range(0, 550).Select(_ => new ScriptStep { Action = "wait", DurationMs = 0 }).ToArray();
     await scripts.RunAsync("DEMO-002", Package(steps));
     Check(scripts.GetLogs("DEMO-002").Count == 500, "Log retention differs from 500");
+});
+foreach (var (name, contents) in new (string, byte[])[]
+{
+    ("top-level JSON", JsonSerializer.SerializeToUtf8Bytes(Package(new ScriptStep { Action = "click", Value = "20,20" }), JsonDefaults.Options)),
+    ("Python", Encoding.UTF8.GetBytes("print('not an executable script package')")),
+    ("JavaScript", Encoding.UTF8.GetBytes("console.log('not an executable script package');")),
+    ("random binary", [0, 255, 17, 128, 23, 44, 91, 201]),
+    ("truncated ZIP", [0x50, 0x4b, 3, 4, 0, 0, 0, 0]),
+    ("empty file", [])
+})
+{
+    Test($"script format explicitly rejects {name} without execution", async () =>
+    {
+        var path = Path.Combine(Temp(), "unsupported.jxscript");
+        await File.WriteAllBytesAsync(path, contents);
+        await using var backend = new DemoDeviceBackend();
+        await using var scripts = new ScriptScheduler(backend);
+        Exception? failure = null;
+        try
+        {
+            var imported = ScriptPackageService.Load(path);
+            await scripts.RunAsync("DEMO-001", imported).WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (Exception error) { failure = error; }
+        Check((await backend.DumpAsync("DEMO-001")).ChildNodeList[1].Text == "Tap 0", "Rejected content executed a step");
+        var formatError = failure is DeviceException { Status: 400, Code: 1007 } formatFailure ? formatFailure :
+            throw new Exception($"Expected script format DeviceException 400/1007, got {failure?.GetType().Name ?? "success"}: {failure?.Message}");
+        Check(formatError.Message.StartsWith("脚本包格式无效：", StringComparison.Ordinal) &&
+            formatError.Message.Contains("ZIP", StringComparison.Ordinal) && formatError.Message.Contains("JSON", StringComparison.Ordinal),
+            "Unsupported content did not report the supported package format in Chinese");
+    });
+}
+Test("script format accepts ZIP content named JSON with attached resources and executes it", async () =>
+{
+    var path = Path.Combine(Temp(), "valid.json");
+    var package = Package(new ScriptStep { Action = "click", Value = "20,20" });
+    ScriptPackageService.Save(path, package);
+    using (var archive = ZipFile.Open(path, ZipArchiveMode.Update))
+    {
+        using var resource = archive.CreateEntry("assets/resource.bin").Open();
+        resource.Write([0, 255, 11, 28]);
+    }
+    var imported = ScriptPackageService.Load(path);
+    Check(imported.Manifest.Id == package.Manifest.Id && imported.Manifest.Version == package.Manifest.Version &&
+        imported.Steps.Single().Value == "20,20", "ZIP content or metadata changed because of its suffix/resources");
+    await using var backend = new DemoDeviceBackend();
+    await using var scripts = new ScriptScheduler(backend);
+    Check((await backend.DumpAsync("DEMO-001")).ChildNodeList[1].Text == "Tap 0", "Import itself executed a step");
+    await scripts.RunAsync("DEMO-001", imported).WaitAsync(TimeSpan.FromSeconds(2));
+    Check((await backend.DumpAsync("DEMO-001")).ChildNodeList[1].Text == "Tap 1", "Valid imported ZIP did not execute its actual step");
+});
+Test("script format does not relabel missing or locked file I/O errors", async () =>
+{
+    var path = Path.Combine(Temp(), "missing.zip");
+    await Throws<FileNotFoundException>(() => Task.FromResult(ScriptPackageService.Load(path)));
+    File.WriteAllBytes(path, [0, 1, 2, 3]);
+    using var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+    await Throws<IOException>(() => Task.FromResult(ScriptPackageService.Load(path)));
+});
+Test("script format preserves inner JSON errors", () =>
+{
+    var path = Path.Combine(Temp(), "bad-json.zip");
+    using (var archive = ZipFile.Open(path, ZipArchiveMode.Create))
+    {
+        using (var manifest = new StreamWriter(archive.CreateEntry("manifest.json").Open()))
+            manifest.Write(JsonSerializer.Serialize(Package().Manifest, JsonDefaults.Options));
+        using var script = new StreamWriter(archive.CreateEntry("script.json").Open());
+        script.Write("{invalid JSON");
+    }
+    try { ScriptPackageService.Load(path); throw new Exception("Invalid inner JSON was accepted"); }
+    catch (DeviceException error)
+    {
+        Check(error.Status == 400 && error.Code == 1007 && error.Message.StartsWith("Invalid JSON in script.json:", StringComparison.Ordinal),
+            "Inner JSON error was relabeled as an archive format error");
+    }
+    return Task.CompletedTask;
+});
+Test("script format preserves action validation errors", () =>
+{
+    var path = Path.Combine(Temp(), "bad-action.zip");
+    using (var archive = ZipFile.Open(path, ZipArchiveMode.Create))
+    {
+        using (var manifest = new StreamWriter(archive.CreateEntry("manifest.json").Open()))
+            manifest.Write(JsonSerializer.Serialize(Package().Manifest, JsonDefaults.Options));
+        using var script = new StreamWriter(archive.CreateEntry("script.json").Open());
+        script.Write(JsonSerializer.Serialize(Package(new ScriptStep { Action = "eval", Value = "not executable" }), JsonDefaults.Options));
+    }
+    try { ScriptPackageService.Load(path); throw new Exception("Invalid action was accepted"); }
+    catch (DeviceException error)
+    {
+        Check(error.Status == 400 && error.Code == 1007 && error.Message.StartsWith("Unknown action at step 0:", StringComparison.Ordinal),
+            "Action validation was relabeled as an archive format error");
+    }
+    return Task.CompletedTask;
+});
+Test("script format retains the archive size gate before format parsing", () =>
+{
+    var path = Path.Combine(Temp(), "oversized.zip");
+    using (var file = File.Create(path)) file.SetLength(ScriptPackageService.MaximumArchiveBytes + 1L);
+    try { ScriptPackageService.Load(path); throw new Exception("Oversized archive was accepted"); }
+    catch (DeviceException error)
+    {
+        Check(error.Status == 400 && error.Code == 1007 && error.Message.StartsWith("Script archive exceeds ", StringComparison.Ordinal),
+            "Archive size limit changed or was relabeled as an archive format error");
+    }
+    return Task.CompletedTask;
 });
 Test("configuration recovery and three-way merge preserve other writes", () =>
 {

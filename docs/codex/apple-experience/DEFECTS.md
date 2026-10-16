@@ -57,6 +57,7 @@
 |---|---|---|---|
 | AP-042 | P1/组件与初始正文可达通过，整体未验 | 旧无头Tab没有ItemsHost；实际红三阶段同根仅1节点，5个可视正文owner不可达。最小标准Pane peer后独立及主仓同根146→71→146、5owner与状态样式通过，旧158/14/3E保持；AP043证初始设备正文外部可读 | [规格与原件](AP042_WORKSPACE_ACCESSIBILITY.md)；独审允许考虑仅正文源码的开发分支限域交付，仍须核包/index审。隐藏Tab的UIA SelectionPattern变化已声明；导航门与原null不关闭，不标官方控制或全GUI恢复 |
 | AP-043 | P1/初始正文改善已证，外部导航缺口开放 | 首轮F18整树null原件保留；[受控对照](AP043_SKY_AB.md)共同44及实际CLR/WPF同，Old48总节点止空Tab、New200总节点含设备正文。New应用入口click报coordinate input geometry is unavailable/isError，无后置state，效果未知 | 立即停，不重试/截图恢复/输入绕过；两个自有进程精确externalKill、流完整无timeout。仅证初始读取，不归为纯环境或peer同因；应用导航/返回/正常Close未验，AP042完整交付未批准，转A08安全工作 |
+| AP-044 | P1/格式边界已离线复验，GUI未验 | 自动化picker原列.json，但Load只接受ZIP；实际红六非法格式均抛原InvalidDataException/提示不明确，其余163项过。r01编译错误另存不算产品红 | [格式边界](A08_SCRIPT_FORMAT.md)仅ZIP构造格式异常转中文400/1007、picker去.json；实现/独立/主仓各169通过，合法ZIP资源及Demo Tap1、拒绝Tap0过。未扩大到Entries/解压错误或支持通用脚本；GUI/真实设备和完整A08/A14不由此通过 |
 
 ## 修复记录规则
 
