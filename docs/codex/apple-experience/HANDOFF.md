@@ -2,6 +2,14 @@
 
 更新：2026-10-17。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
+## 最新裁决：AP042父链负实验
+
+- 上一阶段已实际推送a96ae0e4c87ad625f7b754fefefb3954e345063b，feature同值、test49e4710保持；回执main artifacts/write-ownership/push-complete.json。下方A15c“待核包/未推送”是历史，不重做。
+- [父链对照结果](AP042_PARENT_CHAIN_RESULT.md)已获两份独立终态审：A/B均146→146→146、应用owner缺3/残留111，各4条原PRODUCT失败；B标准Window1→tabs12真实边成立且未预读tabs孩子。仅补父链不足，不合入实验C#，不关闭AP042/AP045，不恢复截图或错误坐标分支。
+- 隔离workspace-parent-chain唯一Build自然0、225/225/57.09秒、MCP14/13NOTRUN、3既有警告0错；原outer1为helper返回流合同失败，旧execution1E0FA778...951516741保持。新helper仅修输出并复用该Build，未重建；续跑execution461E8077...BC1D979B外层0仅说明6child/12raw及清理保护成立，原两臂PRODUCT红不变。
+- 全部必需exec已终态，无kill/pending/retained；255产物为post-failure冻结，与主仓原156 selected范围不同，PDB3已实际解析。主仓189/156及用户3保持；本轮正式项目仅更新结论/交接，未改运行程序。原CMFA owned=false，不据旧台账操作当前应用。
+- 下一步推进A09页面业务，先fresh Demo保存重载、错误恢复、禁用解释及自有loopback/端口，不继续盲目provider诊断。真实GUI/应用GUI最终安装卸载及双实例30分钟、全RPA/MCP/抓包仍开放；Windows GUI最终安装/删除所需当次确认不能由旧授权或后台调用补签。完整目标仍active，约13工作块不扣减。
+
 ## 当前执行：A15c共同写入占用
 
 - 实际最新交付为13f3514885ac036bea8bb7200be96598748bd03d，远端feature同值/test49e不变；A15b已核包并push，回执artifacts/mcp-stdio-main/push-complete.json。下方A15b“待核包/未push”为历史，不重做。

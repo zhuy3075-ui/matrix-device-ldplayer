@@ -1,5 +1,12 @@
 # 当前目标阶段记录
 
+## 2026-10-17 / AP042父链负实验
+
+- Goal/Context：上轮实际完成a96ae0e推送与远端核验，属于progress，不重复交付。当前程序未运行，专用1/2窗口仍在；只做官方窗口枚举，没有capture/input或真实guest动作。
+- Decision/Files：隔离workspace-parent-chain做一次标准Window父链A/B，保原fixture/断言/五任务/Flush；实验C#不合入生产。正式项目仅新增[结果记录](codex/apple-experience/AP042_PARENT_CHAIN_RESULT.md)并更新任务、问题表与交接。
+- Verification：唯一Build自然0/125.420秒、225/225原名序同/57.09秒、MCP14/13NOTRUN和3既有警告0错。原outer1为helper返回流合同失败，保留原件；三GetResult显式抑制并断言单record的续跑不重Build。6child/12raw终态、无kill/pending/清理错，A/B均146×3、应用owner缺3/残留111及原4条PRODUCT红；真实父边成立但不足，不能当GUI修复。
+- Independent/Next/Risks：两名verifier核原始流、PDB3、255当前/冻结产物、主仓189/156/用户3全同；冻结属于post-failure采样，原outer products0不改。AP042/AP045/完整GUI保持，下一安全工作转A09页面业务，不继续盲目诊断；真实应用GUI安装卸载、DPI、全RPA/MCP/抓包与最终双30分钟仍必交付。
+
 ## 2026-10-17 / A15c共同写入占用
 
 - Goal/Decision：从已实际推送13f继续，不重做A15b交付；上一条仅状态回复按no-progress处理，本轮重新核源与终态后实施。标准Runtime共享DeviceWriteCoordinator，明确目标组原子接纳，未知LD目标全局屏障；取消到原动作返回才释放，不引入第二Runtime或启用real。

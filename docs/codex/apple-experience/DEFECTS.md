@@ -55,7 +55,7 @@
 
 | ID | 级别/状态 | 事实与边界 | 处理/后续 |
 |---|---|---|---|
-| AP-042 | P1/原离线PRODUCT失败未解释，开放；新对照双绿 | [原位日志](AP042_PEER_CACHE_DIAGNOSTICS.md)独立/主仓visual已切但原树146×3/缺3/残留111；另[官方对照](AP042_CLIENT_OBSERVATION.md)同源双臂均146→71→146、时差101.7184ms，但control无Sky调用也出现Window peer/listener。旧失败不覆盖，不能以双绿认定因果或修复 | 生产peer/原fixture不改，193/新strict入口拒绝及组件条件验证不替代GUI。外部导航、原null、原几何后继及全GUI/实机仍开放；不追加重复直到绿 |
+| AP-042 | P1/原离线PRODUCT失败未解释，开放；父链方案已证不足 | [原位日志](AP042_PEER_CACHE_DIAGNOSTICS.md)146×3/缺3/残留111保持；[官方对照](AP042_CLIENT_OBSERVATION.md)双绿不能证明因果。新[父链负实验](AP042_PARENT_CHAIN_RESULT.md)实际标准Window→同一tabs成立，但两臂仍各4条原Product红；原任务/清理及守卫通过 | 实验C#不合入生产，不为夹具绿追加Reset/Invalidate；225及MCP14不替代GUI，outer0仅实验完成。转A09安全页面业务，外部导航/几何/捕获与全GUI、实机仍开放，不重跑到绿 |
 | AP-043 | P1/初始正文改善已证，外部导航缺口开放 | 首轮F18整树null保留；[对照及AP045](AP043_SKY_AB.md)旧48/新200总节点含正文；另已交付D123显式激活后仍唯一click几何错误、无后置state，效果未知 | 精确owned清理/流终态，无截图/替代/重试；停止该GUI输入分支，待受支持诊断或外部条件变化，不将工具/环境/peer定因。应用导航/返回/正常Close和全GUI未过，继续其它安全实现而非缩小目标 |
 | AP-044 | P1/格式边界已离线复验，GUI未验 | 自动化picker原列.json，但Load只接受ZIP；实际红六非法格式均抛原InvalidDataException/提示不明确，其余163项过。r01编译错误另存不算产品红 | [格式边界](A08_SCRIPT_FORMAT.md)仅ZIP构造格式异常转中文400/1007、picker去.json；实现/独立/主仓各169通过，合法ZIP资源及Demo Tap1、拒绝Tap0过。未扩大到Entries/解压错误或支持通用脚本；GUI/真实设备和完整A08/A14不由此通过 |
 | AP-046 | P1/参数绑定业务独立及主仓有限域通过 | 原参数编辑仅保存、不影响实际步骤，JSON null丢失后错误回退默认并接纳运行；Core24原1绿23红含新API缺失，独立VM4原2PRODUCT红2绿 | [A14a1](A14_SCRIPT_PARAMETER_BINDINGS.md)显式V1全字段绑定、私有JSON选项保留null、同原Scheduler执行快照，VM在metadata前完整编译。作者/独立/主仓各193与同VM4过，旧169/24Smoke保持；非GUI、真实双实例或完整作业身份/MCP/抓包验收，AP042最新FAIL不覆盖 |

@@ -185,6 +185,11 @@
     "Sha256": "003a050e152aaebb9542f157633f599c0ed6814253e32bedb7da19cc7e181deb"
   },
   {
+    "Path": "docs/codex/apple-experience/AP042_PARENT_CHAIN_RESULT.md",
+    "Bytes": 5648,
+    "Sha256": "9e0d489127861880180482581802cb4bebc6ce02498053cd6a0ef740e3413c36"
+  },
+  {
     "Path": "docs/codex/apple-experience/AP042_PEER_CACHE_DIAGNOSTICS.md",
     "Bytes": 10263,
     "Sha256": "8f5c921626c698a65c38902304ce2ad6ffbb2b83041d5108c482e752c1fad5aa"
@@ -206,13 +211,13 @@
   },
   {
     "Path": "docs/codex/apple-experience/DEFECTS.md",
-    "Bytes": 27936,
-    "Sha256": "33350c33d1f38e89f2e6a7e2075801dae6784cb90f3f621e730a60bbe7cde927"
+    "Bytes": 27966,
+    "Sha256": "5128134bf1b832af533a6733de9fcd644731515835329d9dbe80fac933f2fe74"
   },
   {
     "Path": "docs/codex/apple-experience/HANDOFF.md",
-    "Bytes": 139017,
-    "Sha256": "5118ccaf985d0636bfef637043dd8495130e122133edb64e487c6a7748c2c69a"
+    "Bytes": 140662,
+    "Sha256": "a4f3766f4286595ac210616ad921a5d7c2ba93fbdaa9162060b6c001b6993446"
   },
   {
     "Path": "docs/codex/apple-experience/TEST_MATRIX.md",
@@ -326,8 +331,8 @@
   },
   {
     "Path": "docs/PROGRESS.md",
-    "Bytes": 90125,
-    "Sha256": "250abc76874949c6a9f26b33136a527fa2619e0fb118beb38238e133f8542abc"
+    "Bytes": 91426,
+    "Sha256": "73a8ccd537732ea348365d5a21650f2561d8cc2b61a387b108a0574fe2e65ba3"
   },
   {
     "Path": "docs/reference/API.md",
@@ -396,8 +401,8 @@
   },
   {
     "Path": "docs/TASKS.md",
-    "Bytes": 14868,
-    "Sha256": "95dac6c8ebb233dad38b067843f709da0a26e05ab3a5ded8570f8ad080d55075"
+    "Bytes": 15642,
+    "Sha256": "0c612a90c1625193ea661cc52b045ef56ef6e21997b7cae4dc69ab92573ea479"
   },
   {
     "Path": "docs/testing/API_MATRIX.md",
