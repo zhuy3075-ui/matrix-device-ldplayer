@@ -2,15 +2,21 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 最新执行：CMFA安装成功，权限页阻断后续
+## 最新执行：CMFA本轮新装包已停止并卸载
 
-本节优先于下方历史。用户提供的固定CMFA包已在专用实例1真实安装一次，版本211035/2.11.35.Meta、非系统base.apk路径及本轮owned证明成立；共享Start一次、主进程4564与background4590存在。但Android PermissionController GrantPermissionsActivity占前台，CMFA MainActivityAlias为PAUSED，主页效果断言FAIL。没有截图、Stop、Uninstall、grant或VPN操作，不把启动请求成功当主页成功；具体权限种类未确定。详见[A07_CMFA_APPLICATIONS](A07_CMFA_APPLICATIONS.md)，AP-003仍开放、AP-036为测试前置阻断，不归产品缺陷。
+首轮正式测试/报告已限域push `e5a44bd6b6885013e2f6bac609362e167c1bb58d`，test备份49e4710不变。后续[A07_OWNED_CLEANUP](A07_OWNED_CLEANUP.md)独立小阶段已完成：重新证明原台账及现场身份/版本/路径后，只对专用实例1执行共享Stop一次、Uninstall一次。没有重装、再启动、授权、VPN或GUI操作；首轮l01主页FAIL原样保留。
 
-安装仍保留，ledger owned=true、PENDING-MANUAL-REVIEW-NO-AUTOMATIC-CLEANUP。原件在`.worktrees/app-preflight-verifier/artifacts/app-preflight-verifier/lifecycle-l01/lifecycle/installation-ledger.json`，SHA `0D815ED2C25D0E2388B224EE1A49FB704D473E1982ACB9FACFB9B5B500B19AE6`。不得重跑完整安装模式覆盖它；下一步先重新证明冻结进程/owner/transport及本轮精确版本/路径，另立受限Stop/Uninstall用例，或恢复可靠观察后在真实GUI拒绝非必要权限。保留本次FAIL，不自动清包、不放宽主页断言、不代用户授权，也不借其实现VPN抓包。
+owned-cleanup r1冻结两正式源并整合主仓：fixture AE8185DC921952864F2D3C7EBCDC8243BE84725E3752677599CF3A456CAD264B，Program E607C367F2D4D713B7703409C839943538CF842C5BED0EA5A34DA9092134585F。新增五参入口只接受源ledger固定SHA，原lifecycle函数/主页断言未改。独立158/51.49秒、主仓158/51.33秒，构建均0警告错误、158名称顺序/实际PDB三源/146输入/config核同；主仓summary SHA 7CC6F3C19DC63B1C2E16DD0D6BDFB5BC971CA6EE19C24C9B398E4E501BDC3111。新checkout旧fixture的CRLF差异不是语义变化，实际测试核本轮冻结raw/PDB，不拿旧checksum补通过。
 
-两个正式测试源已主仓整合：fixture CAD755...D1360，Program993914...D8D5D，仅两个新模式分发，不改生产及原158。r3独立158/51.16秒、主仓158/51.43秒，构建均0警告错误、PDB三源一致、146输入/config前后保持；原158名称顺序与物理输入集合也核同。r2正则误匹配已在测试证据逻辑中最小收紧，不能当生产功能修复。r1只读17步骤通过，外层StrictMode空字段错误原样保留；l01正式exit1/21.480秒、37步骤通过后主页FAIL，5子进程全终结、无超时kill，自有测试进程0。23目录采样及ADB62248/birth/path/hash/transport8保持，不外推所有数据无变化。
+并行只读调查AP-034的API释放候选：ApplicationsView 94订VM通知，350ms Tick在158-173忙时停timer但留pending；ApiServiceManager 24-28终于减activeRequests至0却无事件，VM 84-85仅订脚本且HasActiveOperations不含API。建议后续受控Demo用公共AutomationService.ServiceInfoProvider（88-90）TCS挂真实只读HTTP /service/info：忙时真实勾选、原Tick后pending留且零List，仅释放请求后应自动List一次；补双请求最后释放/清空/Close边界，不反射计数或私有TrackRequest。只是未执行候选与最小回归建议，未改生产、不计已复现或修复，不混入本轮owned清理。
 
-当前无必需运行的exec子进程，执行锁归root。Windows Computer Use抓取两次超时后已停止Windows输入，不绕过Sky使用Win32/UIA/SendInput；当前ApplicationsView文件框/确认/进度、双实例同步与应用链仍未验，AP-033及最终双实例30分钟、A07余项/A08-A16继续active。正式测试、脱敏报告及源码清单限域核包/独审后推送原私有feature分支，不上传APK、配置、target/ledger原件或原始证据，不合并发布；实际提交以Git记录为准。
+本节优先于下方历史。原l01真实安装及启动请求成立，但PermissionController占前台，主页断言FAIL；当时没有执行截图/Stop/Uninstall，详见[A07_CMFA_APPLICATIONS](A07_CMFA_APPLICATIONS.md)。c01不是重跑该流程：错误ledger SHA和目标不符两个输入反例均在host/guest前拒绝，正式PID8408正常exit0/21.943秒、51步骤通过。Stop前4564主进程及4590背景进程确实存在，之后均消失且精确安装仍保留；再Uninstall后全用户普通与含保留记录查询均空、进程0、共享List无该包。7个child全部终结，无超时/kill/重试，自有测试进程0。
+
+当前本轮测试安装已经移除，原下载APK保持，专用实例1仍运行，2未启动。原l01 ledger SHA `0D815ED2C25D0E2388B224EE1A49FB704D473E1982ACB9FACFB9B5B500B19AE6`及原FAIL未改；旧owned=true/待复核是历史记录，不代表当前仍安装。新run6f786a487eff4f4bb88eeeaaf96b45d5的ledger为UNINSTALL-VERIFIED/owned=false，SHA `4961F9AD80687F2B87CEB1150080E5EB2578E42247CE0FC92D02C98466C43299`。c01 formal summary 59D458FAFC639047D85FA00B30100085EC965A25D70A7FD0BFA2C27674B840FC，独审B514352738BA021480283D75E07259B3E55D62CA163252A8CA97192932E153EA；本机原件在工作区`.worktrees/app-owned-cleanup-verifier/artifacts/app-owned-cleanup-verifier/cleanup-c01`，不上传。
+
+前后23目录采样及ADB62248/native birth/path/hash/transport8保持，146输入/主配置/源台账保持；不外推所有数据或中间状态完全无变化。共享批次会读取全部已装/系统应用版本，PM前置并非原子安装锁；已有runtime初始化可能先只读变更transport再后置拒绝的边界仍保留。没有权限grant或VPN操作，也未控制或验证应用自行联网。
+
+当前无必需运行的exec子进程，执行锁归root。Windows Computer Use抓取两次超时后已停止Windows输入，不绕过Sky使用Win32/UIA/SendInput。当前ApplicationsView实际文件框/确认/进度、双实例同步、最终双实例30分钟与完整GUI仍未验，AP-003/AP-033/AP-036及A07余项/A08-A16继续active。下一步先恢复可靠真实输入前置，并按独立小阶段验证上述AP-034候选，不能用本轮共享层结果关闭GUI验收。正式测试、脱敏报告与源码清单核包/独审后限域推送原私有feature；原两PNG保留，APK/配置/target/ledger原件/原始证据不上传，不合并发布，实际提交以Git记录为准。
 
 ## 早期准备：用户提供CMFA测试包
 

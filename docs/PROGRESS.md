@@ -1,5 +1,13 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / CMFA本轮owned停止卸载实测
+
+- Goal/Context：承接已push的e5a44bd首验，原l01主页权限阻断FAIL保持；接受权限不是验证停止/卸载的前提。另立受限模式，原台账SHA与目标全部字段先验，现场版本/非系统路径与身份再证明后仅共享Stop/Uninstall，无重装、授权或GUI动作。
+- Files/Decision：只扩展ApplicationPreflightAcceptance及Program五参入口，不改生产/原lifecycle断言/默认158；冻结两源AE8185...64B与E607C3...585F。源ledger保持原字节，新ledger写前记录请求可能性并关联源runId/SHA，失败不自动补偿。详见[A07_OWNED_CLEANUP](codex/apple-experience/A07_OWNED_CLEANUP.md)。
+- Verification：独立构建22.64秒/158项51.49秒；主仓20.79秒/158项51.33秒，均0警告错误。158名称顺序、实际PDB三源、146输入/config/源ledger前后保持。错误SHA及目标不符反例均只在inputs拒绝、无host/guest轨迹；c01正式PID8408正常exit0/21.943秒、51步通过，Stop前4564/4590存在→之后0且安装保留→Uninstall后普通/-u全用户查询空、进程0、列表缺包。
+- Evidence：formal summary59D458...840FC，独审B51435...53EA；本机工作区独立树cleanup-c01完整raw/7child终态，无超时kill/重试、自有进程0，23目录采样及ADB62248/native birth/transport8保持。新ledger UNINSTALL-VERIFIED/owned=false，原0D815...9AE6及原l01 FAIL不改；当前安装已移除，下载APK保留，专用1运行、2未启动。
+- Next/Risks：当前ApplicationsView实际文件框/确认/进度/菜单、主页、双实例同步、最终双实例30分钟及A08-A16仍待；AP-003/AP-033/AP-036不关闭。原台账历史owned不能当当前状态，PM不是并发安装原子锁。当前Windows抓取失败不绕过；正式测试/报告/README和源码清单独审后单独push原私有feature，排除APK/配置/原始证据，不合并发布，实际提交以Git记录为准。
+
 ## 2026-10-16 / CMFA单实例共享安装首验
 
 - Goal：使用用户新提供APK继续真实应用链，固定SHA/包/专用1目标；原实例0、共享ADB与账号数据不改，不授权VPN或敏感权限。新增正式只读预检与显式生命周期入口，默认158及生产代码不变。

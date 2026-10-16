@@ -21570,21 +21570,31 @@ internal static class ApplicationPreflightAcceptance
     private const string VersionName = "2.11.35.Meta";
     private const int CommandSeconds = 10;
     private const int MaximumReadBytes = 256 * 1024;
+    private const string OwnedSourceSha256 = "0D815ED2C25D0E2388B224EE1A49FB704D473E1982ACB9FACFB9B5B500B19AE6";
 
     public static Task RunAsync(string[] args) => RunCoreAsync(args, lifecycle: false);
     public static Task RunLifecycleAsync(string[] args) => RunCoreAsync(args, lifecycle: true);
-
-    private static async Task RunCoreAsync(string[] args, bool lifecycle)
+    public static Task RunOwnedCleanupAsync(string[] args)
     {
+        if (args.Length != 5) throw new ArgumentException("--application-owned-cleanup <absolute-target.json> <absolute-apk> <absolute-source-ledger> <expected-ledger-sha256> <fresh-absolute-evidence-directory>");
+        return RunCoreAsync([args[0], args[1], args[4]], lifecycle: false, sourceLedgerPath: args[2], expectedLedgerSha: args[3]);
+    }
+
+    private static async Task RunCoreAsync(string[] args, bool lifecycle, string? sourceLedgerPath = null, string? expectedLedgerSha = null)
+    {
+        var ownedCleanup = sourceLedgerPath is not null;
+        var mutableMode = lifecycle || ownedCleanup;
         if (args.Length != 3) throw new ArgumentException((lifecycle ? "--application-lifecycle" : "--application-preflight") + " <absolute-target.json> <absolute-apk> <fresh-absolute-evidence-directory>");
         var targetPath = Absolute(args[0]);
         var apkPath = Absolute(args[1]);
         var output = Absolute(args[2]);
+        var ledgerInput = sourceLedgerPath is null ? null : Absolute(sourceLedgerPath);
         Require(!Directory.Exists(output) && !File.Exists(output), "Evidence directory must be fresh: " + output);
         Require(!Within(targetPath, output) && !Within(apkPath, output), "Evidence must not contain either input file.");
+        Require(ledgerInput is null || !Within(ledgerInput, output), "Evidence must not contain the source ledger.");
         Directory.CreateDirectory(output);
         var options = new JsonSerializerOptions(JsonDefaults.Options) { WriteIndented = false };
-        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(lifecycle ? 10 : 3));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(mutableMode ? 10 : 3));
         var ct = deadline.Token;
         var clock = Stopwatch.StartNew();
         var steps = new List<object>();
@@ -21600,6 +21610,9 @@ internal static class ApplicationPreflightAcceptance
         var cleanupErrors = new List<string>();
         var builds = new Dictionary<string, string>();
         FileStream? apkLease = null;
+        FileStream? sourceLedgerLease = null;
+        SourceLedger? sourceLedger = null;
+        var sourceLedgerValidated = false;
         var runId = Guid.NewGuid().ToString("N");
         var installationAuthorized = false;
         var writeAttempted = false;
@@ -21608,6 +21621,7 @@ internal static class ApplicationPreflightAcceptance
         var ledgerState = "NOT-ATTEMPTED";
         OwnedPackageProof? ownedPackage = null;
         object? lifecycleResult = null;
+        object? ownedCleanupResult = null;
 
         async Task Save(string name, object value) => await File.WriteAllTextAsync(Path.Combine(output, name), JsonSerializer.Serialize(value, JsonDefaults.Options));
         async Task Trace(string file, object value) => await File.AppendAllTextAsync(Path.Combine(output, file), JsonSerializer.Serialize(value, options) + "\n");
@@ -21616,7 +21630,7 @@ internal static class ApplicationPreflightAcceptance
             var started = DateTimeOffset.UtcNow;
             var watch = Stopwatch.StartNew();
             var evidence = $"{++sequence:D3}-{id}.json";
-            var passStatus = lifecycle ? "PASS-SHARED-BACKEND-NOT-GUI" : "PASS-READ-ONLY";
+            var passStatus = mutableMode ? "PASS-SHARED-BACKEND-NOT-GUI" : "PASS-READ-ONLY";
             try
             {
                 ct.ThrowIfCancellationRequested();
@@ -21723,7 +21737,8 @@ internal static class ApplicationPreflightAcceptance
             ledgerState = state;
             var entry = new { runId, utc = DateTimeOffset.UtcNow, state, target, device = frozenDevice, ldGeneration = frozenLdGeneration,
                 package = Package, apkPath, apkSha256 = ApkSha256, installAttempted, owned, ownedPackage,
-                automaticCleanup = false, manualReviewRequired = installAttempted && state != "UNINSTALL-VERIFIED", level = "SHARED-BATCH-AND-BACKEND-NOT-GUI" };
+                automaticCleanup = false, manualReviewRequired = (installAttempted || ownedCleanup) && state != "UNINSTALL-VERIFIED", level = "SHARED-BATCH-AND-BACKEND-NOT-GUI",
+                sourceLedgerPath = ledgerInput, sourceSha256 = ownedCleanup ? expectedLedgerSha : null, sourceRunId = sourceLedger?.RunId, sourceInstallAttempted = sourceLedger?.InstallAttempted, sourceLedgerValidated };
             await Save("installation-ledger.json", entry);
             await Trace("installation-ledger.jsonl", entry);
         }
@@ -21858,6 +21873,78 @@ internal static class ApplicationPreflightAcceptance
                 appInitiatedNetwork = "NOT-CONTROLLED-OR-VERIFIED", automaticCleanup = false, retries = 0 };
         }
 
+        async Task OwnedCleanup()
+        {
+            var source = sourceLedger ?? throw new InvalidDataException("An independently validated source ledger is required for owned cleanup.");
+            Require(ownedCleanup && !lifecycle && sourceLedgerValidated, "This entry cannot authorize owned cleanup.");
+            await Ledger("SOURCE-VALIDATED-OWNERSHIP-NOT-YET-REPROVED");
+            Require(await PackageObserved("cleanup-initial-installed", false) && await PackageObserved("cleanup-initial-retained", true), "Source-owned package is no longer consistently observed.");
+            var currentPackage = await ObservePackage("cleanup-initial-package-proof");
+            Require(currentPackage == source.OwnedPackage, "Current package version/codePath/PM path differs from the source-owned installation.");
+            var frozen = ApplicationTarget.Freeze(frozenDevice!);
+            GuestProcess[]? stopBefore = null;
+            var scopedBackend = new LifecycleBackend(runtime!.Backend, target!.Serial, apkPath, async operation =>
+            {
+                Require(operation is ApplicationOperation.Stop or ApplicationOperation.Uninstall, "Owned cleanup permits no other mutation.");
+                await RequireOwned("cleanup-mutation-" + operation);
+                if (operation == ApplicationOperation.Stop)
+                    stopBefore = PackageProcesses(await Read("cleanup-stop-before-processes", "ps -A -o PID,NAME"));
+                await RuntimeIdentity("cleanup-mutation-" + operation + "-admitted");
+                writeAttempted = true;
+                await Ledger(operation.ToString().ToUpperInvariant() + "-REQUEST-MAY-BE-SENT");
+            }, value => Trace("backend-calls.jsonl", value), ct, cleanupOnly: true);
+            var batch = new ApplicationBatch(scopedBackend, async (applicationTarget, _) =>
+            {
+                await RuntimeIdentity("cleanup-batch-validate");
+                applicationTarget.RequireSame(runtime.Devices.Snapshot.SingleOrDefault());
+            });
+            async Task<ApplicationItemResult> Execute(string id, ApplicationOperation operation)
+            {
+                return await Step(id, async () =>
+                {
+                    Require(operation is ApplicationOperation.List or ApplicationOperation.Stop or ApplicationOperation.Uninstall, "Operation is outside the owned cleanup scope.");
+                    IReadOnlyList<ApplicationBatchItem> plan = operation == ApplicationOperation.List ? [new(frozen, operation)]
+                        : ApplicationBatch.RowPlan(operation, [new(frozen, operation, Package, IsSystem: false)]);
+                    var results = await batch.ExecuteAsync(plan, confirmed: true, progress: progress => File.AppendAllText(Path.Combine(output, "batch-progress.jsonl"),
+                        JsonSerializer.Serialize(new { utc = DateTimeOffset.UtcNow, progress }, options) + "\n"), stopAfterCurrent: ct);
+                    await Save(id + "-batch-results.json", results);
+                    Require(results.Count == 1 && results[0].State == ApplicationTaskState.Succeeded, "Owned cleanup shared batch did not succeed: " + JsonSerializer.Serialize(results, options));
+                    return results[0];
+                });
+            }
+            var before = await Execute("cleanup-list-before", ApplicationOperation.List);
+            Require(before.Applications?.Count(app => app.PackageName == Package && app.VersionName == VersionName && !app.IsSystem) == 1, "Shared list does not confirm the exact non-system source-owned application.");
+            ownedPackage = currentPackage;
+            owned = true;
+            await RequireOwned("cleanup-final-ownership-reproof");
+            await Ledger("SOURCE-OWNERSHIP-REPROVED");
+            await Execute("cleanup-stop", ApplicationOperation.Stop);
+            await Step("cleanup-stop-settle", async () => { await Task.Delay(1000, ct); return new { delayMs = 1000, observations = 1, retries = 0 }; });
+            var stopAfter = PackageProcesses(await Read("cleanup-stop-after-processes", "ps -A -o PID,NAME"));
+            Require(stopBefore is not null && stopAfter.Length == 0, "Exact package processes remain, or no pre-Stop observation was captured.");
+            await RequireOwned("cleanup-stopped-installation-retained");
+            var stopTransitionProved = stopBefore!.Length > 0;
+            await Ledger(stopTransitionProved ? "STOP-EFFECT-VERIFIED-INSTALLATION-RETAINED" : "ALREADY-STOPPED-INSTALLATION-RETAINED");
+            await Execute("cleanup-uninstall", ApplicationOperation.Uninstall);
+            Require(!await PackageObserved("cleanup-uninstalled-all-users", false) && !await PackageObserved("cleanup-uninstalled-retained", true), "Uninstall did not remove the exact all-users package and retained records.");
+            Require(PackageProcesses(await Read("cleanup-uninstalled-processes", "ps -A -o PID,NAME")).Length == 0, "Exact package processes remain after uninstall.");
+            var after = await Execute("cleanup-list-after", ApplicationOperation.List);
+            Require(after.Applications is not null && !after.Applications.Any(app => app.PackageName == Package), "Shared list still contains the uninstalled package.");
+            await RuntimeIdentity("cleanup-final");
+            await ApkIdentity("cleanup-final-apk-check");
+            await Step("cleanup-final-source-check", async () =>
+            {
+                Require(await HashFile(ledgerInput!, ct) == OwnedSourceSha256, "Source ledger changed during owned cleanup.");
+                return new { sourceSha256 = OwnedSourceSha256, sourceRunId = source.RunId, sourceUnchanged = true };
+            });
+            owned = false;
+            await Ledger("UNINSTALL-VERIFIED");
+            ownedCleanupResult = new { level = "SHARED-BATCH-AND-BACKEND-NOT-GUI", sourceRunId = source.RunId, sourceSha256 = OwnedSourceSha256,
+                sourceDeviceGeneration = source.Device.Generation, sourceLdGeneration = source.LdGeneration, ownershipProof = ownedPackage,
+                stopBefore, stopAfter, stopTransitionProved, stopObservation = stopTransitionProved ? "TERMINATED-OBSERVED-PACKAGE-PROCESSES" : "ALREADY-STOPPED-IDEMPOTENT-NO-TRANSITION-PROVED",
+                uninstallObserved = true, install = "NOT-RUN", start = "NOT-RUN", permissionGrantOperations = "NOT-RUN", currentGui = "NOT-RUN", originalLifecycleFailure = "UNCHANGED", retries = 0, automaticCleanup = false };
+        }
+
         try
         {
             Require(OperatingSystem.IsWindows(), "Existing ADB owner preflight requires Windows.");
@@ -21870,15 +21957,29 @@ internal static class ApplicationPreflightAcceptance
                 await File.WriteAllBytesAsync(Path.Combine(output, "target-input.json"), bytes);
                 target = JsonSerializer.Deserialize<Target>(bytes, JsonDefaults.Options) ?? throw new InvalidDataException("Empty target manifest.");
                 Validate(target);
-                if (lifecycle) apkLease = new FileStream(apkPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                if (ownedCleanup)
+                {
+                    Require(IsSha256(expectedLedgerSha!) && string.Equals(expectedLedgerSha, OwnedSourceSha256, StringComparison.OrdinalIgnoreCase), "Only the explicitly authorized source ledger SHA256 is accepted.");
+                    sourceLedgerLease = new FileStream(ledgerInput!, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    Require(sourceLedgerLease.Length is > 0 and <= 64 * 1024, "Source ledger must be 1..65536 bytes.");
+                    var sourceBytes = new byte[(int)sourceLedgerLease.Length];
+                    await sourceLedgerLease.ReadExactlyAsync(sourceBytes, ct);
+                    Require(Convert.ToHexString(SHA256.HashData(sourceBytes)) == OwnedSourceSha256, "Source ledger bytes do not match the authorized digest.");
+                    sourceLedger = JsonSerializer.Deserialize<SourceLedger>(sourceBytes, JsonDefaults.Options) ?? throw new InvalidDataException("Empty source ledger.");
+                    ValidateSource(sourceLedger, target, apkPath);
+                    sourceLedgerValidated = true;
+                    await File.WriteAllBytesAsync(Path.Combine(output, "source-ledger-input.json"), sourceBytes, ct);
+                }
+                if (mutableMode) apkLease = new FileStream(apkPath, FileMode.Open, FileAccess.Read, FileShare.Read);
                 Require(new FileInfo(apkPath).Length == ApkBytes && await HashFile(apkPath, ct) == ApkSha256, "Supplied CMFA APK length or SHA256 differs from the fixed candidate.");
-                return new { targetPath, targetSha256 = Convert.ToHexString(SHA256.HashData(bytes)), apkPath, apkBytes = ApkBytes, apkSha256 = ApkSha256, package = Package, expectedVersionCode = VersionCode, expectedVersionName = VersionName, signatureVerified = false, builds };
+                return new { targetPath, targetSha256 = Convert.ToHexString(SHA256.HashData(bytes)), apkPath, apkBytes = ApkBytes, apkSha256 = ApkSha256, package = Package, expectedVersionCode = VersionCode, expectedVersionName = VersionName, signatureVerified = false, builds,
+                    sourceLedgerPath = ledgerInput, sourceSha256 = ownedCleanup ? OwnedSourceSha256 : null, sourceRunId = sourceLedger?.RunId };
             });
             var expected = target!;
             var runner = new LdConsoleRunner(expected.ConsolePath, CommandSeconds);
             admissionService = new LdPlayerService(new ReadOnlyLdRunner(runner, async value => await Trace("ldconsole-trace.jsonl", value)));
             await Step("host-before-seed", () => HostIdentity("before-seed"));
-            var settings = new AppSettings { AdbAllowedSerials = [], LdSerialBindings = [], LdConsolePath = expected.ConsolePath, CommandTimeoutSeconds = lifecycle ? 60 : CommandSeconds, AutoStartApi = false };
+            var settings = new AppSettings { AdbAllowedSerials = [], LdSerialBindings = [], LdConsolePath = expected.ConsolePath, CommandTimeoutSeconds = mutableMode ? 60 : CommandSeconds, AutoStartApi = false };
             seed = new AdbDeviceBackend(settings);
             var registered = await Step("host-only-seed", () => seed.ListRegisteredDevicesAsync(ct));
             RequireRegistered(registered, expected);
@@ -21899,7 +22000,7 @@ internal static class ApplicationPreflightAcceptance
                     scope = "One real runtime; existing guarded discovery also reads getprop, wm size, and dumpsys input before the explicit probes. Their raw shell streams are not exposed by MatrixRuntime; the resulting device snapshot and owned runtime logs are retained.",
                     host = new[] { "ldconsole list2", "host:version", "host:devices-l", "TCP owner and VBox binding probes" },
                     guest = new[] { "getprop", "wm size", "dumpsys input" }, autoStartApi = false, externalAdbClient = false, guestWrites = false,
-                    lifecycleBatchReads = lifecycle ? "Shared ApplicationBatch.ListApps(true,true) also lists installed/system packages and runs dumpsys package for every listed package before/after operations. Raw internal shell success streams are not exposed by the existing backend; returned app lists, progress and original errors are retained." : null
+                    lifecycleBatchReads = mutableMode ? "Shared ApplicationBatch.ListApps(true,true) also lists installed/system packages and runs dumpsys package for every listed package before/after operations. Raw internal shell success streams are not exposed by the existing backend; returned app lists, progress and original errors are retained." : null
                 });
                 Exception? creationError = null;
                 try { runtime = await MatrixRuntime.CreateAsync(settings, Path.Combine(output, "runtime"), admissions: admissions, epochSource: seed, ct: ct); }
@@ -21947,11 +22048,12 @@ internal static class ApplicationPreflightAcceptance
                 return new { bytes = ApkBytes, sha256 = ApkSha256 };
             });
             if (lifecycle) await Lifecycle(nativeArm64, sdk, boot, retained);
+            if (ownedCleanup) await OwnedCleanup();
         }
         catch (Exception ex)
         {
             failure = ex;
-            if (lifecycle) await Ledger(installAttempted ? "PENDING-MANUAL-REVIEW-NO-AUTOMATIC-CLEANUP" : "FAILED-BEFORE-INSTALL");
+            if (mutableMode) await Ledger(ownedCleanup || installAttempted ? "PENDING-MANUAL-REVIEW-NO-AUTOMATIC-CLEANUP" : "FAILED-BEFORE-INSTALL");
             var entry = new { id = "preflight", utc = DateTimeOffset.UtcNow, status = "FAIL", error = ex.ToString() };
             steps.Add(entry); await Trace("results.jsonl", entry);
         }
@@ -21966,18 +22068,35 @@ internal static class ApplicationPreflightAcceptance
             if (admissionService is not null) await Cleanup("admission-service", () => admissionService.DisposeAsync().AsTask());
             if (seed is not null) await Cleanup("host-only-seed", () => seed.DisposeAsync().AsTask());
             if (apkLease is not null) await Cleanup("apk-read-only-lease", () => apkLease.DisposeAsync().AsTask());
+            if (sourceLedgerLease is not null) await Cleanup("source-ledger-read-only-lease", () => sourceLedgerLease.DisposeAsync().AsTask());
             await Save("summary.json", new
             {
-                mode = lifecycle ? "application-lifecycle" : "application-preflight", status = failure is null && cleanupErrors.Count == 0 ? lifecycle ? "COMPLETED-SHARED-BACKEND-LIFECYCLE-NOT-GUI" : "COMPLETED-READ-ONLY" : "FAIL",
+                mode = ownedCleanup ? "application-owned-cleanup" : lifecycle ? "application-lifecycle" : "application-preflight", status = failure is null && cleanupErrors.Count == 0 ? ownedCleanup ? "COMPLETED-SHARED-BACKEND-OWNED-CLEANUP-NOT-GUI" : lifecycle ? "COMPLETED-SHARED-BACKEND-LIFECYCLE-NOT-GUI" : "COMPLETED-READ-ONLY" : "FAIL",
                 durationMs = clock.ElapsedMilliseconds, target, frozenDevice, frozenLdGeneration, builds, result, error = failure?.ToString(), cleanupErrors, steps,
-                limits = new { totalSeconds = lifecycle ? 600 : 180, commandSeconds = lifecycle ? 60 : CommandSeconds, recommendedOuterProcessSeconds = lifecycle ? 900 : 240, probeOutputBytes = MaximumReadBytes, transportStdoutBytes = AdbDeviceBackend.MaximumStdoutBytes, transportStderrBytes = AdbDeviceBackend.MaximumStderrBytes, automaticRetries = 0 },
+                limits = new { totalSeconds = mutableMode ? 600 : 180, commandSeconds = mutableMode ? 60 : CommandSeconds, recommendedOuterProcessSeconds = mutableMode ? 900 : 240, probeOutputBytes = MaximumReadBytes, transportStdoutBytes = AdbDeviceBackend.MaximumStdoutBytes, transportStderrBytes = AdbDeviceBackend.MaximumStderrBytes, automaticRetries = 0 },
                 guestWrites = writeAttempted, apiStarted = false, externalAdbClient = false, instanceLaunchQuitModify = false, installationAuthorized,
-                lifecycleResult, ledgerState = lifecycle ? ledgerState : null, installAttempted, owned, ownedPackage, automaticGuestCleanup = false
+                lifecycleResult, ownedCleanupResult, ledgerState = mutableMode ? ledgerState : null, installAttempted, owned, ownedPackage, automaticGuestCleanup = false,
+                sourceLedgerPath = ledgerInput, sourceSha256 = ownedCleanup ? OwnedSourceSha256 : null, sourceRunId = sourceLedger?.RunId, sourceLedgerValidated
             });
         }
         if (failure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         if (cleanupErrors.Count > 0) throw new IOException("Preflight resource cleanup failed; see summary.json.");
-        Console.WriteLine(lifecycle ? "COMPLETED shared application backend lifecycle; current GUI remains NOT-RUN." : "COMPLETED-READ-ONLY application-preflight; installation remains unauthorized.");
+        Console.WriteLine(ownedCleanup ? "COMPLETED shared application backend owned cleanup; original lifecycle failure and current GUI remain unchanged." : lifecycle ? "COMPLETED shared application backend lifecycle; current GUI remains NOT-RUN." : "COMPLETED-READ-ONLY application-preflight; installation remains unauthorized.");
+    }
+
+    private static void ValidateSource(SourceLedger source, Target target, string apkPath)
+    {
+        Require(Guid.TryParseExact(source.RunId, "N", out var id) && id != Guid.Empty, "Source runId must be a nonempty N-format GUID.");
+        Require(source.State == "PENDING-MANUAL-REVIEW-NO-AUTOMATIC-CLEANUP" && source.Owned && source.InstallAttempted && !source.AutomaticCleanup && source.ManualReviewRequired
+            && source.Package == Package && source.Level == "SHARED-BATCH-AND-BACKEND-NOT-GUI", "Source ledger is not the authorized pending owned installation.");
+        Require(source.Target == target, "Every source target field must equal the current manifest before any host operation.");
+        Require(source.Device is not null && source.Device.Serial == target.Serial && source.Device.TransportId == target.TransportId && source.Device.Online
+            && source.Device.Generation > 0 && source.LdGeneration > 0, "Source device serial/transport or source generation proof is invalid.");
+        Require(source.ApkPath == apkPath && source.ApkSha256 == ApkSha256, "Source APK path or digest differs from the fixed input.");
+        var package = source.OwnedPackage;
+        Require(package is not null && package.VersionCode == VersionCode && package.VersionName == VersionName && package.CodePath.StartsWith("/data/app/", StringComparison.Ordinal)
+            && !package.CodePath.Any(char.IsWhiteSpace) && !package.CodePath.Any(char.IsControl) && package.PackageManagerPath == package.CodePath + "/base.apk",
+            "Source package does not have the exact version and non-system codePath/base.apk proof.");
     }
 
     private static void Validate(Target target)
@@ -22097,7 +22216,7 @@ internal static class ApplicationPreflightAcceptance
 
     // Keep the shared batch implementation and real backend, but guard the actual mutation call after its list reads.
     private sealed class LifecycleBackend(IDeviceBackend backend, string serial, string apkPath, Func<ApplicationOperation, Task> authorize,
-        Func<object, Task> trace, CancellationToken budget) : IDeviceBackend
+        Func<object, Task> trace, CancellationToken budget, bool cleanupOnly = false) : IDeviceBackend
     {
         private void Target(string actual) => Require(actual == serial, "Lifecycle backend cannot address another serial.");
         private async Task<T> Call<T>(string operation, Func<Task<T>> action, bool rawTextExposed = false)
@@ -22119,6 +22238,7 @@ internal static class ApplicationPreflightAcceptance
         }
         public async Task InstallAsync(string actual, string path, CancellationToken ct = default)
         {
+            Require(!cleanupOnly, "Owned cleanup cannot install.");
             Target(actual); Require(Path.GetFullPath(path) == apkPath, "Only the fixed leased APK path can be installed.");
             await authorize(ApplicationOperation.Install);
             await Call("Install", async () => { await backend.InstallAsync(actual, path, ct); return new { completed = true, stdoutNotExposedByExistingBackend = true }; });
@@ -22131,6 +22251,7 @@ internal static class ApplicationPreflightAcceptance
         }
         public async Task<string> StartAppAsync(string actual, string packageName, string? activity = null, CancellationToken ct = default)
         {
+            Require(!cleanupOnly, "Owned cleanup cannot start an application.");
             Target(actual); Require(packageName == Package && activity is null, "Only the owned package's backend-resolved launcher may start.");
             await authorize(ApplicationOperation.Start);
             return await Call("StartApp", () => backend.StartAppAsync(actual, packageName, activity, ct), rawTextExposed: true);
@@ -22171,6 +22292,24 @@ internal static class ApplicationPreflightAcceptance
             }
             catch (Exception ex) { await trace(new { utc = DateTimeOffset.UtcNow, command = "list2", durationMs = watch.ElapsedMilliseconds, error = ex.ToString() }); throw; }
         }
+    }
+
+    private sealed record SourceLedger
+    {
+        public required string RunId { get; init; }
+        public required string State { get; init; }
+        public required Target Target { get; init; }
+        public required DeviceInfo Device { get; init; }
+        public required long LdGeneration { get; init; }
+        public required string Package { get; init; }
+        public required string ApkPath { get; init; }
+        public required string ApkSha256 { get; init; }
+        public required bool InstallAttempted { get; init; }
+        public required bool Owned { get; init; }
+        public required OwnedPackageProof OwnedPackage { get; init; }
+        public required bool AutomaticCleanup { get; init; }
+        public required bool ManualReviewRequired { get; init; }
+        public required string Level { get; init; }
     }
 
     private sealed record Target
@@ -24767,6 +24906,12 @@ if (args.Length > 0 && args[0] == "--application-preflight")
 if (args.Length > 0 && args[0] == "--application-lifecycle")
 {
     try { await ApplicationPreflightAcceptance.RunLifecycleAsync(args.Skip(1).ToArray()); }
+    catch (Exception ex) { Console.Error.WriteLine(ex); Environment.ExitCode = 1; }
+    return;
+}
+if (args.Length > 0 && args[0] == "--application-owned-cleanup")
+{
+    try { await ApplicationPreflightAcceptance.RunOwnedCleanupAsync(args.Skip(1).ToArray()); }
     catch (Exception ex) { Console.Error.WriteLine(ex); Environment.ExitCode = 1; }
     return;
 }

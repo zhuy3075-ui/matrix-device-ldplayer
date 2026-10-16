@@ -1,6 +1,6 @@
 # A07：CMFA应用实机验收
 
-日期：2026-10-16。基线`01e5c10a7f14949b1124597479ea0b1a3611753d`。用户提供CMFA APK，继续AP-003与A13b；已完成单实例安装与启动请求，首次权限页阻断主页断言，停止/卸载和完整GUI未过。
+日期：2026-10-16。基线`01e5c10a7f14949b1124597479ea0b1a3611753d`。用户提供CMFA APK，继续AP-003与A13b；本页记录首轮单实例安装与启动请求，权限页阻断主页断言的原FAIL保持。后续已另立[本轮owned停止/卸载验证](A07_OWNED_CLEANUP.md)并通过，当前测试安装已移除；完整GUI与双实例仍未过。
 
 ## 范围与验收
 
@@ -74,12 +74,12 @@ r2独审发现前台正则的单词边界会把`evil.com.github.metacubex.clash.
 | 共享应用列表 | 完整List共6次，精确包与版本回读 | PASS共享层，非GUI行/进度条证明 |
 | 发起启动 | StartApp一次，Status: ok；精确主进程4564及background4590存在 | 请求/进程成立，不能外推主页成功 |
 | 前台主页 | topResumedActivity与ResumedActivity都是PermissionController GrantPermissionsActivity；CMFA MainActivityAlias为PAUSED | FAIL，首次运行权限请求页实际挡住；不是正则假红，不归产品Start缺陷 |
-| 截图、停止、卸载 | 原流程在主页断言后停止，均0次 | NOT-RUN，不补做、不计通过 |
+| 截图、停止、卸载 | 原l01流程在主页断言后停止，均0次 | l01仍NOT-RUN，不倒填后续独立用例结果 |
 
 没有点击授权、VPN、配置导入、代理修改或权限grant命令；不能从通用GrantPermissionsActivity推断具体请求了哪种权限，也不声称系统没有自动授予普通权限。应用自身联网未控制或验证。
 
-本轮安装保留在专用实例1，台账`owned=true`、`PENDING-MANUAL-REVIEW-NO-AUTOMATIC-CLEANUP`。后续不能重跑完整安装模式覆盖它；先基于本轮ledger重新验证身份/精确版本/路径，另立受限停止/卸载用例，或在可可靠观察的真实GUI中选择拒绝非必要权限后继续。保留本次FAIL，不放宽主页断言、不延长等待凑绿。当前Windows Computer Use抓取两次超时后已停止全部Windows输入，不用Win32/UIA/SendInput绕过；当前ApplicationsView实际选择、文件框、确认、进度和菜单仍未验。
+l01结束时安装保留在专用实例1，原台账`owned=true`、`PENDING-MANUAL-REVIEW-NO-AUTOMATIC-CLEANUP`。该历史台账未覆盖；后续通过实时重核后的[独立c01停止/卸载](A07_OWNED_CLEANUP.md)，当前安装已移除，新ledger为UNINSTALL-VERIFIED/owned=false。不重跑完整安装模式、不倒填本次FAIL、不放宽主页断言或延长等待凑绿。当前Windows Computer Use抓取两次超时后已停止全部Windows输入，不用Win32/UIA/SendInput绕过；当前ApplicationsView实际选择、文件框、确认、进度和菜单仍未验。
 
 五个子进程全终结、自有测试进程0；23实例目录采样字段前后相同（除本地generation）、ADB owner62248/birth/path/hash及transport8、146输入与主配置保持；不是所有实例数据或中间变化的绝对证明。原始步骤、PM、活动、批次进度和ledger在本机`.worktrees/app-preflight-verifier/artifacts/app-preflight-verifier/lifecycle-l01`，均不上传。正式summary SHA `C7F88DD881147EBC8AF58810E68A4D03E6D472584FB75645B4E472EDC74E5CA2`；ledger SHA `0D815ED2C25D0E2388B224EE1A49FB704D473E1982ACB9FACFB9B5B500B19AE6`；独立audit SHA `85BCAC09665F7692DC87E82AA02CBDBD10D0C5F10326C6099E8FFCFCA93007EF`。
 
-AP-003仍开放，AP-036跟踪首次权限页前置；实例2、双实例同步、实际应用GUI、停止卸载及最终版本双实例30分钟均不得由本轮关闭。提交仅正式测试及脱敏报告/清单，不包含APK、target/ledger原件、本机配置、依赖或原始证据，不合并发布。
+AP-003仍开放，AP-036跟踪首次权限页前置；单实例共享停止/卸载只由后续独立c01证明，实例2、双实例同步、实际应用GUI及最终版本双实例30分钟不得由本轮关闭。提交仅正式测试及脱敏报告/清单，不包含APK、target/ledger原件、本机配置、依赖或原始证据，不合并发布。

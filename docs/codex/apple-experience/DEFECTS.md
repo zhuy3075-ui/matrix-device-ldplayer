@@ -6,7 +6,7 @@
 |---|---|---|---|
 | AP-001 | P0/代码修复已独立离线验收；真实投屏待验 | 主控面板标示MainDevice A；原NativeView读取CurrentDevice B，红测确认错目标 | [A02报告](A02_MAIN_TARGET.md)：25守卫/149项/独立三尺寸及主仓最终1000通过；主控、运行时/代次/transport及进程PID/birth/path冻结；真实确认/启动/嵌入仍NOT-RUN，纳入A11 |
 | AP-002 | P1/已独立离线修复 | 最小尺寸四处不一致：XAML1000×700、smoke Clamp1000×700、设置Apply拒绝小尺寸、Normalize放大到1100×720 | A04四契约统一390×640，150项、六尺寸实际HWND/大小及390/768 Apply/Save/新Load通过；不扩张为全部固定页面或真实DPI通过 |
-| AP-003 | P1/单实例共享层安装已验，完整GUI/双实例仍缺 | 当前应用批次UI未有真实双实例安装/卸载完整证据，旧测试走过时ViewModel入口 | [CMFA首验](A07_CMFA_APPLICATIONS.md)真实共享安装及211035版本/路径已核；首次权限页挡住主页，停止/卸载NOT-RUN。非当前GUI证明，不关闭原验收 |
+| AP-003 | P1/单实例共享层安装/停止/卸载已验，完整GUI/双实例仍缺 | 当前应用批次UI未有真实双实例安装/卸载完整证据，旧测试走过时ViewModel入口 | [CMFA首验](A07_CMFA_APPLICATIONS.md)真实安装及211035版本/路径已核，原权限页主页FAIL不改；[独立owned清理](A07_OWNED_CLEANUP.md)c01实际停止两个进程、保留安装后卸载及列表/PM缺包。非当前GUI或双实例证明，不关闭原验收 |
 | AP-004 | P1/已独立离线修复 | 设备详情全选/清空/行勾选直接改群控；全局StatusFilter经统一目录影响监控卡片，关闭详情只Hide，筛选继续生效 | [A05a](A05_DEVICE_STATE.md)：实际红测4→0，删除VM全局筛选和详情第二套群控；列表局部筛选、监控独立。150项、三桌面每73专项/209外观/25守卫、六公共shell通过；真实视频连续性仍NOT-RUN |
 | AP-005 | P1/开放 | 节点/截屏/应用/工具/设置/监控固定宽栏与固定弹窗，窄屏不可达 | A04..A10逐页重排与六尺寸真实路径；不整页缩放或藏功能 |
 | AP-006 | P1/证据缺口 | 原控件审计仅OBSERVED-NOT-EXERCISED，遗漏菜单/模态/画布/树/虚拟行等 | CONTROL_CATALOG补充S项，逐控件效果测试，不用控件数代表覆盖率 |
@@ -44,7 +44,7 @@
 | AP-033 | P2/输入源缺失已取证，间歇成因仍未知 | 旧coordinate-route在RaiseEvent前失败；[诊断p01](AP033_INPUT_DIAGNOSTICS.md)三快照均ActiveSource/Captured/DirectlyOver=null、目标源有效；after-set OS和直接映射命中Image，之后OS移动、WPF仍屏幕零点 | p01独立150过、GUI FAIL，旧19/18过、截屏9PASS1FAIL/10清理，其后NOT-RUN；该轮root未重跑。49+仅日志不变断言。后续A07b1独立及主仓完整smoke实际通过，仍不证明输入源成因已修。不归因操作者、不做坐标生产修复、不并同AP-028，不把一次绿当关闭依据 |
 | AP-034 | P1/脚本与传输恢复已独立离线修复，API释放仍开放 | pending在CanManage之前清除；原12例7真红证明脚本/稳定Push跨原Tick后真实释放和VM通知仍无List，API计数无结束通知另项 | [A07b1](A07_APPLICATION_PENDING.md)单页7+/3-；独立及主仓各新12/310/12清理、150项/0警告错误、旧七套/原应用/12页完整过。保持350ms和全部身份/活动门禁，不循环重试。空选/离页/Close及最终目标通过；不冒称API释放、正文响应式、Android或所有自动刷新均完成 |
 | AP-035 | P1/已独立及主仓离线修复 | 原db252/journal260初始化SQLite14已复现；新正式原代码152/158有6真红。原生路径未扩展；首修复验证还遭旧产物，PDB核原源后保留该失败 | [A13报告](A13_SQLITE_PATH.md)：唯一产品主库/备份Windows扩展路径，原位置/事务不变。有效独立158/51.43秒、主仓158/51.76秒且PDB三源一致，主仓四普通长路径CLI通过；迁移/拒绝/文件释放覆盖。完整GUI/AP-033、UNC、非Windows及真实双实例不由本项关闭 |
-| AP-036 | P1/实机验收前置阻断，非产品缺陷定论 | 新装CMFA已取得精确包进程，但Android权限请求页占前台，主页效果断言真实FAIL | [CMFA首验](A07_CMFA_APPLICATIONS.md)保留l01 FAIL与owned台账，未授权限、停止或卸载。推荐可靠观察后拒绝非必要权限，或基于冻结owned证明另立受限停止/卸载；不重装覆盖、不自动清包或把权限页当主页 |
+| AP-036 | P1/实机验收前置阻断，非产品缺陷定论 | 新装CMFA已取得精确包进程，但Android权限请求页占前台，主页效果断言真实FAIL | [CMFA首验](A07_CMFA_APPLICATIONS.md)保留l01 FAIL及原ledger；后续[独立c01](A07_OWNED_CLEANUP.md)停止/卸载成功不解决或关闭主页前置。当前测试安装已移除，未授权限/VPN，未重跑启动；恢复可靠GUI观察后另测，不把权限页当主页 |
 
 ## 修复记录规则
 
