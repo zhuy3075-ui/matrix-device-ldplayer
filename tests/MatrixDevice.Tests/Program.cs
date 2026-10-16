@@ -894,6 +894,7 @@ if (liveIndex >= 0)
 ScriptParameterTests.Register(Test);
 ScriptJobTests.Register(Test);
 DeviceWriteTests.Register(Test);
+ApiStartupTests.Register(Test);
 
 var failures = 0; var totalTimer = Stopwatch.StartNew();
 foreach (var (name, run) in tests)

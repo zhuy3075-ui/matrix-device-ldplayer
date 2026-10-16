@@ -19,6 +19,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
     private readonly Dictionary<int, DateTimeOffset> _cooldown = [];
     private int _basicPort;
     private int _automatorPort;
+    private bool gatewayRollbackPending;
     private int activeRequests;
     public bool HasActiveRequests => Volatile.Read(ref activeRequests) != 0;
     public event EventHandler? RequestsDrained;
@@ -58,42 +59,81 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
     public async Task StartBasicAsync(int port, CancellationToken ct = default)
     {
         await _lifecycle.WaitAsync(ct);
-        try
-        {
-            if (_basic is not null)
-            {
-                if (_basicPort != port) throw new DeviceException("Stop the basic gateway before changing its port");
-                return;
-            }
-            ValidatePort(port);
-            if (_automatorPort == port || _devices.Values.Any(x => x.Port == port)) throw new DeviceException("Port already reserved: " + port);
-            var app = CreateServer(port);
-            app.Run(context => TrackRequestAsync(() => HandleBasicGatewayAsync(context, port)));
-            await StartServerAsync(app, ct);
-            _basic = app;
-            _basicPort = port;
-        }
+        try { _ = await StartBasicCoreAsync(port, ct); }
         finally { _lifecycle.Release(); }
     }
     public async Task StartAutomatorAsync(int port, CancellationToken ct = default)
     {
         await _lifecycle.WaitAsync(ct);
+        try { await StartAutomatorCoreAsync(port, ct); }
+        finally { _lifecycle.Release(); }
+    }
+    public async Task StartGatewaysAsync(int basicPort, int automatorPort, CancellationToken ct = default)
+    {
+        await _lifecycle.WaitAsync(ct);
         try
         {
-            if (_automator is not null)
+            WebApplication? newBasic = null;
+            try
             {
-                if (_automatorPort != port) throw new DeviceException("Stop Automator before changing its port");
-                return;
+                newBasic = await StartBasicCoreAsync(basicPort, ct);
+                ct.ThrowIfCancellationRequested();
+                await StartAutomatorCoreAsync(automatorPort, ct);
             }
-            ValidatePort(port);
-            if (_basicPort == port || _devices.Values.Any(x => x.Port == port)) throw new DeviceException("Port already reserved: " + port);
-            var app = CreateServer(port);
-            app.Run(context => TrackRequestAsync(() => HandleAutomatorAsync(context)));
-            await StartServerAsync(app, ct);
-            _automator = app;
-            _automatorPort = port;
+            catch (Exception startError)
+            {
+                List<Exception> errors = [startError];
+                if (newBasic is not null)
+                {
+                    try { await newBasic.StopAsync(CancellationToken.None); }
+                    catch (Exception error) { errors.Add(error); }
+                    var disposed = false;
+                    try { await newBasic.DisposeAsync(); disposed = true; }
+                    catch (Exception error) { gatewayRollbackPending = true; errors.Add(error); }
+                    if (disposed && ReferenceEquals(_basic, newBasic)) { _basic = null; _basicPort = 0; }
+                }
+                if (errors.Count > 1) throw new AggregateException("Gateway startup failed and rollback cleanup also failed", errors);
+                throw;
+            }
         }
         finally { _lifecycle.Release(); }
+    }
+    private async Task<WebApplication?> StartBasicCoreAsync(int port, CancellationToken ct)
+    {
+        RequireGatewayStartAvailable();
+        if (_basic is not null)
+        {
+            if (_basicPort != port) throw new DeviceException("Stop the basic gateway before changing its port");
+            return null;
+        }
+        ValidatePort(port);
+        if (_automatorPort == port || _devices.Values.Any(x => x.Port == port)) throw new DeviceException("Port already reserved: " + port);
+        var app = CreateServer(port);
+        app.Run(context => TrackRequestAsync(() => HandleBasicGatewayAsync(context, port)));
+        await StartServerAsync(app, ct);
+        _basic = app;
+        _basicPort = port;
+        return app;
+    }
+    private async Task StartAutomatorCoreAsync(int port, CancellationToken ct)
+    {
+        RequireGatewayStartAvailable();
+        if (_automator is not null)
+        {
+            if (_automatorPort != port) throw new DeviceException("Stop Automator before changing its port");
+            return;
+        }
+        ValidatePort(port);
+        if (_basicPort == port || _devices.Values.Any(x => x.Port == port)) throw new DeviceException("Port already reserved: " + port);
+        var app = CreateServer(port);
+        app.Run(context => TrackRequestAsync(() => HandleAutomatorAsync(context)));
+        await StartServerAsync(app, ct);
+        _automator = app;
+        _automatorPort = port;
+    }
+    private void RequireGatewayStartAvailable()
+    {
+        if (gatewayRollbackPending) throw new DeviceException("上次网关回滚清理未完成，请先停止 API 服务，再重试启动。", 409, 1003);
     }
     public async Task<int> StartDeviceAsync(string serial, CancellationToken ct = default)
     {
@@ -158,6 +198,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             _basic = null;
             _automator = null;
             _basicPort = _automatorPort = 0;
+            gatewayRollbackPending = false;
             if (errors.Count > 0) throw new AggregateException("API shutdown errors", errors);
         }
         finally { _lifecycle.Release(); }
@@ -339,7 +380,12 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
     private static async Task StartServerAsync(WebApplication app, CancellationToken ct)
     {
         try { await app.StartAsync(ct); }
-        catch { await app.DisposeAsync(); throw; }
+        catch (Exception startError)
+        {
+            try { await app.DisposeAsync(); }
+            catch (Exception cleanupError) { throw new AggregateException("Server startup failed and cleanup also failed", startError, cleanupError); }
+            throw;
+        }
     }
     private static void ValidatePort(int port)
     {

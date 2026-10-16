@@ -1,5 +1,12 @@
 # 当前目标阶段记录
 
+## 2026-10-17 / A09b1接口启动一致性
+
+- Goal/Context：上轮A09a已推6bad800，属于progress，不重复测试或交付；从接口页职责和Host调用链发现启动失败会全Stop，优先修运行可靠性，保留API/Tools布局和VM余项。
+- Decision/Files：只改两份Host，在同一生命周期锁内协调双网关；冻结一份Settings端口，失败仅回滚本次具体监听，原错误及清理错误保真，未知清理状态禁止误幂等。正式新增ApiStartupTests并在原225后注册10例，不改原断言、HTTP契约或真实服务。
+- Verification：旧生产原225过，新10为3PASS/7纯PRODUCT，含补启/端口不匹配/预取消误停旧服务及并发半套。相同夹具独立和主仓各235/235，MCP14/13NOT-RUN，四源实际PDB、3child6raw和10cleanup/104Task终态；主仓executionCF355C78…D2D9D51，原红及三套255冻结产物保留。完整步骤、边界和证据见[报告](codex/apple-experience/A09_API_STARTUP.md)。
+- Next/Risks：必要exec全终态，独立及主仓有限终审通过；后续仅文档与三清单/包、精确13路径审和原private feature单项push。不能把预取消当中途取消、观察性并发当全部交错；释放异常/在途HTTP跨回滚、VM失败刷新、API/Tools正文、GUI/DPI/实机与最终双30分钟仍开放，完整目标及约13工作块不减成局部任务。
+
 ## 2026-10-17 / A09a设置工作区
 
 - Goal/Context：上一条进度回复本身不算开发完成；从bc471bf继续设置保存与六尺寸可达性，先读Store/Runtime约束，分离生产、页面、夹具及独立审查，不使用CODEBRAIN或真实配置。

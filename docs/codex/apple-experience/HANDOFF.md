@@ -2,7 +2,16 @@
 
 更新：2026-10-17。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 最新执行：A09a设置工作区
+## 最新执行：A09b1接口启动一致性
+
+- 上轮A09a已实际提交推送`6bad80060ac0be5237d6ce15b844131c0957939b`，feature同值/test49e471不变，回执`artifacts/settings-workspace/push-complete.json`。下方A09a待交付仅为历史，不重复执行。
+- 本轮[A09b1](A09_API_STARTUP.md)仅Host事务和公开API测试：独立`api-startup-fix`两源BF1C/B78D，`api-startup-tests`两源73EE/FE66，均冻结并精确主仓集成。VM失败刷新、API/Tools正文及原生交互继续后继，不把窄修复当完整页面验收。
+- `api-startup-verifier/artifacts/api-startup/red-r01`已获独审：原225过，新10为3PASS/7纯PRODUCT，10cleanup/77Task终态，MCP14/13NOT-RUN、4PDB和255current/frozen通过；execution2B3E…1A9F8。旧红多在状态断言先停，未到达的后置HTTP不计实测；并发只知两Running不等，不猜哪端或交错。
+- 相同测试/runner B684下候选`green-r01`获独审，主仓`main-r01`亦已实际终态0：两轮各原225+10全PASS，10cleanup/104Task终态、3child6raw及4PDB通过，MCP14/13NOT-RUN。主仓executionCF355C78FD61B88CFFBC36016586A3B29371D9AB672E0EB0058052457D2D9D51；结构化unit11E579D3…FC192同候选，实际raw及PID为新生成，不是复用执行。根已核本轮255current/frozen、两树HEAD/index和保护；主仓Build68920/25.773秒、unit59888/57.005秒、MCP47936/32.129秒，均自然0。
+- 全部必要exec均终态，主仓已获独立有限终审；下一门仅六文档与三生成清单/完整包核对、精确13路径index审和同private feature push。不要再Build或重跑红绿；main旧255已合法重建，不要求等于上轮bin。实际是否已推送读Git及`artifacts/api-startup/push-complete.json`，没有回执不先称交付。
+- 预取消不等中途取消，并发样本不等全部交错；rollback释放故障/并发Dispose、GUI/实机/DPI和最终双30分钟仍未验。主仓文档WIP可读，正式源码未提交前不宣称已交付；原13工作块及完整goal保持active。
+
+## 上轮执行：A09a设置工作区
 
 - 基线bc471bf，五源已按独立冻结精确集成：App7E438、MainE50C、VM4C7A、SettingsViewC023、Smoke50F78。仅保存校验/同Editor回填/逐轴几何、原页面重排与正式验收；Store/共享主题/Build.ps1/真实配置不改。
 - [设置报告](A09_SETTINGS_WORKSPACE.md)记录所有原失败。旧r03实际4PASS/12PRODUCT；候选green1为PDB失配旧产物、green2为真实390×640长JSON红，不能混同或覆盖。最终独立green3和主仓main1各225、MCP14/13NOTRUN、三拒参、16PASS/3066检查/1621任务终态与实际五源PDB通过；7直接自有进程/14流全排空，无kill/pending/保留/清理错，窗口0。主仓execution0865CA97…FE6B1F，原件artifacts/settings-workspace/main-r01。

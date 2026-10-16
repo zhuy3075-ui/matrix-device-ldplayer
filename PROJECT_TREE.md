@@ -31,6 +31,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- A07_TOOLTIP_DIAGNOSTICS.md
 |   |   |   |-- A08_SCRIPT_FORMAT.md
 |   |   |   |-- A08_SCRIPT_WORKSPACE.md
+|   |   |   |-- A09_API_STARTUP.md
 |   |   |   |-- A09_SETTINGS_WORKSPACE.md
 |   |   |   |-- A13_APPLICATION_GUI.md
 |   |   |   |-- A13_DUAL_INSTANCE_SYNC.md
@@ -408,6 +409,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- StartupRejections.cs
 |   |   +-- StdioSession.cs
 |   +-- MatrixDevice.Tests/
+|       |-- ApiStartupTests.cs
 |       |-- ApplicationBatchTests.cs
 |       |-- ApplicationPreflightAcceptance.cs
 |       |-- CatalogPathTests.cs

@@ -239,13 +239,9 @@ public sealed class MatrixRuntime : IAsyncDisposable
     }).ToArray();
     public async Task StartApisAsync(CancellationToken ct = default)
     {
-        try
-        {
-            await Api.StartBasicAsync(Settings.BasicApiPort, ct);
-            await Api.StartAutomatorAsync(Settings.AutomatorApiPort, ct);
-            ApiStartupError = null;
-        }
-        catch { await Api.StopAsync(CancellationToken.None); throw; }
+        var settings = Settings;
+        await Api.StartGatewaysAsync(settings.BasicApiPort, settings.AutomatorApiPort, ct);
+        ApiStartupError = null;
     }
     public Task StopApisAsync(CancellationToken ct = default) => Api.StopAsync(ct);
     public async ValueTask DisposeAsync()
