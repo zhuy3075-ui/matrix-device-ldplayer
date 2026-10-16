@@ -1,5 +1,12 @@
 # 当前目标阶段记录
 
+## 2026-10-17 / A09b2接口工作区
+
+- Goal/Context：上一接口启动修复已推29e4037，不重复交付；继续原接口页控件、失败反馈、请求归属与六尺寸正文，保留同一Runtime、五命令和六列，不操作真实设备、代理或账号。
+- Decision/Files：仅VM、ApiView、App严格Demo入口及新正式ApiWorkspaceSmoke。全停包含device-only，已有目标禁重复启用，四操作finally刷新部分成功；请求冻结上下文及单调revision，局部禁代理/重定向、保30秒和本机端口。原控件重排、有限多行区及完整字段提示，无Host/协议/共享主题变更。
+- Verification：r01十二前置错、r02两错误判据和候选Green-r01九过三阅读失败均保留，三次窄夹具修正不修改生产来迁就。最终同r04夹具旧生产1PASS/11PRODUCT；独立及主仓各原235、MCP14/13NOTRUN、三拒参、四PDB、12PASS/1385检查/1646Task终态及十二唯一Shutdown，5直系子进程/10原流均终态，无残留。主仓execution60F7683F…9B5800，详见[完整记录](codex/apple-experience/A09_API_WORKSPACE.md)；六PNG仅自有Shell渲染，非物理GUI/DPI证据。
+- Next/Risks：必要exec均已终态；完成文档、三源码清单/完整包与精确13路径独审后推原private feature，以Git/回执为准，不合并发布。真实应用GUI安装卸载、完整GUI/DPI、工具及其余页面、原生剪贴板/传输门/设备目标受控在途、RPA/MCP/抓包和最终双实例30分钟仍必需；约13工作块不因局部用例数自动扣减。
+
 ## 2026-10-17 / A09b1接口启动一致性
 
 - Goal/Context：上轮A09a已推6bad800，属于progress，不重复测试或交付；从接口页职责和Host调用链发现启动失败会全Stop，优先修运行可靠性，保留API/Tools布局和VM余项。

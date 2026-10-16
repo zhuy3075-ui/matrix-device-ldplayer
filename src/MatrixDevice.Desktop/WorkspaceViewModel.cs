@@ -77,8 +77,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         StopScriptCommand = Action(StopScripts, () => Targets().Any(row => ScriptBusy(row.Serial)));
         CancelScriptJobCommand = Action(CancelSelectedScriptJob, () => SelectedScriptJob?.CanCancel == true);
         StartApiCommand = Async(StartApisAsync, () => !Busy && (!runtime.Api.BasicRunning || !runtime.Api.AutomatorRunning));
-        StopApiCommand = Async(StopApisAsync, () => !Busy && (runtime.Api.BasicRunning || runtime.Api.AutomatorRunning));
-        StartDeviceApiCommand = Async(StartDeviceApisAsync, () => !Busy && Targets().Any() && Targets().All(row => row.Info.Online && !ScriptBusy(row.Serial)));
+        StopApiCommand = Async(StopApisAsync, () => !Busy && (runtime.Api.BasicRunning || runtime.Api.AutomatorRunning || runtime.Api.DevicePorts.Count > 0));
+        StartDeviceApiCommand = Async(StartDeviceApisAsync, () => !Busy && Targets().Any(row => !runtime.Api.DevicePorts.ContainsKey(row.Serial)) && Targets().All(row => row.Info.Online && !ScriptBusy(row.Serial)));
         StopDeviceApiCommand = Async(StopDeviceApisAsync, () => !Busy && Targets().Any(row => runtime.Api.DevicePorts.ContainsKey(row.Serial)));
         SaveMetadataCommand = Async(SaveMetadataAsync, () => !Busy && CurrentDevice is not null);
         SaveSettingsCommand = Async(SaveSettingsAsync, () => !Busy);
@@ -183,7 +183,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     public int WallColumns { get => wallColumns; set { Set(ref wallColumns, Math.Clamp(value, 5, 20)); WallChanged?.Invoke(); } }
     public string DeviceName { get => deviceName; set => Set(ref deviceName, value); }
     public string SettingsNotice { get => settingsNotice; private set => Set(ref settingsNotice, value); }
-    public string ApiSummary => $"普通接口：{(runtime.Api.RunningBasicPort is { } basic ? $"http://127.0.0.1:{basic}" : "未启动")}    自动化接口：{(runtime.Api.RunningAutomatorPort is { } automator ? $"http://127.0.0.1:{automator}" : "未启动")}";
+    public string ApiSummary => $"普通接口：{(runtime.Api.RunningBasicPort is { } basic ? $"http://127.0.0.1:{basic}" : "未启动")}    自动化接口：{(runtime.Api.RunningAutomatorPort is { } automator ? $"http://127.0.0.1:{automator}" : "未启动")}    设备接口：{runtime.Api.DevicePorts.Count}";
     public bool CanUseDevice() => !Busy && CurrentDevice?.Info.Online == true;
     public bool CanWriteDevice() => CanUseDevice() && !Transferring && !ScriptBusy(CurrentDevice!.Serial);
     public bool CanWriteTargets() => !Busy && !Transferring && Targets().Count > 0 && Targets().All(row => row.Info.Online && !ScriptBusy(row.Serial));
@@ -933,11 +933,37 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         return $"{entry.Timestamp:HH:mm:ss}  {message}";
     }
 
-    public Task StartApisAsync() => ExecuteAsync("启动 API", async () => { await runtime.StartApisAsync(CancellationToken.None); RefreshApiRows(); });
-    public Task StopApisAsync() => ExecuteAsync("停止 API", async () => { await runtime.StopApisAsync(CancellationToken.None); RefreshApiRows(); });
-    private Task StartDeviceApisAsync() => ExecuteAsync("启动设备 API", async () => { foreach (var row in RequireTargets()) await runtime.Api.StartDeviceAsync(row.Serial, CancellationToken.None); RefreshApiRows(); });
-    private Task StopDeviceApisAsync() => ExecuteAsync("停止设备 API", async () => { foreach (var row in Targets()) await runtime.Api.StopDeviceAsync(row.Serial, CancellationToken.None); RefreshApiRows(); });
-    private void RefreshApiRows() { foreach (var row in Devices) row.ApiAddress = runtime.Api.DevicePorts.TryGetValue(row.Serial, out var port) ? $"http://127.0.0.1:{port}" : "未启动"; Changed(nameof(ApiSummary)); RefreshCommands(); }
+    public Task StartApisAsync() => ExecuteAsync("启动 API", async () =>
+    {
+        try { await runtime.StartApisAsync(CancellationToken.None); }
+        finally { RefreshApiRows(); }
+    });
+
+    public Task StopApisAsync() => ExecuteAsync("停止 API", async () =>
+    {
+        try { await runtime.StopApisAsync(CancellationToken.None); }
+        finally { RefreshApiRows(); }
+    });
+
+    private Task StartDeviceApisAsync() => ExecuteAsync("启动设备 API", async () =>
+    {
+        try { foreach (var row in RequireTargets()) await runtime.Api.StartDeviceAsync(row.Serial, CancellationToken.None); }
+        finally { RefreshApiRows(); }
+    });
+
+    private Task StopDeviceApisAsync() => ExecuteAsync("停止设备 API", async () =>
+    {
+        try { foreach (var row in Targets()) await runtime.Api.StopDeviceAsync(row.Serial, CancellationToken.None); }
+        finally { RefreshApiRows(); }
+    });
+
+    private void RefreshApiRows()
+    {
+        var ports = runtime.Api.DevicePorts;
+        foreach (var row in Devices) row.ApiAddress = ports.TryGetValue(row.Serial, out var port) ? $"http://127.0.0.1:{port}" : "未启动";
+        Changed(nameof(ApiSummary));
+        RefreshCommands();
+    }
 
     public Task SaveSettingsAsync() => ExecuteAsync("保存设置", async () =>
     {

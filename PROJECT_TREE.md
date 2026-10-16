@@ -32,6 +32,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- A08_SCRIPT_FORMAT.md
 |   |   |   |-- A08_SCRIPT_WORKSPACE.md
 |   |   |   |-- A09_API_STARTUP.md
+|   |   |   |-- A09_API_WORKSPACE.md
 |   |   |   |-- A09_SETTINGS_WORKSPACE.md
 |   |   |   |-- A13_APPLICATION_GUI.md
 |   |   |   |-- A13_DUAL_INSTANCE_SYNC.md
@@ -283,6 +284,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- UnifiedDeviceRow.cs
 |   |   |-- Views/
 |   |   |   |-- ApiView.cs
+|   |   |   |-- ApiWorkspaceSmoke.cs
 |   |   |   |-- AppleAppearanceSmoke.cs
 |   |   |   |-- ApplicationApiPendingSmoke.cs
 |   |   |   |-- ApplicationFeedbackSmoke.cs

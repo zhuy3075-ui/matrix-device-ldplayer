@@ -20,6 +20,8 @@
 
 双网关启动现在共享一次生命周期锁，失败仅撤回本次新建监听，不再停止之前已运行的网关或设备接口；原有端口冲突与取消错误保留。独立及主仓各235项通过（原225与新增10），并验证实际HTTP、端口保留、占用监听和重试；MCP Demo14通过、13项未验仍保留。见[接口启动记录](docs/codex/apple-experience/A09_API_STARTUP.md)。这是同Runtime、自有loopback的限域结果，不代表中途取消、回滚释放故障、全部并发交错、API页面GUI或真实设备验收完成。
 
+接口页保留原五个动作及六列表格，明确“停止全部接口”与按目标停止设备接口的职责；只有设备接口运行且未选中设备时仍能全停，全部目标已有接口时禁用重复启用。部分设备启用失败后如实刷新已成功设备的地址和数量。请求结果标注实际接口、端口和请求；参数、设备协议目标或实际端点变化后，旧在途结果不会回填，同端点目录刷新则保留合法结果。页面宽屏并列、窄屏上下滚读，长字段可查看完整提示。独立及主仓各235项和十二组自有WPF/Demo专项通过，含六尺寸、实际HTTP与五种在途变化；入口为`--verify-api-workspace --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`，详见[接口工作区记录](docs/codex/apple-experience/A09_API_WORKSPACE.md)。这是逻辑控件与本机接口验收，不代表物理GUI、DPI、实机、传输门或最终双实例30分钟均已通过。
+
 完整文件清单见 `PROJECT_TREE.md`；全部源码文本见 `SOURCE_BUNDLE.md`；对应文件摘要见 `SOURCE_MANIFEST.json`。这三个文件由 `tools/New-SourcePackage.ps1` 生成，源码 ZIP 位于 `artifacts/`。
 
 全面验收与界面重设计正在按[当前计划](plan.md)实施；目标、技术边界、视觉/命名及依赖任务分别见[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[UI规格](docs/UI_SPEC.md)、[任务表](docs/TASKS.md)。当前测试范围见[功能矩阵](docs/codex/apple-experience/TEST_MATRIX.md)、[逐控件目录](docs/codex/apple-experience/CONTROL_CATALOG.md)和[问题清单](docs/codex/apple-experience/DEFECTS.md)，进展见[阶段记录](docs/PROGRESS.md)。已修复主控A/当前B时投屏错目标的代码路径，增加主控身份与进程所有权守卫，见[A02独立离线验收](docs/codex/apple-experience/A02_MAIN_TARGET.md)；真实外部投屏仍待验。这是进行中的工作，149项和三尺寸Demo不代表本轮全功能/实机/窄屏已通过。

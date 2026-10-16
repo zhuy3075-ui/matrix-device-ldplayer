@@ -2,7 +2,17 @@
 
 更新：2026-10-17。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 最新执行：A09b1接口启动一致性
+## 最新执行：A09b2接口工作区
+
+- 上轮已实际提交推送29e4037298f6fac940d52df4cef72c19b6f21166，test49e471保持；旧A09b1“待交付”段落为历史，不重做。当前完整目标继续active。
+- 本轮仅四源：App72ECB、VM2C568、ApiView0760、正式ApiWorkspaceSmoke5AB076，主仓已按raw精确导入，其余188输入及旧29Smoke/原235断言未改；职责、假设、各轮问题与复验命令见[A09b2记录](A09_API_WORKSPACE.md)。没有改Host、真实配置或系统代理。
+- r01十二初始化前置失败不是产品红；r02错误判据、r03有效旧红及候选Green-r01九过三阅读失败均保留。最终r04只补原框的外层滚入动作，同夹具旧1PASS/11PRODUCT/1553Task，候选Green-r02及主仓各12PASS/1385检查/1646Task、原235/MCP14+13未验/三拒参/四PDB通过。原模板输入识别、长错误前置和本地化错误合同没有被生产改动迁就。
+- 主仓唯一session51113已自然0，Build6740/115.089秒、专项80484/7.560秒；execution60F7683FD25368E909868D5B2606EFF9E99AA00149A4E3723CA362EB439B5800，专项660E2051B0737E3122FDFA14F44A804B2C5865F4976FB52271C051BDDD231B6C。5child/10原流终态、12唯一Shutdown、pending/窗口/retained均0；不重Build。历史轮按各自frozen255/PDB/after裁定，后继合法重建不强求等旧current。
+- 用户配置和两英文PNG保持不提交，上一轮mainProofs五份artifact JSON保持（不是五份正式文档）；本轮正式文档可合法更新。源码包预检386源路径恰为tracked范围加新Smoke/新报告，不含额外ignored输入；三生成清单/ZIP须再逐项核对，AP021历史材料分类仍开放，不称源包隐私净化。
+- 下一门仅独立主仓终审、正式文档/源码清单核包和精确13路径index审、同private feature提交推送；实际是否已交付读Git及`artifacts/api-workspace/push-complete.json`。不合并/发布，不清理旧worktree。
+- Tools、其余设置/页面集成、完整GUI/DPI、真实应用GUI安装卸载、原生Clipboard/Transfer/设备目标受控在途/代理响应负例、RPA/MCP/抓包及最终双实例30分钟保持；自有WPF与Demo loopback不能替代这些范围，约13工作块/完整goal仍active。
+
+## 上轮执行：A09b1接口启动一致性
 
 - 上轮A09a已实际提交推送`6bad80060ac0be5237d6ce15b844131c0957939b`，feature同值/test49e471不变，回执`artifacts/settings-workspace/push-complete.json`。下方A09a待交付仅为历史，不重复执行。
 - 本轮[A09b1](A09_API_STARTUP.md)仅Host事务和公开API测试：独立`api-startup-fix`两源BF1C/B78D，`api-startup-tests`两源73EE/FE66，均冻结并精确主仓集成。VM失败刷新、API/Tools正文及原生交互继续后继，不把窄修复当完整页面验收。
