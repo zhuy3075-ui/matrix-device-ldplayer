@@ -40,3 +40,15 @@
 独立实读确认共同44、原Release46、七项源/配置/用户PNG保护全同；guards SHA `4D3367CBB647BADF7BD8C5206AA8E6D42409C03E5DAE615805DE2B57E05BE0BE`。实际模块磁盘SHA为coreclr `18EED8C40D05FC455BE95D12CC77EACF379265063B15CA84BD7A11CF29078A22`、wpfgfx `AD1C9DBBC2FCC2B274145727E8F04D5ADF49A0C9AE4D1A3C33EC969FCD5B4BF1`，不将其称为进程内存验签。
 
 结论只支持“同共同依赖与已观测运行时下，新构建初始设备正文可被官方Sky读取”。先前F18整树null仍保留，未证明其根因；此次点击错误也不能归因于新peer或纯环境。同一窗口的应用导航门仍未通过，AP042整体验收尚未获批准。独审允许考虑仅正文可达的私有开发分支源码交付，仍以文档/核包/index审核与实际Git为准，不外推官方控制已恢复。下一安全工作转A08脚本包边界，不重复本轮探测凑绿；全GUI、双实例同步、应用GUI安装卸载与最终30分钟等必需项保持开放。
+
+## AP045显式激活诊断
+
+在已交付9117fd2/Desktop D123上，按公开Sky文档与独审计划进行一次新的受控诊断：fresh 1000×700 Demo、同配置字段、关闭API/自动接入/Agent/同步，不触真实设备。新构建、路径、依赖及观察时间与原AP043不同，不是历史因果A/B。公开guidance本就支持false/true之后的索引点击，并称激活可选，因此未预设截图或激活是硬前提。
+
+唯一返回窗口111871806，显式activate工具成功；随后false/true读到200个总节点和真实设备正文，应用入口21唯一且未标禁用。activation原envelope SHA `5910ED0D4429F4C2F73C8BD407E1BE74660E53E43776E3068EFDB47FAFCE6C71`，state `8F42BC4E57F65AA92C7EB0370EC376F1291833F30B1DFDF87BFFEA748D4C0D3F`。这只证明工具调用返回成功，不另称已独立核验OS前台状态。
+
+经独审后只尝试一次最新21入口，先清空旧state、拟立即false/true重观测；click再次返回isError=true、`coordinate input geometry is unavailable`，tool原件 SHA `F6F35585DAA6AB122625E38D7766EFF0AF4CEB817F08DE1FA1F27EC1B868AA5E`。没有后置state或apps-after-click.json，切页效果未知；不能说未导航、零输入或无副作用。立即停，不截图、键盘、坐标、外部UIA、重试或生产猜测修补。
+
+精确PID36520/出生UTC 08:01:47.2727815Z/可执行文件/DLL/profile/--demo匹配后外部终止，owned-cleanup SHA `42927A3A14B4E9AFBFBDD39E27F8DAA0782AEA33F11E0C58A264D47B9D470D94`。同session66646父exit0/child-1、无timeout/error/cleanupErrors，双raw0B且完整；terminal SHA `5D83384B199D84BD795ED02F4224F89CBAFE2E4D0AB73DB302AD7702785255DF`。不称自然Close，原件在ignored `artifacts/activated-observation/New`。
+
+独审结论：显式激活成功及正文可读不足以使本次索引输入可用；不证明产品、工具或环境根因，不倒填原null/几何错误已解决。停止该GUI输入分支，等待受支持诊断能力或外部条件变化，不自动反复试验。当前真实GUI、应用导航/安装卸载及原完整验收仍开放；继续其它安全实现与验证，不把分支受阻当整个目标完成。

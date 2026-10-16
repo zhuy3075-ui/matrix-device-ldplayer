@@ -48,7 +48,7 @@
 | AP-037 | P1/应用布局有限域修复验过，关联补验保持 | 原应用固定双栏在390宽挤出操作，命中不足44；长字段/Tooltip阅读不完整 | [A07c](A07_APPLICATION_RESPONSIVE.md)/[A07d](A07_TOOLTIP_DIAGNOSTICS.md)原红保留；c02及主仓r01各158、新12/2890/12清理，六应用尺寸三表首中末/全列、取消/恢复/选择/焦点过，原17源Smoke链/12页过。限域独审批准开发分支交付，s01/AP041及真实双实例/GUI仍开放；不把共享Theme间接风险或全GUI缺口关闭 |
 | AP-038 | P1/七点模式误判已实证，最小测试修正验过 | 旧测量用Ideal、实际版本Tooltip为Display，143宽下30.48与17高度不一致 | [A07d](A07_TOOLTIP_DIAGNOSTICS.md)d01原5PASS7红保持，7图完整尾-long支持判据A。只改测量用实际mode，宽/font/DPI/高度predicate/+1不变；独立及主仓新12全过、各232诊断/error0/133图核。仅解释这七点，不扩大到全部Tooltip/DPI，旧失败不回填 |
 | AP-039 | P1/字形试验范围及输入已修正，主仓有限域验过 | c01在原Fonts.Count>20与全部历史Key当前字号=baseline×1.5合取处失败 | [A07d](A07_TOOLTIP_DIAGNOSTICS.md)原117失配保留；7248夹具首次setter本地覆盖+当前完整域判据后，c02与root-r01各12/2890/12清理过，当前505含344隐藏全登记/1.5/0缺失失配、历史128保留，末transform/SameCalls/glyph图过。非DPI/字体绑定保真，不推重置时点；s01/AP041与真实GUI仍开放 |
-| AP-040 | P2/已观察，待独立专项修正 | 读取应用后的批次摘要仍无条件包含“安装命令完成（包名未核验）0”，信息重复且易被理解成执行过安装 | c02自有glyph图及ApplicationsView原ApplicationBatchSummary证实该安装专属零计数字段总被拼接；本轮布局候选未改业务tail，不混入修复。后续按实际Operation/非零状态展示必要结果，并测试List/Install/混合失败取消，不因此否定本轮布局阅读或冒称安装发生 |
+| AP-040 | P2/摘要修复离线复验通过 | 读取应用后的摘要原无条件包含“安装命令完成（包名未核验）0”，易被误认为安装发生；实际6case中的4个纯产品红成立 | [专项](AP040_APPLICATION_FEEDBACK.md)仅非零CompletedUnverified保留原段；实现/独立/主仓各169及6case/14/AP042/3E通过，进度/失败/取消及未核验1保持。仅摘要修复，不解释列表空的原因或当GUI/实机安装验收 |
 | AP-041 | P1/报告子项已修，原指针负例未复验 | s01首device390×640的offline-reject未达OS/WPF指针一致前置，随后非有限Double使原JSON报告再次失败；受控诊断证明同代row Offline撤图但Visible时旧公式可非有限 | [报告出口](AP041_REPORT_RELIABILITY.md)同一实际writer红6PASS/8FAIL，局部double编码后原14类全PASS；独立与主仓各158及原3E几何/22Task/cleanup保持，8条预期stderr完整，FAIL/原异常/有限JSON不变，全局仍拒绝NaN。仅报告子项通过；原S01/11NOTRUN、AP019/020/033及实机仍开放，不推原具体坏字段或OS同因。下一独立阶段评估有效图像/有限坐标的后置定位合同，保留每个原Down/Up及零副作用断言，不整批跳负例 |
 
 ## 工作区无障碍补验
@@ -56,7 +56,7 @@
 | ID | 级别/状态 | 事实与边界 | 处理/后续 |
 |---|---|---|---|
 | AP-042 | P1/组件与初始正文可达通过，整体未验 | 旧无头Tab没有ItemsHost；实际红三阶段同根仅1节点，5个可视正文owner不可达。最小标准Pane peer后独立及主仓同根146→71→146、5owner与状态样式通过，旧158/14/3E保持；AP043证初始设备正文外部可读 | [规格与原件](AP042_WORKSPACE_ACCESSIBILITY.md)；独审允许考虑仅正文源码的开发分支限域交付，仍须核包/index审。隐藏Tab的UIA SelectionPattern变化已声明；导航门与原null不关闭，不标官方控制或全GUI恢复 |
-| AP-043 | P1/初始正文改善已证，外部导航缺口开放 | 首轮F18整树null原件保留；[受控对照](AP043_SKY_AB.md)共同44及实际CLR/WPF同，Old48总节点止空Tab、New200总节点含设备正文。New应用入口click报coordinate input geometry is unavailable/isError，无后置state，效果未知 | 立即停，不重试/截图恢复/输入绕过；两个自有进程精确externalKill、流完整无timeout。仅证初始读取，不归为纯环境或peer同因；应用导航/返回/正常Close未验，AP042完整交付未批准，转A08安全工作 |
+| AP-043 | P1/初始正文改善已证，外部导航缺口开放 | 首轮F18整树null保留；[对照及AP045](AP043_SKY_AB.md)旧48/新200总节点含正文；另已交付D123显式激活后仍唯一click几何错误、无后置state，效果未知 | 精确owned清理/流终态，无截图/替代/重试；停止该GUI输入分支，待受支持诊断或外部条件变化，不将工具/环境/peer定因。应用导航/返回/正常Close和全GUI未过，继续其它安全实现而非缩小目标 |
 | AP-044 | P1/格式边界已离线复验，GUI未验 | 自动化picker原列.json，但Load只接受ZIP；实际红六非法格式均抛原InvalidDataException/提示不明确，其余163项过。r01编译错误另存不算产品红 | [格式边界](A08_SCRIPT_FORMAT.md)仅ZIP构造格式异常转中文400/1007、picker去.json；实现/独立/主仓各169通过，合法ZIP资源及Demo Tap1、拒绝Tap0过。未扩大到Entries/解压错误或支持通用脚本；GUI/真实设备和完整A08/A14不由此通过 |
 
 ## 修复记录规则

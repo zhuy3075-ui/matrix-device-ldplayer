@@ -97,6 +97,7 @@ public partial class App : Application
             {
                 window.VerifyDeviceLayoutReportContract();
                 await window.VerifyWorkspaceAccessibilityAsync();
+                window.VerifyApplicationFeedbackContract();
                 await window.RunOfflineGeometryDiagnosticsAsync(e.Args); window.Close();
             }
             if (monitorLayoutVerification)

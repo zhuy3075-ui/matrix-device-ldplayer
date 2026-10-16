@@ -1,5 +1,13 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / AP040应用反馈与当前实机前置
+
+- Goal/Decision：不把“读取后安装完成0”误判为APK安装失败；仅在摘要存在非零CompletedUnverified时保留原安装段。App唯一同步hook/new纯合同夹具直接核原函数，旧业务不动；[规格](codex/apple-experience/AP040_APPLICATION_FEEDBACK.md)。
+- Verification：真实红4PRODUCT/2PASS，原169/14/AP042过；实现绿、独立及主仓新6均通过，原3E/23旧Smoke保持。root Build17600 exit0/77.126秒、169/51.69秒，mode35036 exit0/2.651秒；context/input保持，原8条预期报告错误stderr9842B保留，全部进程/流终态、无timeout。
+- Evidence：root execution EF2EADDA047A9DCDE0BC8289D3E47D4326A97DFB340B8636A5912F3B059CD080，6例summary C1BFA006D13AC462EE7C8E837B9065F99CBF8C124D4FD659A741887704F2140B；DLL61679572DF6C3D3242AE5FEA744B6EEE827ED580EC6645AB193D21CCD6404AA9。仅限摘要修复，待正式文档/核包/index独审再单独推私有feature，不预写成功。
+- Live/GUI：已交付9117版本的[当前只读17步](codex/apple-experience/A07_CMFA_APPLICATIONS.md)通过，1 Ready/transport8、2关闭，CMFA未观察到安装/保留，无写动作；不替代安装或双实例。AP045显式激活+200正文后唯一click仍几何错误，效果未知；精确owned清理、停GUI分支，见[记录](codex/apple-experience/AP043_SKY_AB.md)。
+- Next/Risks：AP044已实际推9117fd2，不重做；原全部GUI/安装卸载/双实例/最终30分钟及A08-A16未完成。下一阶段优先A14a明确版本化参数绑定与共享批次任务，保留旧ZIP，不猜Probability或执行任意脚本，最终GUI阻断仍单列，goal active。
+
 ## 2026-10-16 / A08a脚本包格式边界
 
 - Goal/Context：AP042仅正文源码改善已实际推送cf79fe3，远端同值、test49e4710不变；AP043导航缺口仍开放。本阶段从2ca独立树修复自动化picker宣称JSON而实际只接受ZIP的矛盾，不扩展脚本语言。

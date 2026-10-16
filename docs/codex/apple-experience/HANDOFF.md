@@ -2,7 +2,17 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 当前执行：A08a格式边界通过，待限域交付
+## 当前执行：AP040摘要通过，待限域交付
+
+- AP044已真实交付9117fd29fb0f6f9522112c645bd70da0e9b942a9，feature远端同值、test49e4710不变。回执artifacts/script-format-main/push-complete.json SHA05EA9C66F1EDD9D3A3F62D9FD9DE4F17423C3D2EE7491BE849CFF1B6913F5D7D，13路径/328源/331ZIP/165段已独审；不要按历史重做它。
+- AP040只改ApplicationsView摘要条件段，App在原14/AP042后加同步纯夹具hook、原Geometry仍后置；新6case直接调用实际formatter，不导航/后端/输入或造异步任务。作者红4PRODUCT/2PASS及全部输入/所记context保持；原169/14/AP042过，红Geometry NOTRUN。绿/独立/主仓均6PASS/原3E/23旧Smoke保持，详见[摘要规格](AP040_APPLICATION_FEEDBACK.md)。
+- 根三源码raw：View5CF61E97B40E90FF1187FD5E1E4C61D64149F058A2E2380B1596152C9D06ED40、App396FE3E0306618737E39CD6CF071B2176915C67430A9075D4709951135946370、fixtureE92A3FFE10B7373469D58C4505D81AD0F82C340278111726A7235758D7D9529D（与作者67C555仅CRLF/LF，规范化全文同，独立已实际编译同E92）。根session41366已terminal：Build17600 exit0/77.126秒、169/51.69秒，mode35036 exit0/2.651秒；execution EF2EADDA047A9DCDE0BC8289D3E47D4326A97DFB340B8636A5912F3B059CD080，6summary C1BFA006D13AC462EE7C8E837B9065F99CBF8C124D4FD659A741887704F2140B，DLL61679572DF6C3D3242AE5FEA744B6EEE827ED580EC6645AB193D21CCD6404AA9。原8预期错误stderr9842B保留、无timeout/清理错、全部流终态，不重跑。
+- 当前只读实机：9117版本既有CLI/正式preflight17实际通过，专用1 Ready/transport8、2关闭，server62248/epoch保持；APK AF7F05D8...A3753D未变，PM未见安装或保留。原始artifacts/current-readiness-20261016/已独审，不安装/启停/卸载/权限/VPN。日期wrapper误拒在启动前，类型保真后唯一CLI成功，不是ADB变化；[报告](A07_CMFA_APPLICATIONS.md)。
+- AP045官方激活成功、200总节点/正文可读，但唯一Apps21仍geometry不可用，无后置state，效果未知。PID36520精确externalKill、session66646终态/双流完整，不称正常Close；[原件记录](AP043_SKY_AB.md)。该GUI输入分支停止，未经受支持诊断或外部条件变化不再重试/截图/键盘/替代输入。它不阻止安全开发，也不把全GUI门算通过。
+- 下一门冻结12正式路径、完整核包/三生成与精确15 index独审后单功能推原私有feature；实际Git/回执决定状态，不预写成功或重复已交付。配置/两用户PNG/APK/SDK/二进制/本轮raw排除，历史AP021保持，不合并发布。全部必需exec/GUI已结束，锁root。
+- 后续重点A14a：当前参数只保存、不绑定步骤，Probability执行语义未知；暂无脚本HTTP/任务ID/逐任务身份及回传。推荐显式opt-in版本契约+stepIndex/field/parameterKey绑定、参数快照和共享作业服务，不执行任意代码。原“停止所选”按当前选择是旧语义，不能未经复现称旧功能bug；新批次按taskId取消须另实现。A08余项/A09-A16、AP041/S01/11NOTRUN/原AP019/020/033、双实例同步/当前GUI安装卸载/最终双实例30分钟及DPI仍必交付，goal active。
+
+## 历史：A08a格式边界通过，待限域交付
 
 - AP042已实际提交并推送cf79fe3cc0542407b496f9a4aecd685fe8be9ee9；feature远端同值，test49e4710不变。回执artifacts/workspace-accessibility-main/push-complete.json SHA142262C99C743F2D232BCA29E473ABABA3F3244E3067C9B7F9E70D3424A3459D，15路径/327源/330ZIP/165段已独审核。不要按下方历史重推该阶段；初始正文可达不是AP043导航或全GUI通过。
 - AP044两独立树从2ca固定起，root机械apply四文件到cf79，三源码raw均精确同：Service3A6A6C4DEEB53E15B8B6487FBEC6854F7CAB8CA6B142523CBCC58099DBED94F0、ScriptsView9B51882DA3AE05C24924D2C183E8F6AC3132D261E5ED04DA7699E604F9ADDD6B、Program00010907DEB9EAEB704FDBE7DB4C6F7D02A68521C26F46B5CC2455FDFEB19755。窄catch仅ZIP构造，不吞I/O/Entries/内层JSON/动作校验；picker仅去.json，不拒绝合法ZIP的该后缀或资源。详见[A08a](A08_SCRIPT_FORMAT.md)。

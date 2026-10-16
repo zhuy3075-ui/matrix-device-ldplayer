@@ -24,6 +24,8 @@
 
 当前A13补验：[AP-042](codex/apple-experience/AP042_WORKSPACE_ACCESSIBILITY.md)组件红绿及主仓通过，原158/14/3E保持；[AP-043](codex/apple-experience/AP043_SKY_AB.md)受控对照Old48/New200总节点，证初始设备正文可读且实际两runtime模块一致，但应用导航官方click报坐标几何不可用，无后置state，立即停测并精确清理。原整树null仍未定因，整体验收未过；独审允许考虑仅正文可达的开发分支源码交付，仍依文档/核包/index及实际Git，不宣称全GUI恢复。转独立A08格式小目标，不重跑探测凑绿；真实GUI、双实例同步、应用GUI安装卸载和最终双实例30分钟、A08-A16仍保持必交付。
 
+最新A13进展：[AP040摘要](codex/apple-experience/AP040_APPLICATION_FEEDBACK.md)真实4红/2绿后最小条件修正，实现/独立/主仓各169及新6/原14/AP042/3E通过，待限域交付门；AP044已实际推9117fd2，不重做。当前实例1正式只读17步通过、2关闭，不替代双实例。[AP045诊断](codex/apple-experience/AP043_SKY_AB.md)显式激活后仍输入几何错误、无后置state，停止该GUI输入分支，不再自动重试或推断根因。A14需真正完成参数绑定、批次身份/任务/取消/回传及受限接口，不将格式拒绝或旧逐serial调度当闭环；原完整验收门保持。
+
 执行规则：一项先复现/定义预期，再小改、全基线、页面/安全实机、独立verifier、文档/清单、commit/push；独立实现worktree不共享写同一文件。单个拒绝点最多3轮review-fix；需要额外权限或不明风险时停止该动作，记录并继续其他安全工作，不向用户反复提问。
 
 ## 新增任务执行顺序

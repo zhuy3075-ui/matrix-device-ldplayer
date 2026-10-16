@@ -364,5 +364,11 @@ public partial class MainWindow
         panel.Children.Add(new TextBox { Text = message, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, AcceptsReturn = true }); dialog.Content = panel; return ShowOwnedDialog(dialog, 560, 460) == true;
     }
     private static string ApplicationOperationCaption(ApplicationOperation operation) => operation switch { ApplicationOperation.List => "读取应用", ApplicationOperation.Install => "安装应用", ApplicationOperation.Uninstall => "卸载应用", ApplicationOperation.Start => "启动应用", ApplicationOperation.Stop => "停止应用", _ => "清除数据" };
-    private static string ApplicationBatchSummary(IEnumerable<ApplicationTaskRow> rows) => $"进度 {rows.Count(row => row.Terminal)}/{rows.Count()} · 已完成 {rows.Count(row => row.ResultState == ApplicationTaskState.Succeeded)} · 安装命令完成（包名未核验）{rows.Count(row => row.ResultState == ApplicationTaskState.CompletedUnverified)} · 失败 {rows.Count(row => row.ResultState == ApplicationTaskState.Failed)} · 取消 {rows.Count(row => row.ResultState == ApplicationTaskState.Cancelled)}";
+    private static string ApplicationBatchSummary(IEnumerable<ApplicationTaskRow> rows)
+    {
+        var unverified = rows.Count(row => row.ResultState == ApplicationTaskState.CompletedUnverified);
+        return $"进度 {rows.Count(row => row.Terminal)}/{rows.Count()} · 已完成 {rows.Count(row => row.ResultState == ApplicationTaskState.Succeeded)}"
+            + (unverified > 0 ? $" · 安装命令完成（包名未核验）{unverified}" : "")
+            + $" · 失败 {rows.Count(row => row.ResultState == ApplicationTaskState.Failed)} · 取消 {rows.Count(row => row.ResultState == ApplicationTaskState.Cancelled)}";
+    }
 }

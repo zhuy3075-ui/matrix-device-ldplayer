@@ -2,6 +2,14 @@
 
 日期：2026-10-16。基线`01e5c10a7f14949b1124597479ea0b1a3611753d`。用户提供CMFA APK，继续AP-003与A13b；本页记录首轮单实例安装与启动请求，权限页阻断主页断言的原FAIL保持。后续已另立[本轮owned停止/卸载验证](A07_OWNED_CLEANUP.md)并通过，当前测试安装已移除；完整GUI与双实例仍未过。
 
+## 当前只读前置复核
+
+2026-10-16在已交付9117fd2上重新读取实际状态：23台目录中仅专用实例1启动，实例2关闭；共享5037仍为既有62248及同一出生时刻/可执行摘要。现有产品CLI使用仅含既有实例1授权的独立配置，只读发现emulator-5556、Ready、transport8、Android14和1280×720，无发现错误。未启动API、模拟器或外部ADB客户端，原用户配置E4E33保持。
+
+沿用正式`--application-preflight`，按该时点新鲜PID/出生ticks/传输创建目标清单，17步全部通过；124条身份轨迹、38次list2、7条显式只读shell及逐项证据已独审，summary SHA `B3746C8585B53BA047F3C902E05F6FFF04A61ED6E084963D1C62E568EE5A0C58`。SDK34/boot1、ABI含arm64-v8a且宣告桥接，仅是兼容候选，不证明原生ARM硬件、签名或本轮安装。两次跨用户PM查询均未观察到已安装或保留的CMFA包，不证明所有磁盘残留为空。
+
+本次没有安装、应用启停、卸载、权限或VPN操作；原安装与进程启动实证仍有效，本次不替代GUI/双实例/最终30分钟验收。原始材料在ignored `artifacts/current-readiness-20261016`。最初wrapper的DateTime字符串转换丢失时区/精度，误拒发生在CLI启动前，已保留拒绝原件及补充说明；类型保真的ticks核实与实际当前server一致，只修正wrapper后执行一次CLI，不能把它误报为ADB服务变化。初始化内部getprop/wm size/dumpsys input的原成功流未由现有Runtime暴露，不宣称完整ADB线级捕获。
+
 ## 范围与验收
 
 1. 固定文件SHA、包名与版本，确认专用1/2的实际ABI、启动状态、PID/birth、ADB owner与transport；不从索引公式猜串号。
