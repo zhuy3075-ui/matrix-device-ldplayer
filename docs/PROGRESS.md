@@ -1,13 +1,42 @@
 # 当前目标阶段记录
 
+## 2026-10-17 / A15b测试机制复验与主仓集成
+
+- Context：上一用户状态回复本身不构成开发进展；重新核main ca6及原164输入逐文件一致、无运行中的Matrix程序后继续。此前两轮实际失败、独立终态审及全部raw保留，不重跑原209消除日志失败。
+- Verification：fixture-fix-r01实际outer0，build-client17140 exit0/2.298秒，client46168 exit0/32.185秒；14顶层、14真实OS-stdio会话、12raw拒绝子例通过。227调用对应原wire，13JobId全部终态；原stdin关闭、stdout/stderr与SDK排空、无强杀/残留/清理错。独审核186输入/102产物、PDB14、main164+46+3不变；execution38033BD70AE3BF287DD4DFDC547CA74B8A76B3E8AD52B70877A0B1C5A11DB636，summaryB12E0DD10E13C063C9A2E4EBB76A5673DBA87C601212196C35B807754937B9CF，仅批准进入主仓集成复验。
+- Files/Decision：13个server与9个test从冻结verifier精确复制，测试代码仅修summary所指清理文件名；solution加两工程，Build仅在原209成功后接官方客户端Demo专项，唯一fresh目录与ASCII证据标记。普通Build不运行MCP；不接真实Runtime，不改Desktop/guest/ADB/用户配置。README与策略样例说明开发入口及未完成范围。
+- Main verification：受审outer8C75AA26...31E6D3唯一实际运行，session73951 terminal0、Build85808自然0/113.515秒，原209 exact/51.92秒，3项既有编译警告/0错误；MCP14PASS/13NOTRUN/14会话、12拒绝子例及清理实际获独审。227调用/13终态JobId、80条原流记录、186输入/148新产物/PDB14/用户3与原失败保持；授权重建后Desktop46内9项差异已记录，不冒称旧bin未变。execution11321B64...84399AC/summary7C68EC01...FA7A2E/after44FF4D03...4226447，原件main artifacts/mcp-stdio-main/main-r01。
+- Next/Risks：已获准文档/核包门，下一步完整源码包、精确index独审及单功能private feature push，以实际Git回执为准。13类NOT-RUN、旧Stdio兼容失败、真实共享所有权/1与2、应用GUI/完整GUI/DPI/最终双30分钟及全RPA/抓包仍开放；全目标active，约13工作块未因局部通过扣减。
+
+## 2026-10-17 / A15b首轮实际协议与测试机制问题
+
+- Goal/Decision：前轮完成测试工具六项窄修、编译与冻结，属于progress；本轮独立静审后实际执行，不将编译计作完成。main仍ca6及原164输入/46编译物/用户3，不导入未通过候选，不操作真实实例、GUI、ADB或账号。
+- Verification：独立r04两locked restore和Build60528均0；Build78.265秒、原209名序精确/51.59秒。外层UTF8读取混合原日志失败，session64747 terminal1，原execution321461...BD2C及六raw保留。两独审只按字节一一映射抽ASCII PASS逐项核同，不声称全文解码；不重Build/209。已获审的续跑97A745...C6CD只核实际PDB14/compiled102/186源及保护，首次启动官方MCP客户端。
+- Actual：session89697 terminal1，client68420 exit1/47.393秒，外层原流终态、无root超时/强杀/retained、postflight null。P00十二raw真实负例自然1/无kill/pending/error，三malformed实际1048577/33/1085字节及精确诊断成立；九启动参数拒绝不创建Runtime。唯一正常会话收到2025-11-25握手及list6，未到capabilities/job即在DTO Schema门失败；后十二normal+原十三类共25NOTRUN。原件在独立verifier的continuation-r01，executionB7B404...395BF/summary0BDB8D...5F00A/after2DBE3D...275D8。
+- Defects：AP-053外层编码oracle已通过原件续审；AP-054默认STJ为SDK DTO写入线上缺失可选null，不能改领域JSON或删负例；AP-055 SDK Stdio Dispose等待进程而不关闭stdin，与relay等待EOF形成环。SDK45512 exit-1、relay/lifecycle缺，server64172事后missing不等自然清理。独立最终审拒绝MCP交付，PDB14、compiled102、候选186、main164+46+3均0变化，双方HEAD/index保持。
+- Next/Risks：只允许测试作者在独立树实施专用官方DTO序列化+实际raw Schema门，以及官方StreamClientTransport连接真实Process管道、唯一owner真实关闭stdin并核原任务/进程终态的测试修复；设计获有限独审，尚未编译/运行新机制。取消stop-file/私有反射/手写RPC备选，保留原Stdio兼容FAIL，全部14case/13类待测不减。新freeze/静审后才继续实际业务；main尚无新commit/push，real共同写所有权、1/2、完整GUI/应用/最终30分钟、RPA/抓包和约13验收块仍开放。
+
+## 2026-10-17 / A15b实际stdio实施中
+
+- Context/Decision：上一goal轮有单次官方抓屏失败及终态独审新证据，属于progress；GUI仍FAIL，不重复该分支。继续A15b，已精确纳入获审[MCP契约](codex/automation-expansion/MCP_DESIGN.md)A4349C98...7CEC3及[实施规格](codex/automation-expansion/MCP_STDIO.md)。现HTTP无job路由/可信认证/原子占用，不能改名充MCP或另起real Runtime；当前只Demo，真实共同所有权及1/2效果仍为后继必验，不关闭整个A15。
+- Files：隔离mcp-stdio仅新增src/MatrixDevice.Mcp，隔离mcp-stdio-tests仅新增正式测试工程；独立mcp-stdio-verifier预留验收。main原164输入、46编译物和用户配置/PNG未改，不把独立WIP当主仓已交付。SDK2.2.0精确lock、真实Console流交官方WithStreamServerTransport；预解析/额度适配不手写正常RPC，Windows原I/O生命周期及unbounded上游风险须实测。
+- Verification：作者报告server restore及首版修复编译0；独立测试作者已保留两轮夹具编译错误，后续首版编译0，均未执行server/创建Runtime。root/独审仅完成源码和机制审查，Windows冻结文件共享冲突、RPC信用/取消/背压与原IO跟踪已列要求，当前未有真实握手或业务通过。准备冻结/独立运行前审；此前209是ca6旧证据，不冒称本候选已重跑。
+- Next/Risks：官方独立客户端+透明字节relay六工具闭环及启动/输入边界；原raw/子进程终态与真实结果逐项记录。未授权B不能被当作不存在C的效果证明，接口缺乏回读时明确NOT-RUN；real写/完整GUI/应用安装卸载/最终双30分钟/RPA与抓包仍开放，约13验收工作块不扣减。没有新功能提交推送、合并或发布。
+
+## 2026-10-16 / A13c应用GUI与官方只读观测前置
+
+- Context：上轮A13b已实际推ca6c04e，原功能层14效果及主仓代表/核包有限通过，属于progress。该交付不含物理GUI/应用GUI安装卸载，完整目标active；回执main artifacts/live-dual-sync-main/push-complete.json SHA96327E76...2430F1，备用test49e未变。
+- Decision：当前Apps的原生文件Open之后仍有自有确认，取消在新批次前返回；目标选择可自动读，启动/停止菜单则直接执行。依Windows工具当次确认规则，本轮不代点安装/删除最终确认，不将后端或Demo绿补成真实GUI。新[规格](codex/apple-experience/A13_APPLICATION_GUI.md)及冻结wrapper6DD392...D42F3独审后，唯一执行官方默认截图/无输入、fresh正常Demo全隔离诊断。
+- Verification：official fresh list/get_window识别唯一Demo146413510；一次默认capture实际FrameArrived timed out，无图像，未调用激活/输入API或重试，不保证normal Show绝不获焦点。原件artifacts/application-gui-ca6/observed-r01；parent session4112终态outer0只是基础设施完成，owned52496强制child-1/46.256秒，精确stop获接纳、双raw空且drained、164源/46编译物/用户3与fresh配置保持，无wrapper总预算超时/清理错，非正常Close/Dispose。GUI观察FAIL，应用GUI及导航NOT-RUN；独立终态审实际核零变化/PIDmissing，有限接纳基础设施，execution64AB193...5DD4E/official7AB9FAA...4012D0。另只读区分AP042陈旧子树与AP045几何错误，标准父链不等根登记，未改生产peer/断言。约13工作块/7类未扣减，全部原FAIL和完整目标保持。
+
 ## 2026-10-16 / A13b四态真实效果与成功报告门禁
 
 - Main：唯一session84458已terminal outer0，Build36156/73.956秒，原209 exact/51.28秒、3warnings0err（两fixture编译+既有测试警告），十一fake早拒、旧VM9/505ms和十二own-WPF/25.956秒均过。14child28raw排空，无timeout/kill/清理错，源/PDB/产物与用户文件守卫同，实际终态独审有限通过；31managed PNG及六尺寸presentation有效，非物理GUI。executionE8424CDE...42E68B7、after7C58CBC5...D0772、workspace2CAC7F49...215B5。Report只读audit4D9C9B70...BA232另获独审，2正例/6拒例及158原件保持，原outer1不翻绿；核包与私有feature单项交付以实际Git回执为准，不合并发布。
-- Latest：独立原件审已有限通过本次14项真实VM-SDK效果，64帧与129step/四态及未勾选路由、准备后baseline、505目录/2030epoch/三native、23业务字段和单owner清理均核实。原outer1/livePassed=false仍保留，另列AP052仅离线复验成功JSON合同，不重跑设备。两源现已字节精确集成主仓B3/6223，尚未主仓Build/推送；下文“独审进行中/未集成”为本阶段历史。
+- 历史快照/原件审：独立原件审已有限通过本次14项真实VM-SDK效果，64帧与129step/四态及未勾选路由、准备后baseline、505目录/2030epoch/三native、23业务字段和单owner清理均核实。原outer1/livePassed=false仍保留，另列AP052仅离线复验成功JSON合同，不重跑设备。当时两源已字节精确集成主仓B3/6223、尚未主仓Build/推送；当前实际交付以顶节ca6回执为准，下文“独审进行中/未集成”亦为本阶段历史。
 - Verification：r05夹具6223A491...DB4F3E/AppB3经静审，唯一offline-r03原209/51.34秒及十一早拒均过，12child24raw终态排空，实际增量2条fixture警告/0错误；源码/PDB及主仓保护获独审。execution FD2CBBD6...231799，after03835E84...5AEDF。
 - Actual：Ready.r02包装器FEB71510...37C22唯一session8665已终态outer1；5child均exit0/10raw排空，live25120实际190.016秒。夹具报告PASS-LIVE-VM-SDK-NOT-GUI，四组合点击/滑动/主页及未勾选点击/主页共14效果、bootstrap/runtime均completed，NOT-RUN空；仅1/2、零launch/无模拟器stop，134owned/pending0且runtime唯一Dispose完成。
 - Failure：外层actual-live-report在StrictMode下读取成功JSON省略的null error字段而报PropertyNotFoundException；原outer1/livePassed=false保留，不直接改写回执或重发设备。execution F368FD496AEFC94D67CE86A2E0C13A213297A9E66626B57E797DEFC67D3E8980，summary16E93F20FD5A65EB871585159E34AEC0B4D1D919A3D0FA00156FA9A89F152334。独立终态复核进行中，须从实际PNG/节点核14效果，尤其将header准备后的baseline与正式swipe分开，不能只信summary。
-- Next/Risks：源仍仅隔离树，未主仓集成或提交；全部必需exec已终态。用户问剩余工作，按约14个验收块说明，不把部分离线完成或本次功能层效果当完整GUI/文字同步/应用GUI安装卸载/最终双实例30分钟完成；完整目标继续active。
+- 历史快照/当时Next：当时源仍仅隔离树、未主仓集成或提交，必需exec已终态；约14验收块的旧统计保留。当前已交付ca6，TASKS按同步有限验收后约13块/7类计，不把部分离线或功能层效果当完整GUI/文字同步/应用GUI安装卸载/最终双实例30分钟完成；完整目标继续active。
 
 ## 2026-10-16 / A13b真实双实例首轮与AP-050
 

@@ -1,6 +1,33 @@
 # 当前目标交接
 
-更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
+更新：2026-10-17。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
+
+## 当前执行：A15b实际stdio接入
+
+- 当前已获main终态独审有限通过：实际wire/227调用/13JobId、80原流/3089IO终态，186输入/148产物/PDB14/用户3、原两FAIL及八raw均实核保持；编译3项既有警告/0错误。下一门仅文档冻结、既有工具生成完整包/三清单、精确37路径index独审后单功能private feature push，不重Build或stdio。最终是否push必须读取实际Git，当前还未stage/commit。完整目标及13类NOTRUN/real/GUI/双30分钟仍开放。
+- 最新主仓实际已执行：受审outer8C75AA26...31E6D3由root唯一运行，exec73951 terminal0，Build85808自然0/113.515秒，原209 exact/51.92秒，新MCP14PASS/13NOTRUN/14session及清理通过；双raw23381B/0B终态，无timeout/kill/retained，error/postflightnull。execution11321B64C8045D267C8F441592BBAA4779483EC41A6EA55E2DD32015B84399AC，summary7C68EC0199A47FFF5F4D8695A71EE563423689315A046E1D4DC8372FDAFA7A2E，原件main artifacts/mcp-stdio-main/main-r01及verify-9d25e1db03b343dba574b2332955d74f。独立终态审进行中，不重跑。新编译后Desktop46内9项变化已记录，不要求旧binary hash；新DLL BFC9395F...5EBDC/PDB6FCFBD16...74060，186输入与用户3保持。尚未核包、stage或新commit/push；下方“未Build”为历史。
+- 最新状态优先于下方历史：fixture-fix-r01已获独立终态有限通过，root session63970 terminal0，client46168 exit0/32.185秒。14top/14session/12raw、227calls/13terminaljobs、实际stdin关闭/IO与SDK终态、无kill/pending/retained；原两失败原件保持，execution38033BD7...1DB636/summaryB12E0DD1...37B9CF。原Stdio兼容失败及13类NOT-RUN、real/GUI/完整A15未关闭，不重跑此轮。
+- 当前root已精确主仓集成13server+9test，test仅Program summary清理文件名更正，sln两行/Build五行；Build在原209成功后运行固定Demo client/server与fresh GUID目录，ASCII marker为MCP_EVIDENCE_RELATIVE及MCP_DEMO_VERIFIED_RELATIVE；无Verify仅编译。原164复制前逐文件保持，主仓暂无运行Matrix进程，未Build或新push；冻结路径main artifacts/mcp-stdio-main/freeze-r01，Build E87A4031...6DA5、Program C261B809...C5B。api_idle_verify只准备主仓outer不运行，mcp_design_review只读审实际集成；root唯一执行owner。README/报告可更新，不在186编译输入冻结内；main测试README也在manifest内，不能无记录改动。
+- 下一门：受审main outer唯一Build/原209+14专项、实际14PDB/新产物/用户三保护与原流终态；独审后文档/清单/源码包、精确stage与单功能私有feature push。约13工作块/7类与全目标保持；不启动real、UI/guest/ADB，不用冻结ca6的旧GUI包装器测试新候选。
+- 后继real候选已做只读分析，尚未实施：Desktop为唯一Runtime owner，先让UI/API/Scheduler共同参与per-device原子reservation，再承载借用Runtime的MCP会话与可信本机stdio桥。不同设备并行，同目标只接纳一方；取消至Completion排空才释放，Runtime换代撤销grant/session、EOF仅取消会话自有JobId且不Dispose Desktop。不以UiWriteBusy先查后写、全局mutex、未认证HTTP或第二realRuntime替代。下一阶段须另立窄spec/TCS竞争红测，保原identity发送前guard和全回归，不直接开放real；详见独立app_layout_tests只读结论，不把方案当实现或验收。
+- 最新已实际运行，勿按下方旧“未运行”继续：独立r04/session64747 terminal outer1，仅原日志UTF8解码FAIL；两restore及Build60528均0，209 exact/51.59s已两独审，原321461 execution及六raw保持。续跑97A745获独审后仅PDB14/compiled102及首次stdio；session89697 terminal outer1，client68420 exit1/47.393s，root无timeout/kill/pending、postflightnull。executionB7B40405FC5A7AE015C2735152BF5824719007AD0F92810A6CBEBF780FD395BF，summary0BDB8D14235A06590812A78A977CE79D1300BE8E2759949D4ABC419D7525F00A；原件在mcp-stdio-verifier/artifacts/mcp-stdio/continuation-r01。
+- P00十二raw负例实际自然1且排空通过；唯一normal session实际初始化/list6，随后DTO再序列化Schema前置FAIL与清理FAIL，未到capabilities/jobs，后十二normal+原十三类共25NOTRUN。SDK45512 exit-1/relay.json与lifecycle缺，server64172事后missing；不能说自然EOF或无SDK树杀。test作者只读确认默认STJ写出线上缺失可选null/NextCursor，与原wire不同；不得全局IgnoreNull掩盖领域负例。reviewer确认SDK先等process而未closestdin的EOF环，有限准入官方StreamClientTransport接真正owned stdio、唯一owner显式输入关闭的最小测试修复。root已派app_layout_tests仅测试树实施/compile/freeze，保14case/13类别；尚未编译/运行新机制。AP053编码/AP054 DTO/AP055 EOF已登记，不重Build/原209凑绿；原失败全部保留，main源/二进制未集成。
+- 用户本轮询问剩余任务，按TASKS现有分组答约13工作块/7类，不是13项从零开发。MCP编译不扣减，完整GUI/应用GUI安装卸载/最终双30分钟保持。服务端r03已编译并获仅Demo静审准入，测试r02已编译但静审拒绝；所有新server/client运行仍未获准。测试作者app_layout_tests在原独立树同轮窄修relay stdin终态、活跃raw共享快照、未知工具tracked30s、两raw精确诊断、初始化失败终态及raw清理熔断，保留r02原freeze和全部业务断言/13类NOT-RUN。
+- 独立verifier已准备ignored runner artifacts/mcp-stdio/Invoke-Independent.r03.ps1，SHA4B2BF5940F776B39D70010D3025EB30A3FD2DDDE90AC5E5B49C5273E0CD83A5B，Parser0；未Build/启动，仍固定旧tests manifest。下一步只允许新测试compile/freeze，再由独立reviewer复审差异、root机械更新verifier源/manifest及runner pin，联合准入后才执行。main源/二进制和真实环境不动，不将旧测试当已验。
+- 2026-10-17继续，上一goal轮为progress：唯一官方Demo capture实际FrameArrived超时，全部own exec已终态/原件独审，GUI失败不翻绿，不重复该分支。main HEAD仍ca6，旧test备份49e保持；当前约13工作块/7类，不因MCP编译扣减。
+- 已将独立设计树MCP_DESIGN.md按原字节机械纳入main，实际SHA A4349C98341B2C812BB04244BB37D8FD521BBC49EBD301A487D056BC1CC7CEC3。main新增实施规格docs/codex/automation-expansion/MCP_STDIO.md定义六工具Demo真实协议阶段，完整real所有权/1/2实测、RPA/抓包后继必验仍保留；不能以HTTP改名或新real Runtime绕过共同写所有权。
+- 实现作者mcp_server仅写独立mcp-stdio/src/MatrixDevice.Mcp；测试作者app_layout_tests仅写mcp-stdio-tests/tests/MatrixDevice.Mcp.Tests。两树均从ca6起。main原源/二进制不导入，预留mcp-stdio-verifier独立核验；实现/测试均只允许restore/编译，尚未获准运行server/UI/guest。首版编译过不等冻结候选或真实握手通过，原失败各自保留。
+- 官方SDK2.2.0默认Stdio硬编码Console且无限ReadLine，采用官方WithStreamServerTransport接真实Console的有界包装。独审准窄prequeue准入+官方协议对象拒绝，不准手写握手；必须核RPC id/重复/通知、实际flush信用、普通3与cancel1、拒绝响应本身有界、Windows原I/O线程/Task终态、EOF与不读输出。
+- 测试为官方McpClient/StdioClientTransport，Windows SDK实际cmd包装/tree-kill自己的Demo子树不能隐瞒；透明relay仅字节tee和own Process/SafeHandle，不解析/生成协议。新增P0启动拒绝、>1MiB无换行、半帧EOF负例待编译与冻结审。不能将无公开接口可观测的Tap/未选B状态、精确身份换代、取消门压力等算通过；原12页/应用GUI/最终双30分钟及完整目标保持。
+- 下一门：作者报冻结源码/构建原件与测试冻结→独立静审允许安全Demo执行→唯一真实stdio专项/终态独审，必要原209和主仓集成/单功能private feature push。此刻没有新commit/push，不使用固定ca6的旧GUI或同步包装器去测试未来新HEAD；源与用户三保护不动。
+
+## 当前执行：A13c应用GUI补验
+
+- 上一轮确有交付：A13b已实际推ca6c04e970d3d01024f81850c7c96725a1271a4e，远端feature同值/test49e4710不变，private元数据已核；main artifacts/live-dual-sync-main/push-complete.json SHA96327E76BABD2641F87109D15C78FE2BD592A68909BE157628B92A672C2430F1。349源/352ZIP/179全文段/精确11路径获独立核包，不重做固定6cb旧包装器。全部必需exec已终态；只遗留用户两PNG未跟踪，随后本轮文档WIP另计。
+- 本轮[GUI规格](A13_APPLICATION_GUI.md)及wrapper6DD392...D42F3均获独立静审。normal --demo/fresh1000×700唯一已执行；官方fresh list返回唯一匹配Demo窗口146413510，get_window成功，一次默认capture实际`FrameArrived timed out: timed out waiting on channel`，无图像。没有input/激活API或重试；真实模拟器/ADB未操作。GUI观察FAIL，导航/应用页NOT-RUN，AP042/AP045保持。mcp_cua native disabled不代表官方Sky不可用，不用外部Win32/UIA替代。
+- 原件main artifacts/application-gui-ca6/observed-r01，parent session4112已terminal outer0仅说明基础设施完成，owned52496 child-1/46.256秒/Kill(false)，严格7field stop reason official-observation-failed获接纳，双raw0字节且排空，无wrapper总预算超时/清理/后审错，source164/main46/用户3与fresh配置同。fresh API/AutoConnect/Agent/同步关闭、allowlist/LD绑定空；不称正常Close/VM Dispose或GUI通过。独立终态审已实际核164/46/3零变化、PIDmissing及原流/严格stop，有限批准基础设施，execution64AB193...5DD4E/official7AB9FAA...4012D0；不再运行此截图分支。
+- 用户不问问题，因此不自动执行Windows GUI最终安装/删除（工具要求当次确认，即使预授权）。先做真实列表、目标/文件选择、确认展示与取消；350ms自动读取可能仍发生，取消只能保证该批次mutation未提交。启动/停止菜单直接执行，不点作预览。已授权后端证据不能补签GUI；旧CMFA ledger owned=false且当前需重采，不能据此再次卸载或授权VPN。
+- app_layout_tests只读核AP042候选链，尚未改源/Build：原146×3/缺3owner/residue111仍PRODUCT-FAIL；标准Window peer父链不等provider登记。可另行独立worktree证伪A旧夹具/B仅标准Windowpeer父链，但不得Invalidate/Reset或改原owner/residue/Flush，不解释Sky几何错误。当前未授权实施该实验。完整GUI、文字、应用安装卸载、双30min及A14-A16仍开放。
 
 ## 当前执行：A13b真实双实例同步补验
 

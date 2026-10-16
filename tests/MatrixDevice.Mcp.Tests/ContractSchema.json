@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:matrix-device:mcp:1",
+  "$defs": {
+    "Uuid": { "type": "string", "format": "uuid" },
+    "Sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "Serial": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "Generation": { "type": "string", "pattern": "^[1-9][0-9]{0,18}$" },
+    "Transport": { "type": ["integer", "null"], "minimum": 1, "maximum": 4294967295 },
+    "ExpectedIdentity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["generation", "transportId"],
+      "properties": {
+        "generation": { "$ref": "#/$defs/Generation" },
+        "transportId": { "$ref": "#/$defs/Transport" }
+      }
+    },
+    "Target": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serial", "generation", "transportId"],
+      "properties": {
+        "serial": { "$ref": "#/$defs/Serial" },
+        "generation": { "$ref": "#/$defs/Generation" },
+        "transportId": { "$ref": "#/$defs/Transport" }
+      }
+    },
+    "Error": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "message", "errorTruncated", "projectCode", "retryable"],
+      "properties": {
+        "code": { "enum": ["INVALID_ARGUMENT", "UNAUTHORIZED", "TARGET_OFFLINE", "IDENTITY_CHANGED", "BUSY", "UNKNOWN_REFERENCE", "CAPACITY", "DEADLINE_EXCEEDED", "CANCELLED", "NOT_SUPPORTED", "INTERNAL"] },
+        "message": { "type": "string", "maxLength": 2048 }, "errorTruncated": { "type": "boolean" },
+        "projectCode": { "type": ["integer", "null"] },
+        "retryable": { "const": false },
+        "jobId": { "$ref": "#/$defs/Uuid" },
+        "operationId": { "$ref": "#/$defs/Uuid" },
+        "serial": { "$ref": "#/$defs/Serial" }
+      }
+    },
+    "ErrorOutput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ok", "serverEpoch", "error"],
+      "properties": {
+        "ok": { "const": false }, "serverEpoch": { "$ref": "#/$defs/Uuid" },
+        "error": { "$ref": "#/$defs/Error" }
+      }
+    },
+    "Limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requestBytes", "responseBytes", "bodyBytes", "manifestMetadataBytes", "toolConcurrency", "requestsPerSecond", "requestBurst", "activeJobs", "scriptRefs", "stagingBytes", "operationIds", "terminalJobs", "logsPerJob", "logsPerResponse", "resultBytes", "defaultJobTimeoutMs", "maximumJobTimeoutMs", "archiveBytes", "declaredExtractedBytes", "archiveEntries", "jsonEntryBytes", "steps", "parameters"],
+      "properties": {
+        "requestBytes": { "const": 1048576 }, "responseBytes": { "const": 1048576 },
+        "bodyBytes": { "const": 65536 }, "manifestMetadataBytes": { "const": 8192 }, "toolConcurrency": { "const": 4 },
+        "requestsPerSecond": { "const": 10 }, "requestBurst": { "const": 20 },
+        "activeJobs": { "const": 2 }, "scriptRefs": { "const": 16 },
+        "stagingBytes": { "const": 67108864 }, "operationIds": { "const": 100 },
+        "terminalJobs": { "const": 100 }, "logsPerJob": { "const": 500 },
+        "logsPerResponse": { "const": 100 }, "resultBytes": { "const": 16384 },
+        "defaultJobTimeoutMs": { "const": 300000 }, "maximumJobTimeoutMs": { "const": 300000 },
+        "archiveBytes": { "const": 16777216 }, "declaredExtractedBytes": { "const": 33554432 },
+        "archiveEntries": { "const": 128 }, "jsonEntryBytes": { "const": 4194304 },
+        "steps": { "const": 10000 }, "parameters": { "const": 1000 }
+      }
+    },
+    "CapabilitiesInput": { "type": "object", "additionalProperties": false },
+    "CapabilitiesOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "contractVersion", "protocolVersion", "mode", "scopes", "authorizedSerials", "realWritesEnabled", "supportedTools", "supportedActions", "unsupportedCapabilities", "limits", "retention"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" },
+            "contractVersion": { "const": "matrix-mcp/1" },
+            "protocolVersion": { "const": "2025-11-25" }, "mode": { "enum": ["demo", "real"] },
+            "scopes": { "type": "array", "uniqueItems": true, "items": { "enum": ["devices.read", "scripts.import", "jobs.start", "jobs.read", "jobs.cancel"] } },
+            "authorizedSerials": { "type": "array", "uniqueItems": true, "maxItems": 2, "items": { "$ref": "#/$defs/Serial" } },
+            "realWritesEnabled": { "type": "boolean" },
+            "supportedTools": { "type": "array", "uniqueItems": true, "maxItems": 6, "items": { "enum": ["matrix.capabilities", "matrix.devices.list", "matrix.scripts.import", "matrix.jobs.start", "matrix.jobs.get", "matrix.jobs.cancel"] } },
+            "supportedActions": { "type": "array", "uniqueItems": true, "items": { "enum": ["launch", "launchapp", "wait", "sleep", "click", "swipe"] } },
+            "unsupportedCapabilities": { "type": "array", "items": { "type": "string", "maxLength": 256 } },
+            "limits": { "$ref": "#/$defs/Limits" },
+            "retention": { "const": "process-lifetime; terminal-jobs-oldest-completion-100; no-restart-resume" }
+          }
+        }
+      ]
+    },
+    "DevicesListInput": { "type": "object", "additionalProperties": false },
+    "DevicesListOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "mode", "snapshotUtc", "devices"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" }, "mode": { "enum": ["demo", "real"] },
+            "snapshotUtc": { "type": "string", "format": "date-time" },
+            "devices": {
+              "type": "array", "maxItems": 2,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["target", "instanceIndex", "displayName", "online", "writeAllowed"],
+                "properties": {
+                  "target": { "$ref": "#/$defs/Target" },
+                  "instanceIndex": { "type": ["integer", "null"], "minimum": 1 },
+                  "displayName": { "type": "string", "maxLength": 256 },
+                  "online": { "type": "boolean" }, "writeAllowed": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ScriptImportInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverEpoch", "relativePath", "sha256"],
+      "properties": {
+        "serverEpoch": { "$ref": "#/$defs/Uuid" },
+        "relativePath": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "sha256": { "$ref": "#/$defs/Sha256" }
+      }
+    },
+    "ScriptImportOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "scriptRef", "sha256", "packageId", "packageVersion", "displayName", "stepCount", "parameterCount", "bindingVersion", "parameterKeys", "retention"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" },
+            "scriptRef": { "$ref": "#/$defs/Uuid" }, "sha256": { "$ref": "#/$defs/Sha256" },
+            "packageId": { "type": "string" }, "packageVersion": { "type": "string" }, "displayName": { "type": "string" },
+            "stepCount": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "parameterCount": { "type": "integer", "minimum": 0, "maximum": 1000 },
+            "bindingVersion": { "enum": [null, 1] },
+            "parameterKeys": { "type": "array", "maxItems": 1000, "uniqueItems": true, "items": { "type": "string" } },
+            "retention": { "const": "process-lifetime; immutable; no-execution-authority" }
+          }
+        }
+      ]
+    },
+    "JobStartInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverEpoch", "operationId", "scriptRef", "serial", "expectedIdentity"],
+      "properties": {
+        "serverEpoch": { "$ref": "#/$defs/Uuid" }, "operationId": { "$ref": "#/$defs/Uuid" },
+        "scriptRef": { "$ref": "#/$defs/Uuid" }, "serial": { "$ref": "#/$defs/Serial" },
+        "expectedIdentity": { "$ref": "#/$defs/ExpectedIdentity" },
+        "parameterOverrides": { "type": "object", "maxProperties": 1000, "additionalProperties": true },
+        "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 300000, "default": 300000 }
+      }
+    },
+    "JobStartOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "operationId", "jobId", "target", "scriptRef", "sha256", "accepted", "replayed", "timeoutMs"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" },
+            "operationId": { "$ref": "#/$defs/Uuid" }, "jobId": { "$ref": "#/$defs/Uuid" },
+            "target": { "$ref": "#/$defs/Target" }, "scriptRef": { "$ref": "#/$defs/Uuid" }, "sha256": { "$ref": "#/$defs/Sha256" },
+            "accepted": { "const": true }, "replayed": { "type": "boolean" },
+            "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 300000 }
+          }
+        }
+      ]
+    },
+    "JobState": { "enum": ["Running", "Cancelling", "Completed", "Cancelled", "Failed"] },
+    "JobStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["jobId", "operationId", "target", "scriptRef", "sha256", "packageId", "packageVersion", "state", "stepIndex", "stepCount", "startedUtc", "endedUtc", "error", "result", "errorTruncated", "resultTruncatedForResponse", "terminalReason"],
+      "properties": {
+        "jobId": { "$ref": "#/$defs/Uuid" }, "operationId": { "$ref": "#/$defs/Uuid" },
+        "target": { "$ref": "#/$defs/Target" }, "scriptRef": { "$ref": "#/$defs/Uuid" }, "sha256": { "$ref": "#/$defs/Sha256" },
+        "packageId": { "type": "string" }, "packageVersion": { "type": "string" }, "state": { "$ref": "#/$defs/JobState" },
+        "stepIndex": { "type": "integer", "minimum": -1, "maximum": 9999 },
+        "stepCount": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "startedUtc": { "type": "string", "format": "date-time" }, "endedUtc": { "type": ["string", "null"], "format": "date-time" },
+        "error": { "type": ["string", "null"], "maxLength": 2048 }, "errorTruncated": { "type": "boolean" },
+        "result": { "type": ["string", "null"], "maxLength": 16384 }, "resultTruncatedForResponse": { "type": "boolean" },
+        "terminalReason": { "enum": [null, "completed", "failed", "cancelled", "deadline", "shutdown"] }
+      }
+    },
+    "JobGetInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverEpoch", "jobId"],
+      "properties": {
+        "serverEpoch": { "$ref": "#/$defs/Uuid" }, "jobId": { "$ref": "#/$defs/Uuid" },
+        "logLimit": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50 }
+      }
+    },
+    "JobGetOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "snapshotUtc", "job", "availableLogs", "logWindowLimit", "omittedLogCount", "logs"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" }, "snapshotUtc": { "type": "string", "format": "date-time" },
+            "job": { "$ref": "#/$defs/JobStatus" }, "availableLogs": { "type": "integer", "minimum": 0, "maximum": 500 },
+            "logWindowLimit": { "const": 500 }, "omittedLogCount": { "type": "integer", "minimum": 0, "maximum": 500 },
+            "logs": {
+              "type": "array", "maxItems": 100,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["timestampUtc", "message", "truncated"],
+                "properties": {
+                  "timestampUtc": { "type": "string", "format": "date-time" },
+                  "message": { "type": "string", "maxLength": 2048 }, "truncated": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "JobCancelInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverEpoch", "jobId"],
+      "properties": { "serverEpoch": { "$ref": "#/$defs/Uuid" }, "jobId": { "$ref": "#/$defs/Uuid" } }
+    },
+    "JobCancelOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "jobId", "cancelRequested", "state", "terminal"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" }, "jobId": { "$ref": "#/$defs/Uuid" },
+            "cancelRequested": { "type": "boolean" }, "state": { "$ref": "#/$defs/JobState" }, "terminal": { "type": "boolean" }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="artifacts/**/*.cs" />
+    <ProjectReference Include="../../src/MatrixDevice.Host/MatrixDevice.Host.csproj" />
+    <PackageReference Include="ModelContextProtocol" Version="[2.2.0]" />
+    <PackageReference Include="JsonSchema.Net" Version="[9.4.1]" />
+    <EmbeddedResource Include="ContractSchema.json" />
+    <EmbeddedResource Include="ProtocolSchema.json" />
+  </ItemGroup>
+</Project>

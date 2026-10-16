@@ -76,6 +76,14 @@
 | AP-051 | P2/滑动准备前置已获实机有限复验 | r04真实Ready首轮00-swipe发前原四锚点门未过：横屏Settings大header占至409，inner仅311高，3title含裁剪第三；正式swipe未发送，不能归为产品手势失败 | [A13实机记录](A13_DUAL_INSTANCE_SYNC.md)保留ready-r01 FAIL/12NOTRUN。r05实际八次单目标header准备，各例每台至多一次，重取baseline后原四锚点/映射/效果判据保持；独审四态正式swipe真实变化，未把setup折叠算同步，不改显示/阈值或循环取绿。原outer1另列AP052，完整GUI仍未验 |
 | AP-052 | P2/成功报告字段消费已获独立离线复验 | ready-r02五child均0、夹具16completed含14真实效果且独审通过；外层StrictMode读取不存在的summary.error报PropertyNotFoundException。JsonDefaults省略null是既有合同，非产品动作失败 | [A13记录](A13_DUAL_INSTANCE_SYNC.md)保留原outer1/livePassed=false。另立只读合同审计实际2正例/6严格拒例及158原件长度/SHA保持，audit4D9C9B70...BA232获独审；仅允许省略/null，真实错误/错误类型/缺必要字段仍拒，不改原件或重跑设备，不认证GUI |
 
+## MCP实际接入
+
+| ID | 级别/状态 | 事实与边界 | 处理/后续 |
+|---|---|---|---|
+| AP-053 | P2/日志消费问题已独立核定，原失败保留 | 独立r04两restore及Build60528均0，原209实际通过；外层以严格UTF8读取含C8字节的混合日志而失败，MCP未启动 | [A15b](../automation-expansion/MCP_STDIO.md)保留execution321461...BD2C及六raw。两独审以Latin1一一保字节映射仅提取并断言ASCII PASS，209名序/result同；新续跑已实际越过该门，不重Build，不将非ASCII全文冒称已解码或改原outer1 |
+| AP-054 | P1/Schema夹具修复已独立及主仓有限复验 | 实际wire ListToolsResult只有tools，旧夹具用默认STJ重新序列化SDK DTO，添入线上缺失的_meta/title/icons等null，与严格Schema冲突 | [A15b](../automation-expansion/MCP_STDIO.md)原PRECONDITION-FAIL保留。专用官方序列化并按实际raw请求id验原Schema；领域JSON与explicit-null负例不动。独立与主仓均实际14顶层/227调用通过获独审，不能扩大为13类未验或真实设备通过 |
+| AP-055 | P1/受控Stream路径自然清理已独立及主仓有限复验，旧Stdio兼容失败开放 | 旧官方Stdio等待进程退出未关闭stdin，与relay形成EOF环；原SDK45512 exit-1/缺报告保持。新路径是官方StreamClientTransport接原Process真实管道，不是原Stdio问题已修 | [A15b](../automation-expansion/MCP_STDIO.md)独立及主仓各14真实会话获独审：13自然0、复用RPC id负例自然1，原输入关闭/流与SDK终态、无kill/pending/保留/清理错；12raw拒绝也通过。real、崩溃/背压等13类NOTRUN保持；不用stop-file、反射或假transport |
+
 ## 修复记录规则
 
 每个问题记录红测命令/错误、最小diff、绿测/独立复验、未验证范围和commit。原失败轮次保留本机artifacts。最多3轮review-fix；未解决需明确风险，不绕过断言或缩小用户目标。不得仅将控件禁用后称功能正常。

@@ -20,7 +20,7 @@
 
 全面验收与界面重设计正在按[当前计划](plan.md)实施；目标、技术边界、视觉/命名及依赖任务分别见[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[UI规格](docs/UI_SPEC.md)、[任务表](docs/TASKS.md)。当前测试范围见[功能矩阵](docs/codex/apple-experience/TEST_MATRIX.md)、[逐控件目录](docs/codex/apple-experience/CONTROL_CATALOG.md)和[问题清单](docs/codex/apple-experience/DEFECTS.md)，进展见[阶段记录](docs/PROGRESS.md)。已修复主控A/当前B时投屏错目标的代码路径，增加主控身份与进程所有权守卫，见[A02独立离线验收](docs/codex/apple-experience/A02_MAIN_TARGET.md)；真实外部投屏仍待验。这是进行中的工作，149项和三尺寸Demo不代表本轮全功能/实机/窄屏已通过。
 
-2026-10-16新增任务R11-R14/A13-A16已纳入上述文档：继续全功能/双实例/安装卸载/最终30分钟验收，并规划终控台RPA闭环、群控MCP接入及指定模拟器抓包。最近[真实实例复核](docs/codex/list-console/LIVE_RECHECK_2026-10-16.md)为实例1冷启动及8项限域Live通过，不是全控件通过。现有脚本为受限ZIP格式，产品尚无群控MCP server或完整抓包会话；[抓包初步调研](docs/codex/automation-expansion/CAPTURE_RESEARCH.md)已比较方案，POC未运行，不把规划当实现。
+2026-10-16新增任务R11-R14/A13-A16已纳入上述文档：继续全功能/双实例/安装卸载/最终30分钟验收，并完善终控台RPA闭环、群控MCP接入及指定模拟器抓包。最近[真实实例复核](docs/codex/list-console/LIVE_RECHECK_2026-10-16.md)为实例1冷启动及8项限域Live通过，不是全控件通过。现有脚本为受限ZIP格式，新增MCP入口当前仅显式Demo，真实群控MCP与完整抓包会话尚未完成；[抓包初步调研](docs/codex/automation-expansion/CAPTURE_RESEARCH.md)已比较方案，POC未运行，不把规划当实现。
 
 自动化导入选择器现在只列出`.jxscript/.zip`。加载器对ZIP构造阶段识别出的非归档格式给出中文400/1007错误，不执行顶层JSON、Python或JavaScript；合法ZIP按内容读取，即使后缀为`.json`或包含合法附带资源也保持兼容。I/O、归档内JSON、动作验证及原限额保持原边界，不能把这项修改称为所有损坏ZIP的统一处理。实现方、独立方和主仓各169项通过，包含合法包实际Demo点击和非法内容零点击；[格式边界报告](docs/codex/apple-experience/A08_SCRIPT_FORMAT.md)保留原红测。GUI文件对话框实开、真实设备和完整RPA闭环仍待验收。
 
@@ -88,7 +88,9 @@ CLI默认真实模式；`--demo`显式模拟，`--serial`授权唯一设备，`-
 | MatrixDevice.Host | 双网关/逐设备监听、配置合并恢复、SQLite、日志、运行时资源整合 |
 | MatrixDevice.Desktop | WPF 页面、ViewModel、截图/取色/裁剪、脚本参数、独立子系统状态、原生 scrcpy 窗口 |
 | MatrixDevice.Cli | 无界面枚举与本机 API 服务 |
+| MatrixDevice.Mcp | 官方SDK stdio六工具、可信Demo授权、冻结脚本导入与逐目标作业；真实模式拒绝 |
 | MatrixDevice.Tests | 默认离线/协议/文件/竞争/loopback验证；显式--live-acceptance读取冻结目标回执才进入独立实例测试 |
+| MatrixDevice.Mcp.Tests | 官方SDK客户端通过真实OS管道验证Demo工具、Schema、防重、取消、限额与退出；不等于GUI或实机 |
 
 ## 应用管理
 
@@ -134,6 +136,26 @@ Automator 默认 `http://127.0.0.1:17171/`，路径允许 `/api/` 前缀。所�
 
 [自动化工作区](docs/codex/apple-experience/A08_SCRIPT_WORKSPACE.md)将原控件整合为参数、运行记录、日志、结果四个视图，保留全部参数/记录字段；取消所选任务在运行记录标题旁，仍按JobId执行。长说明与目标有界滚动，结果全文独立读取，活动日志增量发布不再清空同任务的选中项。独立与主仓原209项、VM9及十二组实际自有WPF/Demo案例通过，覆盖六尺寸、控件编辑后执行、非法JSON零接纳、取消隔离及500日志尾窗。可用`--demo --verify-script-workspace --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`运行此独立专项；它不操作真实模拟器，也不代表原生选择器、物理键鼠、DPI或完整GUI已通过，原失败与实机待办保持。
 
+## MCP接入
+
+`MatrixDevice.Mcp`使用固定`ModelContextProtocol 2.2.0`，协议`2025-11-25`。当前支持`matrix.capabilities`、`matrix.devices.list`、`matrix.scripts.import`、`matrix.jobs.start`、`matrix.jobs.get`、`matrix.jobs.cancel`；复用原脚本包、参数绑定和Scheduler，不执行任意Python、JavaScript或Shell。接口详见[契约](docs/codex/automation-expansion/MCP_DESIGN.md)与[执行记录](docs/codex/automation-expansion/MCP_STDIO.md)。
+
+当前仅供Demo开发联调，不能连接真实雷电。由支持stdio的客户端创建进程并重定向stdin/stdout，程序为本机`dotnet.exe`，按独立参数传入下列值，而不是拼接Shell命令：
+
+```text
+ABS_PROJECT\src\MatrixDevice.Mcp\bin\Release\net10.0\MatrixDevice.Mcp.dll
+--demo
+--data-dir ABS_EXISTING_PARENT\FRESH_UNIQUE_DIRECTORY
+--policy ABS_PROJECT\examples\mcp-demo-policy.json
+--import-root ABS_PROJECT\examples
+```
+
+将`ABS_PROJECT`等替换为本机盘符开头的规范绝对路径，使用反斜杠，不使用UNC、正斜杠、末尾分隔符或点路径段；导入根与策略文件须已存在、不能经过重解析点，数据目录须每次使用新的不存在路径、父目录已存在，且不能位于导入根内。不能直接在交互终端启动，也不能用固定数据目录配置自动重连。样例策略仅授权`DEMO-001`和`DEMO-002`，不读取Desktop配置、不开HTTP/ADB、不授权真实设备；工具参数不能扩大策略权限。这个fresh目录限制是当前开发入口边界，不是完整持久化客户端方案。
+
+先读取capabilities和设备身份，再以epoch、脚本SHA和冻结身份提交任务；业务重试使用原operationId与完全相同参数，并使用新的JSON-RPC id。每连接RPC id不可复用、字符串最多1024 UTF-8字节，最多65536个id；超过会断开并清理自有任务，不自动重放。单帧1MiB、业务参数64KiB、冻结归档16MiB、引用16个、staging64MiB及operation ledger100项均有明确边界。取消不撤销已发送动作，结果不会跨进程保存。
+
+独立专项及主仓精确集成后的一次复验均实际完成14组顶层Demo用例、14个真实OS-stdio会话及12个严格拒绝子例，并获独审有限通过；主仓原209项另计通过，构建3项既有警告、0错误。客户端使用官方`StreamClientTransport`连接外部进程真实管道，不是内存模拟；旧`StdioClientTransport`退出兼容失败仍保留。另13类压力/竞争/兼容与真实设备覆盖仍NOT-RUN，完整MCP、GUI、抓包和最终稳定性没有因此完成，详见[主仓实际记录](docs/codex/automation-expansion/MCP_STDIO.md#主仓集成门)。
+
 ## 数据与设备边界
 
 默认数据位于 `%LOCALAPPDATA%/MatrixDevice.Reconstructed/`；桌面 demo 与真实模式使用分离子目录。配置主文件/备份、SQLite 和日志均为本工程所有，不读取 CODEBRAIN 或旧产品数据。SQLite 使用新的 schema version=1；没有原产品密码或迁移兼容承诺。
@@ -162,7 +184,7 @@ Automator 默认 `http://127.0.0.1:17171/`，路径允许 `/api/` 前缀。所�
 
 ## 验证与交付
 
-`tools/Build.ps1 -Verify` 构建六个项目并运行全部验证。`--smoke --screenshot ABSOLUTE_PATH` 自动使用 demo 渲染各页面后退出；真实设备验收步骤见 `docs/VERIFICATION.md`。文档逐项覆盖见 `docs/COVERAGE.md`，缺失/矛盾处理见 `docs/ASSUMPTIONS.md`。
+`tools/Build.ps1 -Verify`构建八个项目，先执行原209项，再执行独立计数的14组MCP Demo专项；MCP仍标`PASS-LIMITED`，13类NOT-RUN不计通过。启动前输出`MCP_EVIDENCE_RELATIVE=`及本次唯一证据目录，只有专项exit0才输出`MCP_DEMO_VERIFIED_RELATIVE=`；失败不自动重试或删除证据。普通`Build.ps1`仅编译，不启动测试或真实设备。这个入口只是测试编排，不保证被外部强制结束时完成清理，独立验收另有有界进程与原流审计。`--smoke --screenshot ABSOLUTE_PATH`自动使用Demo渲染各页面后退出；真实设备验收步骤见`docs/VERIFICATION.md`。文档逐项覆盖见`docs/COVERAGE.md`，缺失/矛盾处理见`docs/ASSUMPTIONS.md`。
 
 截屏输入验收保留原定位与命中断言，新增有限OS/WPF坐标和输入源诊断。本轮独立正式150项通过，但完整GUI在输入前置失败；三个快照已确认活动鼠标源缺失，成因未定，不是坐标算法或实机修复通过。原始失败、采样范围及未执行项见[输入诊断报告](docs/codex/apple-experience/AP033_INPUT_DIAGNOSTICS.md)。
 

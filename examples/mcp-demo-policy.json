@@ -1,0 +1,5 @@
+{
+  "scopeOwner": "local-demo",
+  "scopes": ["devices.read", "scripts.import", "jobs.start", "jobs.read", "jobs.cancel"],
+  "authorizedSerials": ["DEMO-001", "DEMO-002"]
+}

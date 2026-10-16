@@ -20,6 +20,11 @@ try {
     if ($Verify) {
         & $DotnetPath (Join-Path $projectPath 'tests/MatrixDevice.Tests/bin/Release/net10.0/MatrixDevice.Tests.dll')
         if ($LASTEXITCODE -ne 0) { throw 'Verification failed' }
+        $mcpEvidence = 'artifacts/mcp-stdio-main/verify-' + [Guid]::NewGuid().ToString('N')
+        Write-Output ('MCP_EVIDENCE_RELATIVE=' + $mcpEvidence)
+        & $DotnetPath (Join-Path $projectPath 'tests/MatrixDevice.Mcp.Tests/bin/Release/net10.0/MatrixDevice.Mcp.Tests.dll') --dotnet $DotnetPath --server (Join-Path $projectPath 'src/MatrixDevice.Mcp/bin/Release/net10.0/MatrixDevice.Mcp.dll') --output (Join-Path $projectPath $mcpEvidence)
+        if ($LASTEXITCODE -ne 0) { throw 'MCP Demo verification failed' }
+        Write-Output ('MCP_DEMO_VERIFIED_RELATIVE=' + $mcpEvidence)
     }
 } finally {
     $env:MATRIX_DOTNET_EXE = $oldDotnet

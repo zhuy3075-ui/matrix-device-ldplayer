@@ -19,14 +19,14 @@
 | A12 | P0/未开始 | A11 | 最终审计与报告、问题/修改清单、README/完整源码清单、推送；AP-021历史验收材料归档分类 | 用户目标逐条完成证据；不把路径/SHA检查称为原始证据净化，保留用户文件、不改写Git历史；存在必需缺口不标goal完成；无merge/release |
 | A13 | P0/长路径和报告出口已修，完整执行未完成 | A01目录与既有版本 | 全功能逐控件测试、失败修复与问题清单；优先继续双实例同步、新版应用页安装卸载、完整GUI可靠性及最终30分钟 | [AP-035](codex/apple-experience/A13_SQLITE_PATH.md)独立/主仓158及四普通路径CLI通过；[AP-041诊断](codex/apple-experience/AP041_OFFLINE_DIAGNOSTICS.md)保持，[报告子项](codex/apple-experience/AP041_REPORT_RELIABILITY.md)实际红6PASS/8FAIL、同14类绿全过，独立/主仓各158及原390几何报告不变。原负例/S01/11NOTRUN、AP-033、实机与最终30分钟仍开放；每例步骤/预期/实际/证据齐全，每个修复独审后单独push |
 | A14 | P1/a1及a2独立/主仓有限域通过；完整闭环开放 | A13a、A08；AI部分再依A15a/A15b与A16b | 复用原引擎；[a1参数绑定](codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)、[a2逐目标任务](codex/apple-experience/A14_SCRIPT_JOBS.md)、本地包上传/预览/分发执行；MCP脚本与指定应用动态分析 | a2独立/主仓各209/209含新16协议/业务用例、原4新5 VM全PASS/cleanup，1条测试警告/0错；JobId与实际队列/发送前pin、按任务取消/状态/真实输出具备有限证据。原失败/193保留，GUI/真实合法包全流程、完整RPA与AI采集仍必需，不执行未知代码或冒称沙箱 |
-| A15 | P2/已追加，待设计与最小接入验证 | A13a；脚本工具复用A14a的包契约 | A15a设计群控MCP工具、Schema、权限/错误/取消/限额；A15b提供供A14c使用的最小stdio接入与真实客户端验证 | 握手/列工具/调用/结果真实可达；逐台覆盖明确授权集合，未授权与身份变化拒绝；双实例不串扰，N目标仅离线逻辑证明，不外推23路容量 |
+| A15 | P2/六工具Demo独立及主仓有限通过，待核包交付；完整业务及实机开放 | A13a；脚本工具复用A14a的包契约 | [A15a契约](codex/automation-expansion/MCP_DESIGN.md)及[A15b实施](codex/automation-expansion/MCP_STDIO.md)：SDK实际stdio、冻结包/逐任务/防重与退出；real先解决共同所有权，不另起不协调Runtime | 独立及主仓原209 exact；新官方StreamClientTransport接真实OS管道，主仓14顶层/14会话/12raw子例、227调用/13终态job、80原流及清理获独审有限通过。旧Schema/退出失败原件保留，旧Stdio兼容仍失败，13类NOTRUN不计通过。22源已纳主仓，核包push以实际Git为准；最终逐台授权集合/真实1与2/共同所有权仍必需，整个A15未完成 |
 | A16 | P3/已追加，初步调研完成，POC未运行 | A13a、独立测试应用/服务及采集权限 | A16a比较代理/HTTP Toolkit/VPN/原始包；A16b先验证受控方案，再实现指定实例会话、停止清理、分析/导出并供A14c使用 | 有官方依据与明确选型；自有请求对应实际捕获记录、目标隔离及停止/容量/退出清理均过。HTTPS/应用级隔离各自验证，无明文能力不报成功 |
 
 当前A13补验：[AP-042](codex/apple-experience/AP042_WORKSPACE_ACCESSIBILITY.md)历史组件红绿与主仓曾通过，最新[A14a1旧链](codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)却146→146→146/应用owner缺3/旧残留111，后继NOT-RUN，当前PRODUCT-FAIL开放；[AP-043/AP045](codex/apple-experience/AP043_SKY_AB.md)初始正文可读但官方导航几何错误/无后置state亦保留。原null与根因未定，不重跑凑绿、不用独立无窗VM替代全GUI。真实GUI、双实例同步、应用GUI安装卸载和最终双实例30分钟、A08-A16仍必交付。
 
 最新进展：A14a2逐目标任务已推7736630，A08b工作区已推6cb127d，不重做既有交付。[A13真实同步补验](codex/apple-experience/A13_DUAL_INSTANCE_SYNC.md)专用1/2的四态Tap/Swipe/Home及未勾选反例共14真实VM-SDK效果已独审通过；主仓两源精确集成，唯一原209/11fake早拒/旧VM9/十二own-WPF及清理通过，14child28raw/源PDB/用户保护均获独审。原实机outer1由AP052报告读取缺省null造成，独立离线2正例/6拒例和158原件核对通过，旧失败保持、不重跑设备；不是物理GUI/文字/30分钟通过。本阶段交付仅相关源码、正式验收、README/报告/清单，核包与推送以实际回执/Git为准，不合并发布。
 
-原AP042/AP045、应用GUI安装卸载、完整GUI/DPI及最终双实例30分钟，A08-A16余项与全RPA/MCP/抓包仍必交付；MCP设计已独立有限批准但未集成/实际接入，不混本阶段。不用受限JSON或组件局部绿替代用户全流程。
+原AP042/AP045、应用GUI安装卸载、完整GUI/DPI及最终双实例30分钟，A08-A16余项与全RPA/MCP/抓包仍必交付；MCP已完成独立Demo实际stdio有限验收并进入主仓复验，不代表真实接入或整个A15完成，不混前一同步交付。不用受限JSON或组件局部绿替代用户全流程。
 
 执行规则：一项先复现/定义预期，再小改、全基线、页面/安全实机、独立verifier、文档/清单、commit/push；独立实现worktree不共享写同一文件。单个拒绝点最多3轮review-fix；需要额外权限或不明风险时停止该动作，记录并继续其他安全工作，不向用户反复提问。
 

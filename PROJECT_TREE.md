@@ -31,6 +31,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- A07_TOOLTIP_DIAGNOSTICS.md
 |   |   |   |-- A08_SCRIPT_FORMAT.md
 |   |   |   |-- A08_SCRIPT_WORKSPACE.md
+|   |   |   |-- A13_APPLICATION_GUI.md
 |   |   |   |-- A13_DUAL_INSTANCE_SYNC.md
 |   |   |   |-- A13_SQLITE_PATH.md
 |   |   |   |-- A14_SCRIPT_JOBS.md
@@ -49,7 +50,9 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- HANDOFF.md
 |   |   |   +-- TEST_MATRIX.md
 |   |   |-- automation-expansion/
-|   |   |   +-- CAPTURE_RESEARCH.md
+|   |   |   |-- CAPTURE_RESEARCH.md
+|   |   |   |-- MCP_DESIGN.md
+|   |   |   +-- MCP_STDIO.md
 |   |   |-- device-action-dedup/
 |   |   |   +-- REPORT.md
 |   |   |-- launch-memory-policy/
@@ -204,6 +207,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- manifest.json
 |   |   +-- script.json
 |   |-- basic-example.jxscript
+|   |-- mcp-demo-policy.json
 |   +-- parameterized/
 |       |-- manifest.json
 |       +-- script.json
@@ -354,25 +358,49 @@ MatrixDevice.Reconstructed/
 |   |       |-- ScriptJobs.cs
 |   |       |-- ScriptPackageService.cs
 |   |       +-- ScriptScheduler.cs
-|   +-- MatrixDevice.Host/
-|       |-- Api/
-|       |   +-- ApiServiceManager.cs
-|       |-- Diagnostics/
-|       |   +-- RollingLog.cs
-|       |-- LdConnectionAdmission.cs
-|       |-- LdPlayer/
-|       |   +-- LdLaunchMemory.cs
-|       |-- MatrixDevice.Host.csproj
-|       |-- MatrixRuntime.cs
-|       |-- Monitoring/
-|       |   |-- LdRunningWindow.cs
-|       |   |-- ResourceSampler.cs
-|       |   +-- ScreenVideoSession.cs
+|   |-- MatrixDevice.Host/
+|   |   |-- Api/
+|   |   |   +-- ApiServiceManager.cs
+|   |   |-- Diagnostics/
+|   |   |   +-- RollingLog.cs
+|   |   |-- LdConnectionAdmission.cs
+|   |   |-- LdPlayer/
+|   |   |   +-- LdLaunchMemory.cs
+|   |   |-- MatrixDevice.Host.csproj
+|   |   |-- MatrixRuntime.cs
+|   |   |-- Monitoring/
+|   |   |   |-- LdRunningWindow.cs
+|   |   |   |-- ResourceSampler.cs
+|   |   |   +-- ScreenVideoSession.cs
+|   |   |-- packages.lock.json
+|   |   +-- Persistence/
+|   |       |-- CatalogRepository.cs
+|   |       +-- SettingsStore.cs
+|   +-- MatrixDevice.Mcp/
+|       |-- BoundedTransportStreams.cs
+|       |-- ImportedScriptStore.cs
+|       |-- MatrixDevice.Mcp.csproj
+|       |-- McpToolHost.cs
+|       |-- OperationLedger.cs
+|       |-- OwnedConsoleIo.cs
 |       |-- packages.lock.json
-|       +-- Persistence/
-|           |-- CatalogRepository.cs
-|           +-- SettingsStore.cs
+|       |-- Program.cs
+|       |-- ProtocolAdmission.cs
+|       |-- Schemas.json
+|       |-- StablePath.cs
+|       |-- StartupOptions.cs
+|       +-- StrictJson.cs
 |-- tests/
+|   |-- MatrixDevice.Mcp.Tests/
+|   |   |-- ContractSchema.json
+|   |   |-- MatrixDevice.Mcp.Tests.csproj
+|   |   |-- OwnedStdioProcess.cs
+|   |   |-- packages.lock.json
+|   |   |-- Program.cs
+|   |   |-- ProtocolSchema.json
+|   |   |-- README.md
+|   |   |-- StartupRejections.cs
+|   |   +-- StdioSession.cs
 |   +-- MatrixDevice.Tests/
 |       |-- ApplicationBatchTests.cs
 |       |-- ApplicationPreflightAcceptance.cs

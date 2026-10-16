@@ -914,6 +914,17 @@
 
 ```
 
+## examples/mcp-demo-policy.json
+
+```json
+{
+  "scopeOwner": "local-demo",
+  "scopes": ["devices.read", "scripts.import", "jobs.start", "jobs.read", "jobs.cancel"],
+  "authorizedSerials": ["DEMO-001", "DEMO-002"]
+}
+
+```
+
 ## examples/parameterized/manifest.json
 
 ```json
@@ -974,7 +985,9 @@
   <Project Path="src/MatrixDevice.Host/MatrixDevice.Host.csproj" />
   <Project Path="src/MatrixDevice.Desktop/MatrixDevice.Desktop.csproj" />
   <Project Path="src/MatrixDevice.Cli/MatrixDevice.Cli.csproj" />
+  <Project Path="src/MatrixDevice.Mcp/MatrixDevice.Mcp.csproj" />
   <Project Path="tests/MatrixDevice.Tests/MatrixDevice.Tests.csproj" />
+  <Project Path="tests/MatrixDevice.Mcp.Tests/MatrixDevice.Mcp.Tests.csproj" />
 </Solution>
 
 ```
@@ -26668,6 +26681,4111 @@ public sealed class SettingsStore(string path)
 
 ```
 
+## src/MatrixDevice.Mcp/BoundedTransportStreams.cs
+
+```csharp
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
+
+namespace MatrixDevice.Mcp;
+
+internal abstract class NonSeekableStream : Stream
+{
+    public override bool CanSeek => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Flush() { }
+}
+
+internal sealed class BoundedInputStream(Stream input, ProtocolAdmission admission, Guid epoch) : NonSeekableStream
+{
+    private readonly OwnedConsoleIo io = new(input);
+    private readonly byte[] readBuffer = new byte[65536];
+    private int readOffset, readCount;
+    private byte[]? frame;
+    private int frameOffset;
+    private readonly TaskCompletionSource<ITransport> transport = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal Exception? Failure { get; private set; }
+    internal bool Eof { get; private set; }
+    internal bool IoTerminal => io.IsTerminal;
+    internal void SetTransport(ITransport value) => transport.TrySetResult(value);
+    public override bool CanRead => true;
+    public override bool CanWrite => false;
+    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken token) => ReadAsync(buffer.AsMemory(offset, count), token).AsTask();
+
+    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken token = default)
+    {
+        try
+        {
+            while (frame is null)
+            {
+                using var line = new MemoryStream();
+                var ended = false;
+                while (!ended)
+                {
+                    if (readOffset == readCount)
+                    {
+                        readCount = await io.RunAsync(() => input.Read(readBuffer, 0, readBuffer.Length), token).ConfigureAwait(false);
+                        readOffset = 0;
+                        if (readCount == 0)
+                        {
+                            Eof = true; admission.Stop();
+                            if (line.Length != 0) throw new InvalidDataException("Incomplete final stdio message.");
+                            return 0;
+                        }
+                    }
+                    var next = readBuffer.AsSpan(readOffset, readCount - readOffset).IndexOf((byte)'\n');
+                    var take = next < 0 ? readCount - readOffset : next;
+                    if (line.Length + take > 1048576) throw new InvalidDataException("Stdio request exceeds 1048576 bytes before SDK deserialization.");
+                    line.Write(readBuffer.AsSpan(readOffset, take)); readOffset += take;
+                    if (next >= 0) { readOffset++; ended = true; }
+                }
+                var bytes = line.ToArray();
+                if (bytes.Length == 0 || bytes.All(b => b is (byte)' ' or (byte)'\t' or (byte)'\r')) continue;
+                using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 36 });
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) throw new InvalidDataException("MCP stdio requires one JSON-RPC object per line.");
+                var hasId = root.TryGetProperty("id", out var idValue);
+                if (root.EnumerateObject().Count(p => p.Name == "id") > 1) throw new InvalidDataException("Duplicate outer JSON-RPC id is ambiguous.");
+                RequestId id = hasId ? ProtocolAdmission.Id(idValue) : default;
+                if (hasId) admission.RegisterSeen(id);
+                if (hasId && !root.TryGetProperty("method", out _)) throw new InvalidDataException("Unsolicited client response is not supported by this tools-only server.");
+                var isTool = root.TryGetProperty("method", out var method) && method.ValueKind == JsonValueKind.String && method.GetString() == "tools/call";
+                string? toolName = null;
+                if (isTool && root.TryGetProperty("params", out var parameters) && parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String) toolName = name.GetString();
+                try { StrictJson.Validate(root); }
+                catch (Exception error)
+                {
+                    if (!hasId) throw new InvalidDataException("Invalid notification JSON.", error);
+                    await RejectAsync(id, isTool, error, token).ConfigureAwait(false); continue;
+                }
+                if (!hasId)
+                {
+                    if (!root.TryGetProperty("method", out _) || !admission.Notification(root)) continue;
+                }
+                else
+                {
+                    var rejection = admission.Reserve(id, toolName == "matrix.jobs.cancel");
+                    if (rejection is not null)
+                    {
+                        await RejectAsync(id, isTool, new ToolFailure(rejection, "Request admission is full or rate-limited; cancel has a separate reserved channel."), token).ConfigureAwait(false);
+                        continue;
+                    }
+                }
+                frame = new byte[bytes.Length + 1]; bytes.CopyTo(frame, 0); frame[^1] = (byte)'\n'; frameOffset = 0;
+            }
+            var copied = Math.Min(buffer.Length, frame.Length - frameOffset);
+            frame.AsMemory(frameOffset, copied).CopyTo(buffer); frameOffset += copied;
+            if (frameOffset == frame.Length) frame = null;
+            return copied;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested || admission.Stopping) { return 0; }
+        catch (Exception error) { Failure = error; admission.Stop(); Console.Error.WriteLine("mcp-input-failure: " + error.GetType().Name + ": " + error.Message); throw; }
+    }
+
+    private async Task RejectAsync(RequestId id, bool isTool, Exception error, CancellationToken token)
+    {
+        // Rejection is one awaited SDK send, never a per-line detached task or queue.
+        var sender = await transport.Task.ConfigureAwait(false);
+        JsonRpcMessage response = isTool
+            ? new JsonRpcResponse { Id = id, Result = JsonSerializer.SerializeToNode(McpToolHost.Result(McpToolHost.Error(epoch, error)), McpJsonUtilities.DefaultOptions) }
+            : new JsonRpcError { Id = id, Error = new JsonRpcErrorDetail { Code = (int)McpErrorCode.InvalidParams, Message = "Request rejected by bounded transport admission." } };
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
+        budget.CancelAfter(TimeSpan.FromSeconds(30));
+        await sender.SendMessageAsync(response, budget.Token).ConfigureAwait(false);
+    }
+    internal void Stop() { admission.Stop(); io.Stop(); }
+    internal async Task DrainAsync() { try { await io.DrainAsync().ConfigureAwait(false); } catch (OperationCanceledException) { } }
+    protected override void Dispose(bool disposing) { if (disposing) { Stop(); io.Dispose(); } base.Dispose(disposing); }
+}
+
+internal sealed class BoundedOutputStream(Stream output, ProtocolAdmission admission) : NonSeekableStream
+{
+    private readonly OwnedConsoleIo io = new(output);
+    private readonly MemoryStream message = new();
+    internal Exception? Failure { get; private set; }
+    internal bool IoTerminal => io.IsTerminal;
+    internal Action? OnFailure { get; set; }
+    public override bool CanRead => false;
+    public override bool CanWrite => true;
+    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+    public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken token) => WriteAsync(buffer.AsMemory(offset, count), token).AsTask();
+    public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken token = default)
+    {
+        try
+        {
+            // After the SDK acquired its send lock, finish this complete frame even
+            // if its request was cancelled. Only our owned I/O deadline may abort it.
+            if (message.Length + buffer.Length > 1048577) throw new InvalidDataException("SDK response exceeds 1048576 bytes plus newline.");
+            message.Write(buffer.Span);
+            return ValueTask.CompletedTask;
+        }
+        catch (Exception error) { Fail(error); throw; }
+    }
+    public override async Task FlushAsync(CancellationToken token)
+    {
+        try
+        {
+            var bytes = message.ToArray();
+            if (bytes.Length is 0 or > 1048577 || bytes[^1] != (byte)'\n') throw new InvalidDataException("Invalid outbound SDK message boundary.");
+            using var budget = new CancellationTokenSource();
+            budget.CancelAfter(TimeSpan.FromSeconds(30));
+            await io.RunAsync(() => { output.Write(bytes); output.Flush(); return true; }, budget.Token).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(bytes.AsMemory(0, bytes.Length - 1));
+            if (document.RootElement.TryGetProperty("id", out var id)) admission.ResponseFlushed(ProtocolAdmission.Id(id));
+            message.SetLength(0);
+        }
+        catch (Exception error) { Fail(error); throw; }
+    }
+    private void Fail(Exception error) { Failure ??= error; admission.Stop(); io.Stop(); OnFailure?.Invoke(); }
+    internal async Task DrainAsync() { try { await io.DrainAsync().ConfigureAwait(false); } catch (OperationCanceledException) { } }
+    protected override void Dispose(bool disposing) { if (disposing) { io.Dispose(); message.Dispose(); } base.Dispose(disposing); }
+}
+
+```
+
+## src/MatrixDevice.Mcp/ImportedScriptStore.cs
+
+```csharp
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using MatrixDevice.Features;
+
+namespace MatrixDevice.Mcp;
+
+internal sealed record ImportedScript(Guid Reference, string Sha256, ScriptPackage Package, long Bytes, FileStream FrozenHandle);
+
+internal sealed class ImportedScriptStore(string importRoot, string stagingDirectory) : IDisposable
+{
+    private readonly object gate = new();
+    private readonly Dictionary<Guid, ImportedScript> scripts = [];
+    private int reservations;
+    private long reservedBytes;
+    private bool disposed;
+    private bool stopping;
+    internal int CleanupFailures { get; private set; }
+    internal void StopAccepting() { lock (gate) stopping = true; }
+
+    internal ImportedScript Get(Guid reference)
+    { lock (gate) return scripts.GetValueOrDefault(reference) ?? throw new ToolFailure("UNKNOWN_REFERENCE", "Unknown script reference for this server epoch."); }
+
+    internal async Task<(ImportedScript Script, JsonObject Response)> ImportAsync(Guid epoch, string relativePath, string expectedHash, CancellationToken ct)
+    {
+        if (relativePath.Length > 4096 || Path.IsPathRooted(relativePath) || relativePath.Contains(':') || relativePath.Contains('/') || relativePath.Contains('%')
+            || relativePath.Split('\\').Any(s => s.Length == 0 || s is "." or ".." || s.EndsWith('.') || s.EndsWith(' ') || s.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0))
+            throw new ToolFailure("INVALID_ARGUMENT", "relativePath must contain unambiguous root-relative Windows file segments.");
+        if (expectedHash.Length != 64 || expectedHash.Any(c => !char.IsAsciiHexDigitLower(c))) throw new ToolFailure("INVALID_ARGUMENT", "sha256 must contain 64 lowercase hexadecimal digits.");
+        var full = Path.GetFullPath(Path.Combine(importRoot, relativePath));
+        if (!full.StartsWith(importRoot + "\\", StringComparison.OrdinalIgnoreCase)) throw new ToolFailure("INVALID_ARGUMENT", "Import path escaped the authorized root.");
+        using var sourceIdentity = StablePath.Open(full, false);
+        using var source = new FileStream(sourceIdentity.Leaf, FileAccess.Read);
+        var size = source.Length;
+        if (size is <= 0 or > 16777216) throw new ToolFailure("CAPACITY", "Archive byte limit is 16777216.");
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (stopping) throw new ToolFailure("CANCELLED", "Server is stopping; no new script references are accepted.");
+            if (scripts.Count + reservations >= 16 || reservedBytes + size > 67108864) throw new ToolFailure("CAPACITY", "Immutable script reference or staging byte capacity reached.");
+            reservations++; reservedBytes += size;
+        }
+        var path = Path.Combine(stagingDirectory, Guid.NewGuid().ToString("N") + ".zip");
+        FileStream? frozen = null;
+        var committed = false;
+        var created = false;
+        string? fileIdentity = null;
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            frozen = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read, 65536, FileOptions.Asynchronous);
+            created = true; fileIdentity = StablePath.Identity(frozen.SafeFileHandle);
+            using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var buffer = new byte[65536]; long copied = 0;
+            while (true)
+            {
+                var read = await source.ReadAsync(buffer, ct).ConfigureAwait(false);
+                if (read == 0) break;
+                copied += read;
+                if (copied > size || copied > 16777216) throw new ToolFailure("CAPACITY", "Source changed size or exceeded the archive byte limit.");
+                digest.AppendData(buffer.AsSpan(0, read));
+                await frozen.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+            }
+            if (copied != size) throw new ToolFailure("INVALID_ARGUMENT", "Source size changed while freezing.");
+            await frozen.FlushAsync(ct).ConfigureAwait(false);
+            var hash = Convert.ToHexStringLower(digest.GetHashAndReset());
+            if (!string.Equals(hash, expectedHash, StringComparison.Ordinal)) throw new ToolFailure("INVALID_ARGUMENT", "Archive SHA256 mismatch.");
+            frozen.Dispose(); frozen = null;
+            // File.OpenRead in the original importer cannot share an existing writer.
+            // Reopen read-only, then prove the same file identity and complete bytes.
+            frozen = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous);
+            if (StablePath.Identity(frozen.SafeFileHandle) != fileIdentity || frozen.Length != size
+                || Convert.ToHexStringLower(await SHA256.HashDataAsync(frozen, ct).ConfigureAwait(false)) != hash)
+                throw new ToolFailure("INVALID_ARGUMENT", "Frozen file identity or bytes changed during the read-only handoff.");
+            frozen.Position = 0;
+            // The legacy importer reads only our immutable, write-locked copy.
+            var package = await Task.Run(() => ScriptPackageService.Load(path), CancellationToken.None).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            var manifest = package.Manifest;
+            var metadata = JsonSerializer.SerializeToUtf8Bytes(new { packageId = manifest.Id, packageVersion = manifest.Version, displayName = manifest.Name }, StrictJson.Options);
+            if (metadata.Length > 8192) throw new ToolFailure("CAPACITY", "Manifest response metadata exceeds 8192 serialized bytes.");
+            var reference = Guid.NewGuid();
+            var body = StrictJson.Node(new
+            {
+                ok = true, serverEpoch = epoch, scriptRef = reference, sha256 = hash,
+                packageId = manifest.Id, packageVersion = manifest.Version, displayName = manifest.Name,
+                stepCount = package.Steps.Count, parameterCount = package.Parameters.Count,
+                bindingVersion = package.ExecutionContract?.Version,
+                parameterKeys = package.Parameters.Select(p => p.Key).ToArray(),
+                retention = "process-lifetime; immutable; no-execution-authority"
+            });
+            if (JsonSerializer.SerializeToUtf8Bytes(body, StrictJson.Options).Length > 65536) throw new ToolFailure("CAPACITY", "Complete parameter key list exceeds the response byte budget.");
+            var script = new ImportedScript(reference, hash, package, size, frozen);
+            lock (gate)
+            {
+                ct.ThrowIfCancellationRequested();
+                ObjectDisposedException.ThrowIf(disposed, this);
+                if (stopping) throw new ToolFailure("CANCELLED", "Server stopped before script reference registration.");
+                scripts.Add(reference, script);
+                committed = true;
+            }
+            return (script, body);
+        }
+        finally
+        {
+            var cleaned = !created;
+            if (!committed)
+            {
+                frozen?.Dispose();
+                if (created) cleaned = StablePath.DeleteOwned(path, fileIdentity);
+                if (!cleaned)
+                {
+                    lock (gate) { CleanupFailures++; stopping = true; }
+                    Console.Error.WriteLine("mcp-staging-cleanup-refused: identity not proven; byte reservation retained; imports stopped.");
+                }
+            }
+            lock (gate) { reservations--; if (!committed && cleaned) reservedBytes -= size; }
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (gate)
+        {
+            if (disposed) return;
+            disposed = true;
+            foreach (var script in scripts.Values) script.FrozenHandle.Dispose();
+        }
+    }
+}
+
+```
+
+## src/MatrixDevice.Mcp/MatrixDevice.Mcp.csproj
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../MatrixDevice.Host/MatrixDevice.Host.csproj" />
+    <PackageReference Include="ModelContextProtocol" Version="[2.2.0]" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="[10.0.0]" />
+    <EmbeddedResource Include="Schemas.json" />
+  </ItemGroup>
+</Project>
+
+```
+
+## src/MatrixDevice.Mcp/McpToolHost.cs
+
+```csharp
+using System.Globalization;
+using System.Reflection;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using MatrixDevice.Core;
+using MatrixDevice.Features;
+using MatrixDevice.Host;
+using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
+using ModelContextProtocol.Server;
+
+namespace MatrixDevice.Mcp;
+
+internal sealed class McpToolHost(MatrixRuntime runtime, McpPolicy policy, ImportedScriptStore scripts, Guid epoch)
+{
+    internal static readonly string[] Names = ["matrix.capabilities", "matrix.devices.list", "matrix.scripts.import", "matrix.jobs.start", "matrix.jobs.get", "matrix.jobs.cancel"];
+    private static readonly string[] Types = ["Capabilities", "DevicesList", "ScriptImport", "JobStart", "JobGet", "JobCancel"];
+    private static readonly string[] Descriptions =
+    [
+        "查看本进程能力、授权范围与限额；真实设备写入尚未启用。",
+        "列出授权目录中的设备与当前身份，不扫描网络、不启动模拟器。",
+        "校验并冻结授权导入根中的脚本包，只创建引用，不执行脚本。",
+        "按防重 operationId 向一个明确目标接纳脚本作业，返回原调度器 JobId。",
+        "按 JobId 读取原任务状态、实际结果及有界日志。",
+        "仅请求取消指定 JobId，不影响其他任务，不回滚已经发送的操作。"
+    ];
+    private readonly OperationLedger ledger = new(runtime, policy, scripts, epoch);
+    private readonly object handlerGate = new();
+    private int handlers;
+    private bool stopping;
+    private TaskCompletionSource? drained;
+    private static readonly JsonObject Definitions = ReadDefinitions();
+    internal void StopAccepting() { lock (handlerGate) stopping = true; ledger.StopAccepting(); scripts.StopAccepting(); }
+
+    private static JsonObject ReadDefinitions()
+    {
+        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("MatrixDevice.Mcp.Schemas.json")!;
+        return JsonNode.Parse(stream)!["$defs"]!.AsObject();
+    }
+
+    internal ListToolsResult ListTools()
+    {
+        var tools = new List<Tool>();
+        for (var i = 0; i < Names.Length; i++)
+        {
+            JsonElement Schema(string suffix) => JsonSerializer.SerializeToElement(new JsonObject
+            {
+                ["type"] = "object", ["$ref"] = "#/$defs/" + Types[i] + suffix,
+                ["$defs"] = Definitions.DeepClone(), ["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+            });
+            tools.Add(new Tool { Name = Names[i], Description = Descriptions[i], InputSchema = Schema("Input"), OutputSchema = Schema("Output"), Annotations = new ToolAnnotations { ReadOnlyHint = i is 0 or 1 or 4, DestructiveHint = i is 3 or 5, IdempotentHint = i is not 2 } });
+        }
+        return new() { Tools = tools };
+    }
+
+    internal async ValueTask<CallToolResult> CallAsync(RequestContext<CallToolRequestParams> context, CancellationToken requestToken)
+    {
+        var parameters = context.Params ?? throw new McpProtocolException("Tool call parameters are required.", McpErrorCode.InvalidParams);
+        if (!Names.Contains(parameters.Name, StringComparer.Ordinal)) throw new McpProtocolException("Unknown tool.", McpErrorCode.InvalidParams);
+        lock (handlerGate)
+        {
+            if (stopping) return Result(Error(epoch, new ToolFailure("CANCELLED", "Server is stopping.")));
+            handlers++;
+        }
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(requestToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        try
+        {
+            var argumentsBytes = JsonSerializer.SerializeToUtf8Bytes(parameters.Arguments ?? new Dictionary<string, JsonElement>(), StrictJson.Options);
+            if (argumentsBytes.Length > 65536) throw new ToolFailure("CAPACITY", "Tool arguments exceed 65536 serialized UTF-8 bytes.");
+            using var validated = StrictJson.Parse(argumentsBytes, 32);
+            var input = validated.RootElement;
+            deadline.Token.ThrowIfCancellationRequested();
+            JsonObject body;
+            switch (parameters.Name)
+            {
+                case "matrix.capabilities":
+                    StrictJson.Object(input, []);
+                    var limits = new JsonObject();
+                    foreach (var item in Definitions["Limits"]!["properties"]!.AsObject()) limits[item.Key] = item.Value!["const"]!.DeepClone();
+                    body = StrictJson.Node(new
+                    {
+                        ok = true, serverEpoch = epoch, contractVersion = "matrix-mcp/1", protocolVersion = "2025-11-25", mode = "demo",
+                        scopes = policy.Scopes, authorizedSerials = policy.Serials, realWritesEnabled = false,
+                        supportedTools = Names, supportedActions = new[] { "launch", "launchapp", "wait", "sleep", "click", "swipe" },
+                        unsupportedCapabilities = new[] { "real-writes", "http", "capture", "host-exec", "instance-lifecycle", "apk-management", "restart-resume", "protocol-tasks" },
+                        limits, retention = "process-lifetime; terminal-jobs-oldest-completion-100; no-restart-resume"
+                    });
+                    break;
+                case "matrix.devices.list":
+                    StrictJson.Object(input, []); policy.Require("devices.read");
+                    body = StrictJson.Node(new
+                    {
+                        ok = true, serverEpoch = epoch, mode = "demo", snapshotUtc = DateTimeOffset.UtcNow,
+                        devices = runtime.Devices.Snapshot.Where(d => policy.Serials.Contains(d.Serial, StringComparer.Ordinal)).Select(d => new
+                        {
+                            target = new { serial = d.Serial, generation = d.Generation.ToString(CultureInfo.InvariantCulture), transportId = d.TransportId },
+                            instanceIndex = (int?)null, displayName = StrictJson.Short(d.Name, 256).Text, online = d.Online,
+                            writeAllowed = d.Online && policy.Scopes.Contains("jobs.start", StringComparer.Ordinal)
+                        }).ToArray()
+                    });
+                    break;
+                case "matrix.scripts.import":
+                    StrictJson.Object(input, ["serverEpoch", "relativePath", "sha256"], "serverEpoch", "relativePath", "sha256");
+                    policy.Require("scripts.import"); ledger.RequireEpoch(input);
+                    body = (await scripts.ImportAsync(epoch, StrictJson.String(input, "relativePath", 4096), StrictJson.String(input, "sha256", 64), deadline.Token).ConfigureAwait(false)).Response;
+                    break;
+                case "matrix.jobs.start": body = ledger.Start(input, deadline.Token); break;
+                case "matrix.jobs.get":
+                    StrictJson.Object(input, ["serverEpoch", "jobId", "logLimit"], "serverEpoch", "jobId");
+                    policy.Require("jobs.read"); ledger.RequireEpoch(input);
+                    body = GetJob(StrictJson.Uuid(input, "jobId"), StrictJson.Integer(input, "logLimit", 0, 100, 50));
+                    break;
+                case "matrix.jobs.cancel":
+                    StrictJson.Object(input, ["serverEpoch", "jobId"], "serverEpoch", "jobId");
+                    policy.Require("jobs.cancel"); ledger.RequireEpoch(input);
+                    body = ledger.Cancel(StrictJson.Uuid(input, "jobId"));
+                    break;
+                default: throw new InvalidOperationException();
+            }
+            return Result(body);
+        }
+        catch (Exception error)
+        {
+            if (error is OperationCanceledException && !requestToken.IsCancellationRequested) error = new ToolFailure("DEADLINE_EXCEEDED", "Tool request exceeded its 30-second budget before completing.");
+            return Result(Error(epoch, error));
+        }
+        finally
+        {
+            lock (handlerGate) { handlers--; if (handlers == 0) drained?.TrySetResult(); }
+        }
+    }
+
+    private JsonObject GetJob(Guid id, int logLimit)
+    {
+        var owned = ledger.Get(id);
+        var status = runtime.Scripts.GetJob(id) ?? throw new ToolFailure("UNKNOWN_REFERENCE", "Job is not retained.");
+        var allLogs = runtime.Scripts.GetJobLogs(id);
+        var error = status.Error is null ? (Text: (string?)null, Truncated: false) : StrictJson.Short(status.Error, 2048);
+        var logs = allLogs.TakeLast(logLimit).Select(entry =>
+        {
+            var message = StrictJson.Short(entry.Message, 2048);
+            return StrictJson.Node(new { timestampUtc = entry.Timestamp, message = message.Text, truncated = message.Truncated });
+        }).ToList();
+        var body = StrictJson.Node(new
+        {
+            ok = true, serverEpoch = epoch, snapshotUtc = DateTimeOffset.UtcNow,
+            job = new
+            {
+                jobId = id, operationId = owned.OperationId, target = OperationLedger.Target(owned.Target), scriptRef = owned.Script.Reference,
+                sha256 = owned.Script.Sha256, packageId = status.PackageId, packageVersion = status.PackageVersion,
+                state = status.State.ToString(), stepIndex = status.StepIndex, stepCount = status.StepCount,
+                startedUtc = status.StartedUtc, endedUtc = status.EndedUtc, error = error.Text, result = status.Result,
+                errorTruncated = error.Truncated, resultTruncatedForResponse = false, terminalReason = OperationLedger.Reason(owned, status)
+            },
+            availableLogs = allLogs.Count, logWindowLimit = 500, omittedLogCount = allLogs.Count - logs.Count, logs
+        });
+        while (Bytes(body) > 65536 && body["logs"]!.AsArray().Count > 0)
+        {
+            body["logs"]!.AsArray().RemoveAt(0);
+            body["omittedLogCount"] = allLogs.Count - body["logs"]!.AsArray().Count;
+        }
+        var originalResult = status.Result;
+        if (Bytes(body) > 65536 && originalResult is not null)
+        {
+            var runes = originalResult.EnumerateRunes().ToArray(); var low = 0; var high = runes.Length;
+            body["job"]!["resultTruncatedForResponse"] = true;
+            while (low < high)
+            {
+                var mid = (low + high + 1) / 2;
+                body["job"]!["result"] = string.Concat(runes.Take(mid).Select(r => r.ToString())) + "[MCP响应预算截断]";
+                if (Bytes(body) <= 65536) low = mid; else high = mid - 1;
+            }
+            body["job"]!["result"] = string.Concat(runes.Take(low).Select(r => r.ToString())) + "[MCP响应预算截断]";
+        }
+        return body;
+    }
+
+    internal static int Bytes(JsonObject body) => JsonSerializer.SerializeToUtf8Bytes(body, StrictJson.Options).Length;
+    internal static CallToolResult Result(JsonObject body)
+    {
+        if (Bytes(body) > 65536) body = Error(body["serverEpoch"]!.GetValue<Guid>(), new ToolFailure("CAPACITY", "Business response exceeds 65536 serialized bytes."));
+        var text = JsonSerializer.Serialize(body, StrictJson.Options);
+        return new() { IsError = !body["ok"]!.GetValue<bool>(), StructuredContent = JsonSerializer.SerializeToElement(body, StrictJson.Options), Content = [new TextContentBlock { Text = text }] };
+    }
+
+    internal static JsonObject Error(Guid epoch, Exception error)
+    {
+        var code = error switch
+        {
+            ToolFailure failure => failure.Code,
+            OperationCanceledException => "CANCELLED",
+            DeviceException device => device.Code switch { 1007 => "INVALID_ARGUMENT", 2001 => "NOT_SUPPORTED", 1003 => "IDENTITY_CHANGED", _ => "INVALID_ARGUMENT" },
+            JsonException or ArgumentException or InvalidDataException => "INVALID_ARGUMENT",
+            IOException => "INVALID_ARGUMENT",
+            _ => "INTERNAL"
+        };
+        var safeMessage = error is IOException ? "File access failed within the authorized import or staging boundary." : error.Message;
+        var message = StrictJson.Short(code == "INTERNAL" ? "Internal MCP operation failure. See local diagnostics." : safeMessage, 2048);
+        if (code == "INTERNAL") Console.Error.WriteLine("mcp-internal: " + error.GetType().Name);
+        return StrictJson.Node(new { ok = false, serverEpoch = epoch, error = new { code, message = message.Text, errorTruncated = message.Truncated, projectCode = error is DeviceException original ? (int?)original.Code : null, retryable = false } });
+    }
+
+    internal async Task<object[]> StopAsync()
+    {
+        Task wait;
+        lock (handlerGate) { stopping = true; wait = handlers == 0 ? Task.CompletedTask : (drained ??= new(TaskCreationOptions.RunContinuationsAsynchronously)).Task; }
+        // Stop new submissions first; cancellation follows the original JobId, not serial.
+        var drain = ledger.DrainAsync();
+        await wait.ConfigureAwait(false);
+        return await drain.ConfigureAwait(false);
+    }
+}
+
+```
+
+## src/MatrixDevice.Mcp/OperationLedger.cs
+
+```csharp
+using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using MatrixDevice.Core;
+using MatrixDevice.Features;
+using MatrixDevice.Host;
+
+namespace MatrixDevice.Mcp;
+
+internal sealed class OwnedJob(Guid operationId, ImportedScript script, ScriptJobTarget target, int timeoutMs, CancellationTokenSource cancellation)
+{
+    internal Guid OperationId { get; } = operationId;
+    internal ImportedScript Script { get; } = script;
+    internal ScriptJobTarget Target { get; } = target;
+    internal int TimeoutMs { get; } = timeoutMs;
+    internal CancellationTokenSource Cancellation { get; } = cancellation;
+    internal required ScriptJobHandle Handle { get; init; }
+    internal Timer? Deadline { get; set; }
+    internal string? CancellationReason;
+}
+
+internal sealed class OperationLedger(MatrixRuntime runtime, McpPolicy policy, ImportedScriptStore scripts, Guid epoch)
+{
+    private sealed record Operation(string Digest, JsonObject Result);
+    private readonly object gate = new();
+    private readonly Dictionary<Guid, Operation> operations = [];
+    private readonly Dictionary<Guid, OwnedJob> jobs = [];
+    private bool stopping;
+    internal void StopAccepting()
+    { lock (gate) { stopping = true; foreach (var job in jobs.Values) CancelWithReason(job, "shutdown"); } }
+    internal OwnedJob Get(Guid id)
+    {
+        lock (gate)
+        {
+            var job = jobs.GetValueOrDefault(id) ?? throw new ToolFailure("UNKNOWN_REFERENCE", "Unknown job reference for this server epoch.");
+            policy.RequireSerial(job.Target.Serial);
+            return job;
+        }
+    }
+
+    internal JsonObject Start(JsonElement input, CancellationToken requestToken)
+    {
+        StrictJson.Object(input, ["serverEpoch", "operationId", "scriptRef", "serial", "expectedIdentity", "parameterOverrides", "timeoutMs"], "serverEpoch", "operationId", "scriptRef", "serial", "expectedIdentity");
+        policy.Require("jobs.start"); RequireEpoch(input);
+        var operationId = StrictJson.Uuid(input, "operationId");
+        var reference = StrictJson.Uuid(input, "scriptRef");
+        var serial = StrictJson.String(input, "serial"); policy.RequireSerial(serial);
+        var identity = input.GetProperty("expectedIdentity");
+        StrictJson.Object(identity, ["generation", "transportId"], "generation", "transportId");
+        var generationText = StrictJson.String(identity, "generation", 19);
+        if (!long.TryParse(generationText, NumberStyles.None, CultureInfo.InvariantCulture, out var generation) || generation <= 0 || generation.ToString(CultureInfo.InvariantCulture) != generationText)
+            throw new ToolFailure("INVALID_ARGUMENT", "generation must be a canonical positive Int64 string.");
+        if (identity.GetProperty("transportId").ValueKind != JsonValueKind.Null) throw new ToolFailure("INVALID_ARGUMENT", "Demo transportId must be JSON null.");
+        var timeout = StrictJson.Integer(input, "timeoutMs", 1000, 300000, 300000);
+        var script = scripts.Get(reference);
+        Dictionary<string, JsonElement> overrides = new(StringComparer.Ordinal);
+        if (input.TryGetProperty("parameterOverrides", out var values))
+        {
+            if (values.ValueKind != JsonValueKind.Object || values.EnumerateObject().Count() > 1000) throw new ToolFailure("INVALID_ARGUMENT", "parameterOverrides must be an object containing at most 1000 keys.");
+            foreach (var value in values.EnumerateObject()) overrides.Add(value.Name, value.Value.Clone());
+        }
+        var digestInput = JsonSerializer.SerializeToElement(new { contractVersion = "matrix-mcp/1", scopeOwner = policy.ScopeOwner, scriptRef = reference, sha256 = script.Sha256, serial, expectedIdentity = identity, parameterOverrides = overrides, timeoutMs = timeout }, StrictJson.Options);
+        var digest = StrictJson.Digest(digestInput);
+        lock (gate)
+        {
+            requestToken.ThrowIfCancellationRequested();
+            if (operations.TryGetValue(operationId, out var previous))
+            {
+                if (previous.Digest != digest) throw new ToolFailure("INVALID_ARGUMENT", "operationId conflicts with its immutable original request.");
+                var replay = previous.Result.DeepClone().AsObject();
+                if (replay["ok"]!.GetValue<bool>()) replay["replayed"] = true;
+                return replay;
+            }
+            if (stopping) throw new ToolFailure("CANCELLED", "Server is stopping; no new jobs are accepted.");
+            if (operations.Count >= 100) throw new ToolFailure("CAPACITY", "Operation ledger capacity reached; existing operationIds remain replayable.");
+            JsonObject result;
+            CancellationTokenSource? ownedCancellation = null;
+            try
+            {
+                ScriptExecutionCompiler.Compile(script.Package, overrides);
+                var current = runtime.Devices.Snapshot.SingleOrDefault(d => d.Serial == serial);
+                if (current is null || !current.Online) throw new ToolFailure("TARGET_OFFLINE", "Authorized target is not online.");
+                if (current.Generation != generation || current.TransportId is not null) throw new ToolFailure("IDENTITY_CHANGED", "Expected target generation does not match the current directory.");
+                if (jobs.Values.Count(j => !j.Handle.Completion.IsCompleted) >= 2) throw new ToolFailure("CAPACITY", "Maximum active jobs is 2.");
+                if (runtime.Scripts.GetStatus(serial).State is ScriptRunState.Running or ScriptRunState.Cancelling) throw new ToolFailure("BUSY", "Target already has an active script.");
+                requestToken.ThrowIfCancellationRequested();
+                ownedCancellation = new CancellationTokenSource();
+                var target = new ScriptJobTarget(serial, generation, null, true);
+                var handle = runtime.Scripts.SubmitJob(target, script.Package, ownedCancellation.Token, overrides);
+                var owned = new OwnedJob(operationId, script, target, timeout, ownedCancellation) { Handle = handle };
+                jobs.Add(handle.JobId, owned);
+                owned.Deadline = new Timer(_ => CancelWithReason(owned, "deadline"), null, timeout, Timeout.Infinite);
+                _ = handle.Completion.ContinueWith(_ => owned.Deadline.Dispose(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                result = StrictJson.Node(new { ok = true, serverEpoch = epoch, operationId, jobId = handle.JobId, target = Target(target), scriptRef = reference, sha256 = script.Sha256, accepted = true, replayed = false, timeoutMs = timeout });
+            }
+            catch (OperationCanceledException) { ownedCancellation?.Dispose(); throw; }
+            catch (Exception error)
+            {
+                ownedCancellation?.Dispose();
+                result = McpToolHost.Error(epoch, error);
+                result["error"]!["operationId"] = operationId.ToString("D");
+            }
+            operations.Add(operationId, new(digest, result));
+            return result.DeepClone().AsObject();
+        }
+    }
+
+    internal void RequireEpoch(JsonElement input)
+    { if (StrictJson.Uuid(input, "serverEpoch") != epoch) throw new ToolFailure("UNKNOWN_REFERENCE", "serverEpoch belongs to a different process lifetime."); }
+
+    internal JsonObject Cancel(Guid id)
+    {
+        var owned = Get(id);
+        lock (gate)
+        {
+            var status = runtime.Scripts.GetJob(id) ?? throw new ToolFailure("UNKNOWN_REFERENCE", "Job is no longer retained.");
+            var terminal = IsTerminal(status.State);
+            var requested = !terminal && CancelWithReason(owned, "cancelled");
+            status = runtime.Scripts.GetJob(id)!;
+            return StrictJson.Node(new { ok = true, serverEpoch = epoch, jobId = id, cancelRequested = requested, state = status.State.ToString(), terminal = IsTerminal(status.State) });
+        }
+    }
+
+    private bool CancelWithReason(OwnedJob owned, string reason)
+    {
+        lock (gate)
+        {
+            var status = runtime.Scripts.GetJob(owned.Handle.JobId);
+            if (status is null || IsTerminal(status.State)) return false;
+            Interlocked.CompareExchange(ref owned.CancellationReason, reason, null);
+            var requested = runtime.Scripts.CancelJob(owned.Handle.JobId);
+            return requested;
+        }
+    }
+
+    internal async Task<object[]> DrainAsync()
+    {
+        OwnedJob[] snapshot;
+        lock (gate) { stopping = true; snapshot = jobs.Values.ToArray(); foreach (var job in snapshot) CancelWithReason(job, "shutdown"); }
+        foreach (var job in snapshot)
+        {
+            try { await job.Handle.Completion.ConfigureAwait(false); }
+            catch { /* The actual failure remains in the original job status and lifecycle report. */ }
+            job.Deadline?.Dispose(); job.Cancellation.Dispose();
+        }
+        return snapshot.Select(j => (object)new { jobId = j.Handle.JobId, operationId = j.OperationId, serial = j.Target.Serial, state = runtime.Scripts.GetJob(j.Handle.JobId)?.State.ToString(), terminal = runtime.Scripts.GetJob(j.Handle.JobId) is { } status && IsTerminal(status.State), terminalReason = Reason(j, runtime.Scripts.GetJob(j.Handle.JobId)!) }).ToArray();
+    }
+
+    internal static bool IsTerminal(ScriptRunState state) => state is ScriptRunState.Completed or ScriptRunState.Cancelled or ScriptRunState.Failed;
+    internal static string? Reason(OwnedJob job, ScriptJobStatus status) => status.State switch { ScriptRunState.Completed => "completed", ScriptRunState.Failed => "failed", ScriptRunState.Cancelled => job.CancellationReason ?? "cancelled", _ => null };
+    internal static object Target(ScriptJobTarget target) => new { serial = target.Serial, generation = target.Generation.ToString(CultureInfo.InvariantCulture), transportId = target.TransportId };
+}
+
+```
+
+## src/MatrixDevice.Mcp/OwnedConsoleIo.cs
+
+```csharp
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+namespace MatrixDevice.Mcp;
+
+// Each blocking Windows console-pipe operation has one retained native thread.
+// Cancellation repeatedly targets that exact thread until the original I/O ends.
+internal sealed class OwnedConsoleIo(Stream stream) : IDisposable
+{
+    private readonly CancellationTokenSource stopping = new();
+    private readonly object gate = new();
+    private Task? pending;
+    private bool disposed;
+
+    internal Task<T> RunAsync<T>(Func<T> action, CancellationToken token)
+    {
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (pending is { IsCompleted: false }) throw new InvalidOperationException("Concurrent access to one standard stream is not allowed.");
+            var operation = RunOperationAsync(action, token);
+            pending = operation;
+            return operation;
+        }
+    }
+
+    private async Task<T> RunOperationAsync<T>(Func<T> action, CancellationToken token)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, stopping.Token);
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            SafeFileHandle? nativeThread = null;
+            Timer? cancellationTimer = null;
+            T? result = default;
+            Exception? failure = null;
+            try
+            {
+                if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), out nativeThread, 0, false, 2)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                var cancellationGate = new object();
+                cancellationTimer = new Timer(_ =>
+                {
+                    lock (cancellationGate)
+                        if (linked.IsCancellationRequested && nativeThread is { IsClosed: false }) CancelSynchronousIo(nativeThread);
+                }, null, 0, 10);
+                linked.Token.ThrowIfCancellationRequested();
+                result = action();
+            }
+            catch (Exception error) { failure = error; }
+            finally
+            {
+                Exception? cleanupFailure = null;
+                try
+                {
+                    // Wait for queued timer callbacks before closing their exact-thread handle.
+                    cancellationTimer?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
+                catch (Exception error) { cleanupFailure = error; }
+                finally
+                {
+                    try { nativeThread?.Dispose(); }
+                    catch (Exception error) { cleanupFailure ??= error; }
+                }
+                if (cleanupFailure is not null) completion.TrySetException(cleanupFailure);
+                else if (failure is null) completion.TrySetResult(result!);
+                else if (linked.IsCancellationRequested) completion.TrySetCanceled(linked.Token);
+                else completion.TrySetException(failure);
+            }
+        }) { IsBackground = true, Name = "matrix-mcp-owned-stdio" };
+        thread.Start();
+        try { return await completion.Task.ConfigureAwait(false); }
+        finally
+        {
+            // Never recycle the buffer, token or native-thread handle before this thread ends.
+            thread.Join();
+        }
+    }
+
+    internal void Stop() => stopping.Cancel();
+    internal bool IsTerminal { get { lock (gate) return pending is null || pending.IsCompleted; } }
+    internal Task DrainAsync() { lock (gate) return pending ?? Task.CompletedTask; }
+    public void Dispose() { lock (gate) { if (disposed) return; disposed = true; stopping.Cancel(); } stream.Dispose(); }
+
+    [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentThread();
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr sourceHandle, IntPtr targetProcess, out SafeFileHandle target, uint access, bool inherit, uint options);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool CancelSynchronousIo(SafeFileHandle thread);
+}
+
+```
+
+## src/MatrixDevice.Mcp/packages.lock.json
+
+```json
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Microsoft.Extensions.Hosting": {
+        "type": "Direct",
+        "requested": "[10.0.0, 10.0.0]",
+        "resolved": "10.0.0",
+        "contentHash": "yKJiVdXkSfe9foojGpBRbuDPQI8YD71IO/aE8ehGjRHE0VkEF/YWkW6StthwuFF146pc2lypZrpk/Tks6Plwhw==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration": "10.0.0",
+          "Microsoft.Extensions.Configuration.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Configuration.Binder": "10.0.0",
+          "Microsoft.Extensions.Configuration.CommandLine": "10.0.0",
+          "Microsoft.Extensions.Configuration.EnvironmentVariables": "10.0.0",
+          "Microsoft.Extensions.Configuration.FileExtensions": "10.0.0",
+          "Microsoft.Extensions.Configuration.Json": "10.0.0",
+          "Microsoft.Extensions.Configuration.UserSecrets": "10.0.0",
+          "Microsoft.Extensions.DependencyInjection": "10.0.0",
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Diagnostics": "10.0.0",
+          "Microsoft.Extensions.FileProviders.Abstractions": "10.0.0",
+          "Microsoft.Extensions.FileProviders.Physical": "10.0.0",
+          "Microsoft.Extensions.Hosting.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Logging": "10.0.0",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Logging.Configuration": "10.0.0",
+          "Microsoft.Extensions.Logging.Console": "10.0.0",
+          "Microsoft.Extensions.Logging.Debug": "10.0.0",
+          "Microsoft.Extensions.Logging.EventLog": "10.0.0",
+          "Microsoft.Extensions.Logging.EventSource": "10.0.0",
+          "Microsoft.Extensions.Options": "10.0.0"
+        }
+      },
+      "ModelContextProtocol": {
+        "type": "Direct",
+        "requested": "[2.2.0, 2.2.0]",
+        "resolved": "2.2.0",
+        "contentHash": "4Pb9u02Nwsp0poueDsqNdyGRojFxOYpljB7zDBsq+aHL+Afou3OgxlBc3GWFVnsRMRJrUtWqDh3s6k2JgPzmrQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Caching.Abstractions": "10.0.10",
+          "Microsoft.Extensions.Hosting.Abstractions": "10.0.10",
+          "ModelContextProtocol.Core": "[2.2.0]"
+        }
+      },
+      "AdvancedSharpAdbClient": {
+        "type": "Transitive",
+        "resolved": "3.6.16",
+        "contentHash": "w5p3s+9Rkx9tmn5S5KU0XSTap5YWGHOvQOw/40M0d7eGOHf7idhX+kizWPmnP1ahbkic/yiX03SMYNR1mJSAVw=="
+      },
+      "Microsoft.Data.Sqlite": {
+        "type": "Transitive",
+        "resolved": "10.0.12",
+        "contentHash": "xUq9xUc653ue7ac2rMfCaf8UQN+U3zS8poWYlugycpvJllplMM0Mk7v/+MM0CTlu9zGvbGML4BPH8YWhrUOfGw==",
+        "dependencies": {
+          "Microsoft.Data.Sqlite.Core": "10.0.12",
+          "SQLitePCLRaw.bundle_e_sqlite3": "2.1.12",
+          "SQLitePCLRaw.core": "2.1.12"
+        }
+      },
+      "Microsoft.Data.Sqlite.Core": {
+        "type": "Transitive",
+        "resolved": "10.0.12",
+        "contentHash": "2aL9eL5HQr0V4b8V909SD+jQAx6qnTTl7sT/v3D8dIvmr2UGdpZIQxqm1pj2Js3e4EYTvpw0oMH7DjapJJuPPw==",
+        "dependencies": {
+          "SQLitePCLRaw.core": "2.1.12"
+        }
+      },
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.8.3",
+        "contentHash": "K0B05oApxmviWalNHPMBBcRC7erKiDATz3ENNR/jqTR9JwIwLRefgDhj2jCRwL1aca99pXUe0qyQC73/xIuZig=="
+      },
+      "Microsoft.Extensions.Caching.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "4ZFBNE+jzR+CrWWlhOesnmywCW7pYKT0dxyAQRdL11yJwxe4jvcAu31eorFtEkoFeCDcUTeNssgPv2yaRRptaQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Primitives": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.Configuration": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "H4SWETCh/cC5L1WtWchHR6LntGk3rDTTznZMssr4cL8IbDmMWBxY+MOGDc/ASnqNolLKPIWHWeuC1ddiL/iNPw==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Primitives": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Configuration.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "5Vnd2I75DmZCVEjSynIdJ/0EGafgnLQwgR3t2C2/fkjx/nRG+cLwxLLdInoHeCEpkD5K4Ov/g9ZCRYrl4TRsaA==",
+        "dependencies": {
+          "Microsoft.Extensions.Primitives": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.Configuration.Binder": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "tMF9wNh+hlyYDWB8mrFCQHQmWHlRosol1b/N2Jrefy1bFLnuTlgSYmPyHNmz8xVQgs7DpXytBRWxGhG+mSTp0g==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration": "10.0.0",
+          "Microsoft.Extensions.Configuration.Abstractions": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Configuration.CommandLine": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "CRj5clwZciVs46GMhAthkFq3+JiNM15Bz9CRlCZLBmRdggD6RwoBphRJ+EUDK2f+cZZ1L2zqVaQrn1KueoU5Kg==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration": "10.0.0",
+          "Microsoft.Extensions.Configuration.Abstractions": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Configuration.EnvironmentVariables": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "TmFegsI/uCdwMBD4yKpmO+OkjVNHQL49Dh/ep83NI5rPUEoBK9OdsJo1zURc1A2FuS/R/Pos3wsTjlyLnguBLA==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration": "10.0.0",
+          "Microsoft.Extensions.Configuration.Abstractions": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Configuration.FileExtensions": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "LqCTyF0twrG4tyEN6PpSC5ewRBDwCBazRUfCOdRddwaQ3n2S57GDDeYOlTLcbV/V2dxSSZWg5Ofr48h6BsBmxw==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration": "10.0.0",
+          "Microsoft.Extensions.Configuration.Abstractions": "10.0.0",
+          "Microsoft.Extensions.FileProviders.Abstractions": "10.0.0",
+          "Microsoft.Extensions.FileProviders.Physical": "10.0.0",
+          "Microsoft.Extensions.Primitives": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Configuration.Json": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "BIOPTEAZoeWbHlDT9Zudu+rpecZizFwhdIFRiyZKDml7JbayXmfTXKUt+ezifsSXfBkWDdJM10oDOxo8pufEng==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration": "10.0.0",
+          "Microsoft.Extensions.Configuration.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Configuration.FileExtensions": "10.0.0",
+          "Microsoft.Extensions.FileProviders.Abstractions": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Configuration.UserSecrets": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "B4qHB6gQ2B3I52YRohSV7wetp01BQzi8jDmrtiVm6e4l8vH5vjqwxWcR5wumGWjdBkj1asJLLsDIocdyTQSP0A==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Configuration.Json": "10.0.0",
+          "Microsoft.Extensions.FileProviders.Abstractions": "10.0.0",
+          "Microsoft.Extensions.FileProviders.Physical": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.DependencyInjection": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "f0RBabswJq+gRu5a+hWIobrLWiUYPKMhCD9WO3sYBAdSy3FFH14LMvLVFZc2kPSCimBLxSuitUhsd6tb0TAY6A==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.DependencyInjection.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA=="
+      },
+      "Microsoft.Extensions.Diagnostics": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "xjkxIPgrT0mKTfBwb+CVqZnRchyZgzKIfDQOp8z+WUC6vPe3WokIf71z+hJPkH0YBUYJwa7Z/al1R087ib9oiw==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration": "10.0.0",
+          "Microsoft.Extensions.Diagnostics.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Options.ConfigurationExtensions": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Diagnostics.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "9uWiKpeOVac355STyChWR/pliFX/5CeLqChW9kKsaxyDH4EUTZxMkT4Jwp/J/peLm0GBFmSX5c0WCse3yCnq1Q==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10",
+          "Microsoft.Extensions.Options": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.FileProviders.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "c5zqFCY9DiIpMovLd7/d/CTiEtrMOuQ639dhv3PABtKQIKNQikSHwQt8+N679uii9q+B55lgK28Uv64FOwEu8w==",
+        "dependencies": {
+          "Microsoft.Extensions.Primitives": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.FileProviders.Physical": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "UZUQ74lQMmvcprlG8w+XpxBbyRDQqfb7GAnccITw32hdkUBlmm9yNC4xl4aR9YjgV3ounZcub194sdmLSfBmPA==",
+        "dependencies": {
+          "Microsoft.Extensions.FileProviders.Abstractions": "10.0.0",
+          "Microsoft.Extensions.FileSystemGlobbing": "10.0.0",
+          "Microsoft.Extensions.Primitives": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.FileSystemGlobbing": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "5hfVl/e+bx1px2UkN+1xXhd3hu7Ui6ENItBzckFaRDQXfr+SHT/7qrCDrlQekCF/PBtEu2vtk87U2+gDEF8EhQ=="
+      },
+      "Microsoft.Extensions.Hosting.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "5LugpYGHk+mkn0a8IZgcyfBca8PCTAU9RQFoMrTdtOOidq88M2SI5f3px6ugnzgxC+eTkvYYJi8pzlUnG5xdAQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration.Abstractions": "10.0.10",
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10",
+          "Microsoft.Extensions.Diagnostics.Abstractions": "10.0.10",
+          "Microsoft.Extensions.FileProviders.Abstractions": "10.0.10",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.Logging": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "BStFkd5CcnEtarlcgYDBcFzGYCuuNMzPs02wN3WBsOFoYIEmYoUdAiU+au6opzoqfTYJsMTW00AeqDdnXH2CvA==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection": "10.0.0",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Options": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Logging.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "zkFxGYUvdxAvIKTyXHrmW+Sux53D4SezD9dMyZ6hrwwzPQJNuwCRy1f5W7AvYTqacEGhWF2XderRQG1OvbV8og==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.Logging.Configuration": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "j8zcwhS6bYB6FEfaY3nYSgHdpiL2T+/V3xjpHtslVAegyI1JUbB9yAt/BFdvZdsNbY0Udm4xFtvfT/hUwcOOOg==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration": "10.0.0",
+          "Microsoft.Extensions.Configuration.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Configuration.Binder": "10.0.0",
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Logging": "10.0.0",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Options": "10.0.0",
+          "Microsoft.Extensions.Options.ConfigurationExtensions": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Logging.Console": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "treWetuksp8LVb09fCJ5zNhNJjyDkqzVm83XxcrlWQnAdXznR140UUXo8PyEPBvFlHhjKhFQZEOP3Sk/ByCvEw==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Logging": "10.0.0",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Logging.Configuration": "10.0.0",
+          "Microsoft.Extensions.Options": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Logging.Debug": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "A/4vBtVaySLBGj4qluye+KSbeVCCMa6GcTbxf2YgnSDHs9b9105+VojBJ1eJPel8F1ny0JOh+Ci3vgCKn69tNQ==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Logging": "10.0.0",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Logging.EventLog": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "EWda5nSXhzQZr3yJ3+XgIApOek+Hm+txhWCEzWNVPp/OfimL4qmvctgXu87m+S2RXw/AoUP8aLMNicJ2KWblVA==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Logging": "10.0.0",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Options": "10.0.0",
+          "System.Diagnostics.EventLog": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Logging.EventSource": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "+Qc+kgoJi1w2A/Jm+7h04LcK2JoJkwAxKg7kBakkNRcemTmRGocqPa7rVNVGorTYruFrUS25GwkFNtOECnjhXg==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Logging": "10.0.0",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Options": "10.0.0",
+          "Microsoft.Extensions.Primitives": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Options": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "srnhnk7nE8krBiIXp71LvBmKBtraBONWSRzdjJgRv1Ko9Mp8IVNqv4vIS9hGeVteBig8aQkva9ZG+sC+o5sVcA==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10",
+          "Microsoft.Extensions.Primitives": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.Options.ConfigurationExtensions": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "tL9cSl3maS5FPzp/3MtlZI21ExWhni0nnUCF8HY4npTsINw45n9SNDbkKXBMtFyUFGSsQep25fHIDN4f/Vp3AQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Configuration.Binder": "10.0.0",
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.0",
+          "Microsoft.Extensions.Options": "10.0.0",
+          "Microsoft.Extensions.Primitives": "10.0.0"
+        }
+      },
+      "Microsoft.Extensions.Primitives": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "5wu/GrYVd8mG2DVUw3vFJzF+O336TyTGg/Kmcgw9bfwYhCoFiV5lR5QeEmKecJyrW4W54nMfD3p3589E8a7czQ=="
+      },
+      "ModelContextProtocol.Core": {
+        "type": "Transitive",
+        "resolved": "2.2.0",
+        "contentHash": "FeBfXU6T8k+jw4afg4sfxdEX2rL/e5oKOk9ROOGztu9k47+7Bz08sdaToYt2XvMY1opNbwxYQOFMj6wH9TInhA==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "10.8.3",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.10"
+        }
+      },
+      "SkiaSharp": {
+        "type": "Transitive",
+        "resolved": "4.153.1",
+        "contentHash": "TghYLOUaP3q6rTjQw7U9uQaaXh8lEs9rfA1U7/VtmyAptVDtj/SmjtcWzFWmcC/VMWxe3QgbV9uyvqDL7ySFtQ==",
+        "dependencies": {
+          "SkiaSharp.NativeAssets.Win32": "4.153.1",
+          "SkiaSharp.NativeAssets.macOS": "4.153.1"
+        }
+      },
+      "SkiaSharp.NativeAssets.macOS": {
+        "type": "Transitive",
+        "resolved": "4.153.1",
+        "contentHash": "YTojWeWIhnpF7uC8vpMxB5wRONKkDB2t3r/nNPA3DL2pgj9fqMXRevA/rIanYazWnco4jo1ufgp3HkXuh1Tz8A=="
+      },
+      "SkiaSharp.NativeAssets.Win32": {
+        "type": "Transitive",
+        "resolved": "4.153.1",
+        "contentHash": "Yqg6rChTVh0BUE8QQxtOA3uUBnihfgID4yex/AvDa0+os2bVcBjmI3Qj9tnOB+R1hd/Jry1Gwl8qw5JI9HZG8Q=="
+      },
+      "SQLitePCLRaw.bundle_e_sqlite3": {
+        "type": "Transitive",
+        "resolved": "2.1.12",
+        "contentHash": "mAgscpQMLw5/nfA1Q5oJVAT29yROUo1ifZGbbTpx/lwZpSxMUGoYbKfmvdm8oXER+RzxqBmmQzeBEVKfeHv2nw==",
+        "dependencies": {
+          "SQLitePCLRaw.lib.e_sqlite3": "2.1.12",
+          "SQLitePCLRaw.provider.e_sqlite3": "2.1.12"
+        }
+      },
+      "SQLitePCLRaw.core": {
+        "type": "Transitive",
+        "resolved": "2.1.12",
+        "contentHash": "ETpNw9DY3ckWLgRRAeCHj+GKOuPi61aeczkXhgHexUvqoZBAYg8RYESE2J7O1M7+o6QbdSEZwrw9bfqztUVWXg=="
+      },
+      "SQLitePCLRaw.lib.e_sqlite3": {
+        "type": "Transitive",
+        "resolved": "2.1.12",
+        "contentHash": "fWi8Dbknuhgg72fWinIdjXVaqO1hHL4YBBwVLnr7e1c9TAZwJ0QE38j9syW1hwx6HaqEVTwI+O07WPdZn8Rp0w=="
+      },
+      "SQLitePCLRaw.provider.e_sqlite3": {
+        "type": "Transitive",
+        "resolved": "2.1.12",
+        "contentHash": "W3oH4XIfCzFrgUSDKHhN6N+dgzA5YHOR2VxX8GB6Qy7CyrJJgxPEG8NirgYWlPQC5P2jz2knSsexWu4tDUL33g==",
+        "dependencies": {
+          "SQLitePCLRaw.core": "2.1.12"
+        }
+      },
+      "System.Diagnostics.EventLog": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "uaFRda9NjtbJRkdx311eXlAA3n2em7223c1A8d1VWyl+4FL9vkG7y2lpPfBU9HYdj/9KgdRNdn1vFK8ZYCYT/A=="
+      },
+      "matrixdevice.core": {
+        "type": "Project",
+        "dependencies": {
+          "AdvancedSharpAdbClient": "[3.6.16, )",
+          "SkiaSharp": "[4.153.1, )"
+        }
+      },
+      "matrixdevice.features": {
+        "type": "Project",
+        "dependencies": {
+          "MatrixDevice.Core": "[1.0.0, )"
+        }
+      },
+      "matrixdevice.host": {
+        "type": "Project",
+        "dependencies": {
+          "MatrixDevice.Features": "[1.0.0, )",
+          "Microsoft.Data.Sqlite": "[10.0.12, )"
+        }
+      }
+    }
+  }
+}
+```
+
+## src/MatrixDevice.Mcp/Program.cs
+
+```csharp
+using System.Text.Json;
+using MatrixDevice.Core;
+using MatrixDevice.Host;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
+
+namespace MatrixDevice.Mcp;
+
+internal static class Program
+{
+    private static async Task<int> Main(string[] args)
+    {
+        StartupOptions? options = null;
+        MatrixRuntime? runtime = null;
+        ImportedScriptStore? scripts = null;
+        McpToolHost? tools = null;
+        IHost? host = null;
+        BoundedInputStream? input = null;
+        BoundedOutputStream? output = null;
+        StablePath? dataIdentity = null;
+        StablePath? stagingIdentity = null;
+        var epoch = Guid.NewGuid();
+        object[] ownedJobs = [];
+        var runtimeDisposed = false;
+        var handlerDrained = false;
+        var ownedJobsTerminal = false;
+        var failure = (string?)null;
+        var created = false;
+        var admission = new ProtocolAdmission();
+        try
+        {
+            // All startup policy and real-mode rejection precede filesystem mutation.
+            options = StartupOptions.Parse(args);
+            if (!Console.IsInputRedirected || !Console.IsOutputRedirected) throw new ArgumentException("MCP requires redirected standard input and output pipes.");
+            StablePath.CreateFreshDirectory(options.DataDirectory); created = true;
+            dataIdentity = StablePath.Open(options.DataDirectory, true);
+            var staging = Path.Combine(options.DataDirectory, "staging");
+            StablePath.CreateFreshDirectory(staging);
+            stagingIdentity = StablePath.Open(staging, true);
+            var settings = new AppSettings { AutoStartApi = false, AutoConnect = false, SyncMouse = false, SyncKeyboard = false, AdbAllowedSerials = [], LdSerialBindings = [], AdbPath = "", LdConsolePath = "", AgentBaseUrl = null, AgentSerial = null };
+            runtime = await MatrixRuntime.CreateAsync(settings, options.DataDirectory, demo: true).ConfigureAwait(false);
+            scripts = new(options.ImportRoot.FullPath, staging);
+            tools = new(runtime, options.Policy, scripts, epoch);
+            admission.OnStop = tools.StopAccepting;
+            input = new(Console.OpenStandardInput(), admission, epoch);
+            admission.OnFatal = input.Stop;
+            output = new(Console.OpenStandardOutput(), admission);
+            output.OnFailure = input.Stop;
+            var builder = Microsoft.Extensions.Hosting.Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings { Args = [], ApplicationName = "MatrixDevice.Mcp" });
+            builder.Logging.ClearProviders();
+            builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(10));
+            // The official stream transport uses real stdio, with pre-deserialization
+            // bounds that StdioServerTransport's hard-coded Console streams lack.
+            builder.Services.AddMcpServer(o =>
+            {
+                o.ServerInfo = new Implementation { Name = "matrix-device-mcp", Version = "1.0.0" };
+                o.ProtocolVersion = "2025-11-25";
+                o.InitializationTimeout = TimeSpan.FromSeconds(30);
+                o.ServerInstructions = "每次连接的 JSON-RPC 请求 id 必须唯一，已完成或拒绝的 id 也不能复用；字符串 id 最多 1024 UTF-8 字节，每连接最多 65536 个请求 id。超过这些传输限制将关闭连接并清理本进程拥有的作业。业务防重请使用 operationId，并以新的 JSON-RPC id 查询或重放原请求。工具参数按实际序列化 UTF-8 计数，最多 65536 字节。";
+            })
+                .WithStreamServerTransport(input, output)
+                .WithListToolsHandler((_, _) => ValueTask.FromResult(tools.ListTools()))
+                .WithCallToolHandler(tools.CallAsync)
+                .WithMessageFilters(filters => filters.AddIncomingFilter(next => async (context, ct) =>
+                {
+                    try { await next(context, ct).ConfigureAwait(false); }
+                    finally { admission.IncomingEnded(context.JsonRpcMessage, ct.IsCancellationRequested); }
+                }));
+            host = builder.Build();
+            input.SetTransport(host.Services.GetRequiredService<ITransport>());
+            await host.RunAsync().ConfigureAwait(false);
+            if (input.Failure is not null) throw new IOException("Bounded stdin transport failed.", input.Failure);
+            if (output.Failure is not null) throw new IOException("Bounded stdout transport failed.", output.Failure);
+            if (admission.Failure is not null) throw new IOException("Protocol admission stopped after a fatal capacity failure.", admission.Failure);
+        }
+        catch (Exception error)
+        {
+            failure = error.GetType().Name + ": " + StrictJson.Short(error.Message, 1024).Text;
+            Console.Error.WriteLine("mcp-server-failure: " + failure);
+        }
+        finally
+        {
+            admission.Stop(); input?.Stop();
+            async Task Cleanup(Func<Task> action)
+            {
+                try { await action().ConfigureAwait(false); }
+                catch (Exception error) { failure ??= "Cleanup failed: " + error.GetType().Name; Console.Error.WriteLine("mcp-cleanup-failure: " + error.GetType().Name); }
+            }
+            if (tools is not null) await Cleanup(async () =>
+            {
+                ownedJobs = await tools.StopAsync().ConfigureAwait(false);
+                ownedJobsTerminal = JsonSerializer.SerializeToElement(ownedJobs, StrictJson.Options).EnumerateArray().All(job => job.GetProperty("terminal").GetBoolean());
+                handlerDrained = true;
+            });
+            if (input is not null) await Cleanup(input.DrainAsync);
+            if (output is not null) await Cleanup(output.DrainAsync);
+            if (runtime is not null) await Cleanup(async () => { await runtime.DisposeAsync().ConfigureAwait(false); runtimeDisposed = true; });
+            scripts?.Dispose();
+            if (scripts?.CleanupFailures > 0) failure ??= "Owned staging cleanup could not prove file identity.";
+            if (host is not null) await Cleanup(() => { host.Dispose(); return Task.CompletedTask; });
+            input?.Dispose(); output?.Dispose();
+            if (created && dataIdentity is not null && options is not null)
+            {
+                var inputIoTerminal = input?.IoTerminal ?? false;
+                var outputIoTerminal = output?.IoTerminal ?? false;
+                var pendingProtocolCredits = admission.InFlight;
+                var shutdownVerified = handlerDrained && runtimeDisposed && ownedJobsTerminal && pendingProtocolCredits == 0
+                    && inputIoTerminal && outputIoTerminal && input?.Failure is null && output?.Failure is null && admission.Failure is null
+                    && (scripts?.CleanupFailures ?? 0) == 0;
+                if (!shutdownVerified) failure ??= "Owned shutdown invariants were not satisfied.";
+                var lifecycle = new
+                {
+                    version = 1, serverEpoch = epoch, processId = Environment.ProcessId,
+                    mode = "demo", scopes = options.Policy.Scopes, authorizedSerials = options.Policy.Serials,
+                    stdinEof = input?.Eof ?? false, handlerDrained, runtimeDisposed, ownedJobs, ownedJobsTerminal,
+                    pendingProtocolCredits, inputIoTerminal, outputIoTerminal,
+                    stagingCleanupFailures = scripts?.CleanupFailures ?? 0,
+                    inputFailure = input?.Failure?.GetType().Name, outputFailure = output?.Failure?.GetType().Name,
+                    protocolFailure = admission.Failure?.GetType().Name,
+                    cleanExit = failure is null && shutdownVerified, failure
+                };
+                await Cleanup(async () =>
+                {
+                    await using var report = new FileStream(Path.Combine(options.DataDirectory, "mcp-lifecycle.json"), FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous);
+                    await report.WriteAsync(JsonSerializer.SerializeToUtf8Bytes(lifecycle, StrictJson.Options)).ConfigureAwait(false);
+                    await report.FlushAsync().ConfigureAwait(false);
+                });
+            }
+            else if (created) Console.Error.WriteLine("mcp-lifecycle-unavailable: data directory ownership was not pinned; no report file written.");
+            stagingIdentity?.Dispose(); dataIdentity?.Dispose(); options?.Dispose();
+        }
+        return failure is null ? 0 : 1;
+    }
+}
+
+```
+
+## src/MatrixDevice.Mcp/ProtocolAdmission.cs
+
+```csharp
+using System.Diagnostics;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
+
+namespace MatrixDevice.Mcp;
+
+internal sealed class ProtocolAdmission
+{
+    private sealed record Credit(bool Cancel);
+    private readonly object gate = new();
+    private readonly Dictionary<RequestId, Credit> active = [];
+    private readonly HashSet<string> seen = new(StringComparer.Ordinal);
+    private readonly HashSet<RequestId> cancellationNotifications = [];
+    private int ordinary, cancellation, notifications;
+    private bool initializedNotification;
+    private double ordinaryTokens = 18, cancelTokens = 2;
+    private long lastRefill = Stopwatch.GetTimestamp();
+    internal bool Stopping { get; private set; }
+    internal Action? OnStop { get; set; }
+    internal Action? OnFatal { get; set; }
+    internal Exception? Failure { get; private set; }
+    internal int InFlight { get { lock (gate) return active.Count + notifications; } }
+
+    internal static RequestId Id(JsonElement element)
+        => element.ValueKind switch
+        {
+            JsonValueKind.String => new RequestId(element.GetString()!),
+            JsonValueKind.Number when element.TryGetInt64(out var number) => new RequestId(number),
+            _ => throw new InvalidDataException("JSON-RPC id must be a string or exact Int64; null is not a notification.")
+        };
+
+    internal void RegisterSeen(RequestId id)
+    {
+        lock (gate)
+        {
+            var value = id.Id switch
+            {
+                string text when Encoding.UTF8.GetByteCount(text) <= 1024 => "s:" + text,
+                long number => "i:" + number.ToString(CultureInfo.InvariantCulture),
+                _ => throw Fatal("JSON-RPC string id exceeds 1024 UTF-8 bytes or has an unsupported type.")
+            };
+            var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+            if (seen.Contains(digest)) throw Fatal("JSON-RPC id reuse is forbidden for this connection, including completed and rejected requests.");
+            if (seen.Count >= 65536) throw Fatal("Connection request-id capacity reached; no further request is accepted or queued for rejection.");
+            seen.Add(digest);
+        }
+    }
+
+    internal bool Notification(JsonElement document)
+    {
+        lock (gate)
+        {
+            if (Stopping || notifications >= 8) return false;
+            var method = document.GetProperty("method").GetString();
+            if (method == "notifications/initialized" && !initializedNotification) { initializedNotification = true; notifications++; return true; }
+            if (method != "notifications/cancelled" || !document.TryGetProperty("params", out var parameters) || !parameters.TryGetProperty("requestId", out var value)) return false;
+            var id = Id(value);
+            if (!active.ContainsKey(id) || !cancellationNotifications.Add(id)) return false;
+            notifications++; return true;
+        }
+    }
+
+    internal string? Reserve(RequestId id, bool cancel)
+    {
+        lock (gate)
+        {
+            if (active.ContainsKey(id)) throw Fatal("Concurrent JSON-RPC id reuse is forbidden.");
+            if (Stopping) return "CANCELLED";
+            var now = Stopwatch.GetTimestamp();
+            var seconds = Stopwatch.GetElapsedTime(lastRefill, now).TotalSeconds; lastRefill = now;
+            ordinaryTokens = Math.Min(18, ordinaryTokens + seconds * 8); cancelTokens = Math.Min(2, cancelTokens + seconds * 2);
+            if (cancel ? cancellation >= 1 || cancelTokens < 1 : ordinary >= 3 || ordinaryTokens < 1) return "BUSY";
+            if (cancel) { cancellation++; cancelTokens--; } else { ordinary++; ordinaryTokens--; }
+            active.Add(id, new(cancel));
+            return null;
+        }
+    }
+
+    internal void ResponseFlushed(RequestId id) { lock (gate) Release(id); }
+    private void Release(RequestId id)
+    {
+        if (!active.Remove(id, out var credit)) return;
+        if (credit.Cancel) cancellation--; else ordinary--;
+        cancellationNotifications.Remove(id);
+    }
+
+    internal void IncomingEnded(JsonRpcMessage message, bool requestCancelled)
+    {
+        lock (gate)
+        {
+            if (message is JsonRpcNotification) { notifications--; return; }
+            if (requestCancelled && message is JsonRpcRequest request)
+            {
+                Release(request.Id);
+            }
+        }
+    }
+    private InvalidDataException Fatal(string message)
+    {
+        var failure = new InvalidDataException(message);
+        Failure ??= failure;
+        Stop();
+        OnFatal?.Invoke();
+        return failure;
+    }
+    internal void Stop() { lock (gate) Stopping = true; OnStop?.Invoke(); }
+}
+
+```
+
+## src/MatrixDevice.Mcp/Schemas.json
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:matrix-device:mcp:1",
+  "$defs": {
+    "Uuid": { "type": "string", "format": "uuid" },
+    "Sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "Serial": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "Generation": { "type": "string", "pattern": "^[1-9][0-9]{0,18}$" },
+    "Transport": { "type": ["integer", "null"], "minimum": 1, "maximum": 4294967295 },
+    "ExpectedIdentity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["generation", "transportId"],
+      "properties": {
+        "generation": { "$ref": "#/$defs/Generation" },
+        "transportId": { "$ref": "#/$defs/Transport" }
+      }
+    },
+    "Target": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serial", "generation", "transportId"],
+      "properties": {
+        "serial": { "$ref": "#/$defs/Serial" },
+        "generation": { "$ref": "#/$defs/Generation" },
+        "transportId": { "$ref": "#/$defs/Transport" }
+      }
+    },
+    "Error": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "message", "errorTruncated", "projectCode", "retryable"],
+      "properties": {
+        "code": { "enum": ["INVALID_ARGUMENT", "UNAUTHORIZED", "TARGET_OFFLINE", "IDENTITY_CHANGED", "BUSY", "UNKNOWN_REFERENCE", "CAPACITY", "DEADLINE_EXCEEDED", "CANCELLED", "NOT_SUPPORTED", "INTERNAL"] },
+        "message": { "type": "string", "maxLength": 2048 }, "errorTruncated": { "type": "boolean" },
+        "projectCode": { "type": ["integer", "null"] },
+        "retryable": { "const": false },
+        "jobId": { "$ref": "#/$defs/Uuid" },
+        "operationId": { "$ref": "#/$defs/Uuid" },
+        "serial": { "$ref": "#/$defs/Serial" }
+      }
+    },
+    "ErrorOutput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ok", "serverEpoch", "error"],
+      "properties": {
+        "ok": { "const": false }, "serverEpoch": { "$ref": "#/$defs/Uuid" },
+        "error": { "$ref": "#/$defs/Error" }
+      }
+    },
+    "Limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requestBytes", "responseBytes", "bodyBytes", "manifestMetadataBytes", "toolConcurrency", "requestsPerSecond", "requestBurst", "activeJobs", "scriptRefs", "stagingBytes", "operationIds", "terminalJobs", "logsPerJob", "logsPerResponse", "resultBytes", "defaultJobTimeoutMs", "maximumJobTimeoutMs", "archiveBytes", "declaredExtractedBytes", "archiveEntries", "jsonEntryBytes", "steps", "parameters"],
+      "properties": {
+        "requestBytes": { "const": 1048576 }, "responseBytes": { "const": 1048576 },
+        "bodyBytes": { "const": 65536 }, "manifestMetadataBytes": { "const": 8192 }, "toolConcurrency": { "const": 4 },
+        "requestsPerSecond": { "const": 10 }, "requestBurst": { "const": 20 },
+        "activeJobs": { "const": 2 }, "scriptRefs": { "const": 16 },
+        "stagingBytes": { "const": 67108864 }, "operationIds": { "const": 100 },
+        "terminalJobs": { "const": 100 }, "logsPerJob": { "const": 500 },
+        "logsPerResponse": { "const": 100 }, "resultBytes": { "const": 16384 },
+        "defaultJobTimeoutMs": { "const": 300000 }, "maximumJobTimeoutMs": { "const": 300000 },
+        "archiveBytes": { "const": 16777216 }, "declaredExtractedBytes": { "const": 33554432 },
+        "archiveEntries": { "const": 128 }, "jsonEntryBytes": { "const": 4194304 },
+        "steps": { "const": 10000 }, "parameters": { "const": 1000 }
+      }
+    },
+    "CapabilitiesInput": { "type": "object", "additionalProperties": false },
+    "CapabilitiesOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "contractVersion", "protocolVersion", "mode", "scopes", "authorizedSerials", "realWritesEnabled", "supportedTools", "supportedActions", "unsupportedCapabilities", "limits", "retention"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" },
+            "contractVersion": { "const": "matrix-mcp/1" },
+            "protocolVersion": { "const": "2025-11-25" }, "mode": { "enum": ["demo", "real"] },
+            "scopes": { "type": "array", "uniqueItems": true, "items": { "enum": ["devices.read", "scripts.import", "jobs.start", "jobs.read", "jobs.cancel"] } },
+            "authorizedSerials": { "type": "array", "uniqueItems": true, "maxItems": 2, "items": { "$ref": "#/$defs/Serial" } },
+            "realWritesEnabled": { "type": "boolean" },
+            "supportedTools": { "type": "array", "uniqueItems": true, "maxItems": 6, "items": { "enum": ["matrix.capabilities", "matrix.devices.list", "matrix.scripts.import", "matrix.jobs.start", "matrix.jobs.get", "matrix.jobs.cancel"] } },
+            "supportedActions": { "type": "array", "uniqueItems": true, "items": { "enum": ["launch", "launchapp", "wait", "sleep", "click", "swipe"] } },
+            "unsupportedCapabilities": { "type": "array", "items": { "type": "string", "maxLength": 256 } },
+            "limits": { "$ref": "#/$defs/Limits" },
+            "retention": { "const": "process-lifetime; terminal-jobs-oldest-completion-100; no-restart-resume" }
+          }
+        }
+      ]
+    },
+    "DevicesListInput": { "type": "object", "additionalProperties": false },
+    "DevicesListOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "mode", "snapshotUtc", "devices"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" }, "mode": { "enum": ["demo", "real"] },
+            "snapshotUtc": { "type": "string", "format": "date-time" },
+            "devices": {
+              "type": "array", "maxItems": 2,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["target", "instanceIndex", "displayName", "online", "writeAllowed"],
+                "properties": {
+                  "target": { "$ref": "#/$defs/Target" },
+                  "instanceIndex": { "type": ["integer", "null"], "minimum": 1 },
+                  "displayName": { "type": "string", "maxLength": 256 },
+                  "online": { "type": "boolean" }, "writeAllowed": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ScriptImportInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverEpoch", "relativePath", "sha256"],
+      "properties": {
+        "serverEpoch": { "$ref": "#/$defs/Uuid" },
+        "relativePath": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "sha256": { "$ref": "#/$defs/Sha256" }
+      }
+    },
+    "ScriptImportOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "scriptRef", "sha256", "packageId", "packageVersion", "displayName", "stepCount", "parameterCount", "bindingVersion", "parameterKeys", "retention"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" },
+            "scriptRef": { "$ref": "#/$defs/Uuid" }, "sha256": { "$ref": "#/$defs/Sha256" },
+            "packageId": { "type": "string" }, "packageVersion": { "type": "string" }, "displayName": { "type": "string" },
+            "stepCount": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "parameterCount": { "type": "integer", "minimum": 0, "maximum": 1000 },
+            "bindingVersion": { "enum": [null, 1] },
+            "parameterKeys": { "type": "array", "maxItems": 1000, "uniqueItems": true, "items": { "type": "string" } },
+            "retention": { "const": "process-lifetime; immutable; no-execution-authority" }
+          }
+        }
+      ]
+    },
+    "JobStartInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverEpoch", "operationId", "scriptRef", "serial", "expectedIdentity"],
+      "properties": {
+        "serverEpoch": { "$ref": "#/$defs/Uuid" }, "operationId": { "$ref": "#/$defs/Uuid" },
+        "scriptRef": { "$ref": "#/$defs/Uuid" }, "serial": { "$ref": "#/$defs/Serial" },
+        "expectedIdentity": { "$ref": "#/$defs/ExpectedIdentity" },
+        "parameterOverrides": { "type": "object", "maxProperties": 1000, "additionalProperties": true },
+        "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 300000, "default": 300000 }
+      }
+    },
+    "JobStartOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "operationId", "jobId", "target", "scriptRef", "sha256", "accepted", "replayed", "timeoutMs"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" },
+            "operationId": { "$ref": "#/$defs/Uuid" }, "jobId": { "$ref": "#/$defs/Uuid" },
+            "target": { "$ref": "#/$defs/Target" }, "scriptRef": { "$ref": "#/$defs/Uuid" }, "sha256": { "$ref": "#/$defs/Sha256" },
+            "accepted": { "const": true }, "replayed": { "type": "boolean" },
+            "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 300000 }
+          }
+        }
+      ]
+    },
+    "JobState": { "enum": ["Running", "Cancelling", "Completed", "Cancelled", "Failed"] },
+    "JobStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["jobId", "operationId", "target", "scriptRef", "sha256", "packageId", "packageVersion", "state", "stepIndex", "stepCount", "startedUtc", "endedUtc", "error", "result", "errorTruncated", "resultTruncatedForResponse", "terminalReason"],
+      "properties": {
+        "jobId": { "$ref": "#/$defs/Uuid" }, "operationId": { "$ref": "#/$defs/Uuid" },
+        "target": { "$ref": "#/$defs/Target" }, "scriptRef": { "$ref": "#/$defs/Uuid" }, "sha256": { "$ref": "#/$defs/Sha256" },
+        "packageId": { "type": "string" }, "packageVersion": { "type": "string" }, "state": { "$ref": "#/$defs/JobState" },
+        "stepIndex": { "type": "integer", "minimum": -1, "maximum": 9999 },
+        "stepCount": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "startedUtc": { "type": "string", "format": "date-time" }, "endedUtc": { "type": ["string", "null"], "format": "date-time" },
+        "error": { "type": ["string", "null"], "maxLength": 2048 }, "errorTruncated": { "type": "boolean" },
+        "result": { "type": ["string", "null"], "maxLength": 16384 }, "resultTruncatedForResponse": { "type": "boolean" },
+        "terminalReason": { "enum": [null, "completed", "failed", "cancelled", "deadline", "shutdown"] }
+      }
+    },
+    "JobGetInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverEpoch", "jobId"],
+      "properties": {
+        "serverEpoch": { "$ref": "#/$defs/Uuid" }, "jobId": { "$ref": "#/$defs/Uuid" },
+        "logLimit": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50 }
+      }
+    },
+    "JobGetOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "snapshotUtc", "job", "availableLogs", "logWindowLimit", "omittedLogCount", "logs"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" }, "snapshotUtc": { "type": "string", "format": "date-time" },
+            "job": { "$ref": "#/$defs/JobStatus" }, "availableLogs": { "type": "integer", "minimum": 0, "maximum": 500 },
+            "logWindowLimit": { "const": 500 }, "omittedLogCount": { "type": "integer", "minimum": 0, "maximum": 500 },
+            "logs": {
+              "type": "array", "maxItems": 100,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["timestampUtc", "message", "truncated"],
+                "properties": {
+                  "timestampUtc": { "type": "string", "format": "date-time" },
+                  "message": { "type": "string", "maxLength": 2048 }, "truncated": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "JobCancelInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverEpoch", "jobId"],
+      "properties": { "serverEpoch": { "$ref": "#/$defs/Uuid" }, "jobId": { "$ref": "#/$defs/Uuid" } }
+    },
+    "JobCancelOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "jobId", "cancelRequested", "state", "terminal"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" }, "jobId": { "$ref": "#/$defs/Uuid" },
+            "cancelRequested": { "type": "boolean" }, "state": { "$ref": "#/$defs/JobState" }, "terminal": { "type": "boolean" }
+          }
+        }
+      ]
+    }
+  }
+}
+
+```
+
+## src/MatrixDevice.Mcp/StablePath.cs
+
+```csharp
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+
+namespace MatrixDevice.Mcp;
+
+internal sealed class StablePath : IDisposable
+{
+    private readonly List<SafeFileHandle> handles = [];
+    internal string FullPath { get; private init; } = "";
+    internal SafeFileHandle Leaf => handles[^1];
+    internal static string Identity(SafeFileHandle handle)
+    {
+        if (!GetFileInformationByHandle(handle, out var info)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        return $"{info.Volume:x8}:{info.IndexHigh:x8}{info.IndexLow:x8}:{info.Creation.dwHighDateTime:x8}{info.Creation.dwLowDateTime:x8}";
+    }
+
+    internal static string Absolute(string value)
+    {
+        if (!OperatingSystem.IsWindows() || !Path.IsPathFullyQualified(value) || value.StartsWith("\\", StringComparison.Ordinal)
+            || value.Length < 3 || value[1] != ':' || value.AsSpan(2).Contains(':') || value.Contains('/')
+            || value.Length == 3 || value.EndsWith('\\')
+            || value.Split('\\').Skip(1).Any(s => s is "." or ".." || s.Length == 0 || s.EndsWith('.') || s.EndsWith(' ') || s.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+                || IsReservedName(s)))
+            throw new ToolFailure("INVALID_ARGUMENT", "Expected an absolute local Windows path without ambiguous segments.");
+        return Path.GetFullPath(value).TrimEnd('\\');
+    }
+
+    private static bool IsReservedName(string value)
+    {
+        var name = value.Split('.')[0].ToUpperInvariant();
+        return name is "CON" or "PRN" or "AUX" or "NUL" || name.Length == 4 && name[3] is >= '0' and <= '9' && (name.StartsWith("COM", StringComparison.Ordinal) || name.StartsWith("LPT", StringComparison.Ordinal));
+    }
+
+    internal static bool DeleteOwned(string path, string? identity)
+    {
+        if (identity is null) return false;
+        using var handle = CreateFileW(path, 0x10000 | 0x80, 7, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero);
+        if (handle.IsInvalid || !GetFileInformationByHandle(handle, out var info) || (info.Attributes & (0x400 | 0x10)) != 0 || Identity(handle) != identity) return false;
+        var disposition = new FileDisposition { Delete = true };
+        return SetFileInformationByHandle(handle, 4, ref disposition, 1);
+    }
+
+    internal static StablePath Open(string path, bool directory)
+    {
+        path = Absolute(path);
+        var result = new StablePath { FullPath = path };
+        try
+        {
+            var volume = Path.GetPathRoot(path)!;
+            var segments = path[volume.Length..].Split('\\', StringSplitOptions.RemoveEmptyEntries);
+            var current = volume;
+        result.Add(current, true);
+            for (var i = 0; i < segments.Length; i++)
+            {
+                current = Path.Combine(current, segments[i]);
+                result.Add(current, i < segments.Length - 1 || directory);
+            }
+            return result;
+        }
+        catch { result.Dispose(); throw; }
+    }
+
+    private void Add(string path, bool directory)
+    {
+        const uint genericRead = 0x80000000, readAttributes = 0x80, shareRead = 1, shareWrite = 2;
+        var handle = CreateFileW(path, directory ? readAttributes : genericRead, directory ? shareRead | shareWrite : shareRead,
+            IntPtr.Zero, 3, 0x00200000u | (directory ? 0x02000000u : 0), IntPtr.Zero);
+        if (handle.IsInvalid) { handle.Dispose(); throw new ToolFailure("INVALID_ARGUMENT", "Cannot safely open path: " + new Win32Exception(Marshal.GetLastWin32Error()).Message); }
+        handles.Add(handle);
+        if (!GetFileInformationByHandle(handle, out var info)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        if ((info.Attributes & 0x400) != 0 || ((info.Attributes & 0x10) != 0) != directory) throw new ToolFailure("INVALID_ARGUMENT", "Reparse points and unexpected path kinds are not allowed.");
+        var final = new StringBuilder(32768);
+        var length = GetFinalPathNameByHandleW(handle, final, (uint)final.Capacity, 0);
+        if (length == 0 || length >= final.Capacity) throw new ToolFailure("INVALID_ARGUMENT", "Cannot prove final file handle path.");
+        var actual = final.ToString();
+        if (actual.StartsWith("\\\\?\\", StringComparison.Ordinal)) actual = actual[4..];
+        if (!string.Equals(actual.TrimEnd('\\'), Path.GetFullPath(path).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+            throw new ToolFailure("INVALID_ARGUMENT", "Final file handle path does not match the authorized path.");
+    }
+
+    internal static void CreateFreshDirectory(string path)
+    {
+        if (!CreateDirectoryW(path, IntPtr.Zero)) throw new ToolFailure("INVALID_ARGUMENT", "Data directory must be fresh; creation failed: " + new Win32Exception(Marshal.GetLastWin32Error()).Message);
+    }
+
+    public void Dispose() { for (var i = handles.Count - 1; i >= 0; i--) handles[i].Dispose(); handles.Clear(); }
+
+    [StructLayout(LayoutKind.Sequential)] private struct FileInformation
+    { internal uint Attributes; internal System.Runtime.InteropServices.ComTypes.FILETIME Creation, Access, Write; internal uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow; }
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetFileInformationByHandle(SafeFileHandle handle, out FileInformation information);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder buffer, uint capacity, uint flags);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool CreateDirectoryW(string path, IntPtr security);
+    [StructLayout(LayoutKind.Sequential)] private struct FileDisposition { [MarshalAs(UnmanagedType.U1)] internal bool Delete; }
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool SetFileInformationByHandle(SafeFileHandle handle, int informationClass, ref FileDisposition disposition, uint size);
+}
+
+```
+
+## src/MatrixDevice.Mcp/StartupOptions.cs
+
+```csharp
+using System.Text.Json;
+
+namespace MatrixDevice.Mcp;
+
+internal sealed class StartupOptions : IDisposable
+{
+    internal required string DataDirectory { get; init; }
+    internal required StablePath ImportRoot { get; init; }
+    internal required StablePath DataParent { get; init; }
+    internal required McpPolicy Policy { get; init; }
+    internal static StartupOptions Parse(string[] args)
+    {
+        var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+        var demo = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var key = args[i];
+            if (key == "--demo") { if (demo) throw new ArgumentException("Duplicate --demo."); demo = true; continue; }
+            if (key is not ("--data-dir" or "--policy" or "--import-root") || i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal) || !fields.TryAdd(key, args[++i]))
+                throw new ArgumentException("Unknown, duplicate or incomplete startup argument: " + key);
+        }
+        if (!demo || fields.Count != 3) throw new ArgumentException("Only explicit --demo --data-dir --policy --import-root is supported. Real mode is disabled.");
+        var data = StablePath.Absolute(fields["--data-dir"]);
+        var root = StablePath.Open(fields["--import-root"], true);
+        StablePath? parent = null;
+        try
+        {
+            using var policyPath = StablePath.Open(fields["--policy"], false);
+            using var stream = new FileStream(policyPath.Leaf, FileAccess.Read);
+            if (stream.Length is < 2 or > 16384) throw new ArgumentException("Policy must contain 2..16384 bytes.");
+            var bytes = new byte[(int)stream.Length]; stream.ReadExactly(bytes);
+            var policy = McpPolicy.Parse(bytes);
+            if (data.Equals(root.FullPath, StringComparison.OrdinalIgnoreCase) || data.StartsWith(root.FullPath + "\\", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Data directory cannot be inside import root.");
+            parent = StablePath.Open(Path.GetDirectoryName(data)!, true);
+            if (File.Exists(data) || Directory.Exists(data)) throw new ArgumentException("Data directory must not exist.");
+            return new() { DataDirectory = data, ImportRoot = root, DataParent = parent, Policy = policy };
+        }
+        catch { root.Dispose(); parent?.Dispose(); throw; }
+    }
+    public void Dispose() { ImportRoot.Dispose(); DataParent.Dispose(); }
+}
+
+internal sealed record McpPolicy(string ScopeOwner, string[] Scopes, string[] Serials)
+{
+    internal static readonly string[] AllScopes = ["devices.read", "scripts.import", "jobs.start", "jobs.read", "jobs.cancel"];
+    internal static McpPolicy Parse(byte[] bytes)
+    {
+        using var document = StrictJson.Parse(bytes);
+        var root = document.RootElement;
+        StrictJson.Object(root, ["scopeOwner", "scopes", "authorizedSerials"], "scopeOwner", "scopes", "authorizedSerials");
+        var owner = StrictJson.String(root, "scopeOwner", 128);
+        string[] List(string name)
+        {
+            if (root.GetProperty(name).ValueKind != JsonValueKind.Array) throw new ArgumentException("Policy array required: " + name);
+            var values = root.GetProperty(name).EnumerateArray().Select(v => v.ValueKind == JsonValueKind.String ? v.GetString()! : throw new ArgumentException("Policy values must be strings.")).ToArray();
+            if (values.Distinct(StringComparer.Ordinal).Count() != values.Length) throw new ArgumentException("Duplicate policy values: " + name);
+            return values;
+        }
+        var scopes = List("scopes"); var serials = List("authorizedSerials");
+        if (scopes.Any(s => !AllScopes.Contains(s, StringComparer.Ordinal)) || serials.Length > 2 || serials.Any(s => s is not ("DEMO-001" or "DEMO-002"))) throw new ArgumentException("Policy contains unsupported scope or unauthorized Demo serial.");
+        return new(owner, scopes, serials);
+    }
+    internal void Require(string scope) { if (!Scopes.Contains(scope, StringComparer.Ordinal)) throw new ToolFailure("UNAUTHORIZED", "Scope is not granted: " + scope); }
+    internal void RequireSerial(string serial) { if (!Serials.Contains(serial, StringComparer.Ordinal)) throw new ToolFailure("UNAUTHORIZED", "Target is not authorized."); }
+}
+
+```
+
+## src/MatrixDevice.Mcp/StrictJson.cs
+
+```csharp
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
+namespace MatrixDevice.Mcp;
+
+internal sealed class ToolFailure(string code, string message, int? projectCode = null) : Exception(message)
+{
+    internal string Code { get; } = code;
+    internal int? ProjectCode { get; } = projectCode;
+}
+
+internal static class StrictJson
+{
+    internal static readonly JsonSerializerOptions Options = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, MaxDepth = 40 };
+    internal static JsonDocument Parse(ReadOnlyMemory<byte> bytes, int depth = 32)
+    {
+        var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = depth });
+        try { Validate(document.RootElement); return document; }
+        catch { document.Dispose(); throw; }
+    }
+
+    internal static void Validate(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in value.EnumerateObject())
+            {
+                if (!names.Add(property.Name)) throw new ToolFailure("INVALID_ARGUMENT", "Duplicate JSON property: " + Short(property.Name, 80).Text);
+                Validate(property.Value);
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Array) foreach (var child in value.EnumerateArray()) Validate(child);
+        else if (value.ValueKind == JsonValueKind.Number)
+        {
+            var raw = value.GetRawText();
+            if (!raw.Contains('.') && !raw.Contains('e') && !raw.Contains('E'))
+            {
+                if (!value.TryGetInt64(out _) && !value.TryGetUInt64(out _)) throw new ToolFailure("INVALID_ARGUMENT", "Integer is outside the supported 64-bit range.");
+            }
+            else if (!value.TryGetDecimal(out _)) throw new ToolFailure("INVALID_ARGUMENT", "Number is outside the supported decimal range.");
+        }
+        else if (value.ValueKind == JsonValueKind.String)
+        {
+            string text;
+            try { text = value.GetString()!; }
+            catch (InvalidOperationException) { throw new ToolFailure("INVALID_ARGUMENT", "Invalid Unicode string."); }
+            for (var i = 0; i < text.Length; i++)
+                if (char.IsSurrogate(text[i]) && !(char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[++i])))
+                    throw new ToolFailure("INVALID_ARGUMENT", "Invalid Unicode surrogate.");
+        }
+    }
+
+    internal static void Object(JsonElement value, string[] allowed, params string[] required)
+    {
+        if (value.ValueKind != JsonValueKind.Object) throw new ToolFailure("INVALID_ARGUMENT", "Expected a JSON object.");
+        Validate(value);
+        foreach (var p in value.EnumerateObject()) if (!allowed.Contains(p.Name, StringComparer.Ordinal)) throw new ToolFailure("INVALID_ARGUMENT", "Unknown field: " + Short(p.Name, 80).Text);
+        foreach (var name in required) if (!value.TryGetProperty(name, out _)) throw new ToolFailure("INVALID_ARGUMENT", "Missing field: " + name);
+    }
+
+    internal static string String(JsonElement obj, string name, int maximum = 256)
+    {
+        if (!obj.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String) throw new ToolFailure("INVALID_ARGUMENT", "Expected string field: " + name);
+        var text = value.GetString()!;
+        if (text.Length == 0 || text.EnumerateRunes().Count() > maximum) throw new ToolFailure("INVALID_ARGUMENT", "String length invalid: " + name);
+        return text;
+    }
+
+    internal static Guid Uuid(JsonElement obj, string name)
+    {
+        var value = String(obj, name, 36);
+        if (!Guid.TryParseExact(value, "D", out var result) || result.ToString("D") != value) throw new ToolFailure("INVALID_ARGUMENT", "Expected canonical UUID field: " + name);
+        return result;
+    }
+
+    internal static int Integer(JsonElement obj, string name, int minimum, int maximum, int fallback)
+    {
+        if (!obj.TryGetProperty(name, out var value)) return fallback;
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var result) || result < minimum || result > maximum) throw new ToolFailure("INVALID_ARGUMENT", "Integer range invalid: " + name);
+        return result;
+    }
+
+    internal static (string Text, bool Truncated) Short(string text, int maximum, string marker = "[truncated]")
+    {
+        var runes = text.EnumerateRunes().ToArray();
+        if (runes.Length <= maximum) return (text, false);
+        return (string.Concat(runes.Take(Math.Max(0, maximum - marker.EnumerateRunes().Count())).Select(r => r.ToString())) + marker, true);
+    }
+
+    internal static string Digest(JsonElement value)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) Canonical(writer, value);
+        return Convert.ToHexStringLower(SHA256.HashData(stream.ToArray()));
+    }
+
+    private static void Canonical(Utf8JsonWriter writer, JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            writer.WriteStartObject();
+            foreach (var p in value.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal)) { writer.WritePropertyName(p.Name); Canonical(writer, p.Value); }
+            writer.WriteEndObject();
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        { writer.WriteStartArray(); foreach (var item in value.EnumerateArray()) Canonical(writer, item); writer.WriteEndArray(); }
+        else value.WriteTo(writer);
+    }
+
+    internal static JsonObject Node(object value) => JsonSerializer.SerializeToNode(value, Options)!.AsObject();
+}
+
+```
+
+## tests/MatrixDevice.Mcp.Tests/ContractSchema.json
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:matrix-device:mcp:1",
+  "$defs": {
+    "Uuid": { "type": "string", "format": "uuid" },
+    "Sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "Serial": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "Generation": { "type": "string", "pattern": "^[1-9][0-9]{0,18}$" },
+    "Transport": { "type": ["integer", "null"], "minimum": 1, "maximum": 4294967295 },
+    "ExpectedIdentity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["generation", "transportId"],
+      "properties": {
+        "generation": { "$ref": "#/$defs/Generation" },
+        "transportId": { "$ref": "#/$defs/Transport" }
+      }
+    },
+    "Target": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serial", "generation", "transportId"],
+      "properties": {
+        "serial": { "$ref": "#/$defs/Serial" },
+        "generation": { "$ref": "#/$defs/Generation" },
+        "transportId": { "$ref": "#/$defs/Transport" }
+      }
+    },
+    "Error": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "message", "errorTruncated", "projectCode", "retryable"],
+      "properties": {
+        "code": { "enum": ["INVALID_ARGUMENT", "UNAUTHORIZED", "TARGET_OFFLINE", "IDENTITY_CHANGED", "BUSY", "UNKNOWN_REFERENCE", "CAPACITY", "DEADLINE_EXCEEDED", "CANCELLED", "NOT_SUPPORTED", "INTERNAL"] },
+        "message": { "type": "string", "maxLength": 2048 }, "errorTruncated": { "type": "boolean" },
+        "projectCode": { "type": ["integer", "null"] },
+        "retryable": { "const": false },
+        "jobId": { "$ref": "#/$defs/Uuid" },
+        "operationId": { "$ref": "#/$defs/Uuid" },
+        "serial": { "$ref": "#/$defs/Serial" }
+      }
+    },
+    "ErrorOutput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ok", "serverEpoch", "error"],
+      "properties": {
+        "ok": { "const": false }, "serverEpoch": { "$ref": "#/$defs/Uuid" },
+        "error": { "$ref": "#/$defs/Error" }
+      }
+    },
+    "Limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requestBytes", "responseBytes", "bodyBytes", "manifestMetadataBytes", "toolConcurrency", "requestsPerSecond", "requestBurst", "activeJobs", "scriptRefs", "stagingBytes", "operationIds", "terminalJobs", "logsPerJob", "logsPerResponse", "resultBytes", "defaultJobTimeoutMs", "maximumJobTimeoutMs", "archiveBytes", "declaredExtractedBytes", "archiveEntries", "jsonEntryBytes", "steps", "parameters"],
+      "properties": {
+        "requestBytes": { "const": 1048576 }, "responseBytes": { "const": 1048576 },
+        "bodyBytes": { "const": 65536 }, "manifestMetadataBytes": { "const": 8192 }, "toolConcurrency": { "const": 4 },
+        "requestsPerSecond": { "const": 10 }, "requestBurst": { "const": 20 },
+        "activeJobs": { "const": 2 }, "scriptRefs": { "const": 16 },
+        "stagingBytes": { "const": 67108864 }, "operationIds": { "const": 100 },
+        "terminalJobs": { "const": 100 }, "logsPerJob": { "const": 500 },
+        "logsPerResponse": { "const": 100 }, "resultBytes": { "const": 16384 },
+        "defaultJobTimeoutMs": { "const": 300000 }, "maximumJobTimeoutMs": { "const": 300000 },
+        "archiveBytes": { "const": 16777216 }, "declaredExtractedBytes": { "const": 33554432 },
+        "archiveEntries": { "const": 128 }, "jsonEntryBytes": { "const": 4194304 },
+        "steps": { "const": 10000 }, "parameters": { "const": 1000 }
+      }
+    },
+    "CapabilitiesInput": { "type": "object", "additionalProperties": false },
+    "CapabilitiesOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "contractVersion", "protocolVersion", "mode", "scopes", "authorizedSerials", "realWritesEnabled", "supportedTools", "supportedActions", "unsupportedCapabilities", "limits", "retention"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" },
+            "contractVersion": { "const": "matrix-mcp/1" },
+            "protocolVersion": { "const": "2025-11-25" }, "mode": { "enum": ["demo", "real"] },
+            "scopes": { "type": "array", "uniqueItems": true, "items": { "enum": ["devices.read", "scripts.import", "jobs.start", "jobs.read", "jobs.cancel"] } },
+            "authorizedSerials": { "type": "array", "uniqueItems": true, "maxItems": 2, "items": { "$ref": "#/$defs/Serial" } },
+            "realWritesEnabled": { "type": "boolean" },
+            "supportedTools": { "type": "array", "uniqueItems": true, "maxItems": 6, "items": { "enum": ["matrix.capabilities", "matrix.devices.list", "matrix.scripts.import", "matrix.jobs.start", "matrix.jobs.get", "matrix.jobs.cancel"] } },
+            "supportedActions": { "type": "array", "uniqueItems": true, "items": { "enum": ["launch", "launchapp", "wait", "sleep", "click", "swipe"] } },
+            "unsupportedCapabilities": { "type": "array", "items": { "type": "string", "maxLength": 256 } },
+            "limits": { "$ref": "#/$defs/Limits" },
+            "retention": { "const": "process-lifetime; terminal-jobs-oldest-completion-100; no-restart-resume" }
+          }
+        }
+      ]
+    },
+    "DevicesListInput": { "type": "object", "additionalProperties": false },
+    "DevicesListOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "mode", "snapshotUtc", "devices"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" }, "mode": { "enum": ["demo", "real"] },
+            "snapshotUtc": { "type": "string", "format": "date-time" },
+            "devices": {
+              "type": "array", "maxItems": 2,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["target", "instanceIndex", "displayName", "online", "writeAllowed"],
+                "properties": {
+                  "target": { "$ref": "#/$defs/Target" },
+                  "instanceIndex": { "type": ["integer", "null"], "minimum": 1 },
+                  "displayName": { "type": "string", "maxLength": 256 },
+                  "online": { "type": "boolean" }, "writeAllowed": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ScriptImportInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverEpoch", "relativePath", "sha256"],
+      "properties": {
+        "serverEpoch": { "$ref": "#/$defs/Uuid" },
+        "relativePath": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "sha256": { "$ref": "#/$defs/Sha256" }
+      }
+    },
+    "ScriptImportOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "scriptRef", "sha256", "packageId", "packageVersion", "displayName", "stepCount", "parameterCount", "bindingVersion", "parameterKeys", "retention"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" },
+            "scriptRef": { "$ref": "#/$defs/Uuid" }, "sha256": { "$ref": "#/$defs/Sha256" },
+            "packageId": { "type": "string" }, "packageVersion": { "type": "string" }, "displayName": { "type": "string" },
+            "stepCount": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "parameterCount": { "type": "integer", "minimum": 0, "maximum": 1000 },
+            "bindingVersion": { "enum": [null, 1] },
+            "parameterKeys": { "type": "array", "maxItems": 1000, "uniqueItems": true, "items": { "type": "string" } },
+            "retention": { "const": "process-lifetime; immutable; no-execution-authority" }
+          }
+        }
+      ]
+    },
+    "JobStartInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverEpoch", "operationId", "scriptRef", "serial", "expectedIdentity"],
+      "properties": {
+        "serverEpoch": { "$ref": "#/$defs/Uuid" }, "operationId": { "$ref": "#/$defs/Uuid" },
+        "scriptRef": { "$ref": "#/$defs/Uuid" }, "serial": { "$ref": "#/$defs/Serial" },
+        "expectedIdentity": { "$ref": "#/$defs/ExpectedIdentity" },
+        "parameterOverrides": { "type": "object", "maxProperties": 1000, "additionalProperties": true },
+        "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 300000, "default": 300000 }
+      }
+    },
+    "JobStartOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "operationId", "jobId", "target", "scriptRef", "sha256", "accepted", "replayed", "timeoutMs"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" },
+            "operationId": { "$ref": "#/$defs/Uuid" }, "jobId": { "$ref": "#/$defs/Uuid" },
+            "target": { "$ref": "#/$defs/Target" }, "scriptRef": { "$ref": "#/$defs/Uuid" }, "sha256": { "$ref": "#/$defs/Sha256" },
+            "accepted": { "const": true }, "replayed": { "type": "boolean" },
+            "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 300000 }
+          }
+        }
+      ]
+    },
+    "JobState": { "enum": ["Running", "Cancelling", "Completed", "Cancelled", "Failed"] },
+    "JobStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["jobId", "operationId", "target", "scriptRef", "sha256", "packageId", "packageVersion", "state", "stepIndex", "stepCount", "startedUtc", "endedUtc", "error", "result", "errorTruncated", "resultTruncatedForResponse", "terminalReason"],
+      "properties": {
+        "jobId": { "$ref": "#/$defs/Uuid" }, "operationId": { "$ref": "#/$defs/Uuid" },
+        "target": { "$ref": "#/$defs/Target" }, "scriptRef": { "$ref": "#/$defs/Uuid" }, "sha256": { "$ref": "#/$defs/Sha256" },
+        "packageId": { "type": "string" }, "packageVersion": { "type": "string" }, "state": { "$ref": "#/$defs/JobState" },
+        "stepIndex": { "type": "integer", "minimum": -1, "maximum": 9999 },
+        "stepCount": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "startedUtc": { "type": "string", "format": "date-time" }, "endedUtc": { "type": ["string", "null"], "format": "date-time" },
+        "error": { "type": ["string", "null"], "maxLength": 2048 }, "errorTruncated": { "type": "boolean" },
+        "result": { "type": ["string", "null"], "maxLength": 16384 }, "resultTruncatedForResponse": { "type": "boolean" },
+        "terminalReason": { "enum": [null, "completed", "failed", "cancelled", "deadline", "shutdown"] }
+      }
+    },
+    "JobGetInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverEpoch", "jobId"],
+      "properties": {
+        "serverEpoch": { "$ref": "#/$defs/Uuid" }, "jobId": { "$ref": "#/$defs/Uuid" },
+        "logLimit": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50 }
+      }
+    },
+    "JobGetOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "snapshotUtc", "job", "availableLogs", "logWindowLimit", "omittedLogCount", "logs"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" }, "snapshotUtc": { "type": "string", "format": "date-time" },
+            "job": { "$ref": "#/$defs/JobStatus" }, "availableLogs": { "type": "integer", "minimum": 0, "maximum": 500 },
+            "logWindowLimit": { "const": 500 }, "omittedLogCount": { "type": "integer", "minimum": 0, "maximum": 500 },
+            "logs": {
+              "type": "array", "maxItems": 100,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["timestampUtc", "message", "truncated"],
+                "properties": {
+                  "timestampUtc": { "type": "string", "format": "date-time" },
+                  "message": { "type": "string", "maxLength": 2048 }, "truncated": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "JobCancelInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverEpoch", "jobId"],
+      "properties": { "serverEpoch": { "$ref": "#/$defs/Uuid" }, "jobId": { "$ref": "#/$defs/Uuid" } }
+    },
+    "JobCancelOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/ErrorOutput" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["ok", "serverEpoch", "jobId", "cancelRequested", "state", "terminal"],
+          "properties": {
+            "ok": { "const": true }, "serverEpoch": { "$ref": "#/$defs/Uuid" }, "jobId": { "$ref": "#/$defs/Uuid" },
+            "cancelRequested": { "type": "boolean" }, "state": { "$ref": "#/$defs/JobState" }, "terminal": { "type": "boolean" }
+          }
+        }
+      ]
+    }
+  }
+}
+
+```
+
+## tests/MatrixDevice.Mcp.Tests/MatrixDevice.Mcp.Tests.csproj
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="artifacts/**/*.cs" />
+    <ProjectReference Include="../../src/MatrixDevice.Host/MatrixDevice.Host.csproj" />
+    <PackageReference Include="ModelContextProtocol" Version="[2.2.0]" />
+    <PackageReference Include="JsonSchema.Net" Version="[9.4.1]" />
+    <EmbeddedResource Include="ContractSchema.json" />
+    <EmbeddedResource Include="ProtocolSchema.json" />
+  </ItemGroup>
+</Project>
+
+```
+
+## tests/MatrixDevice.Mcp.Tests/OwnedStdioProcess.cs
+
+```csharp
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text.Json;
+using ModelContextProtocol.Protocol;
+
+namespace MatrixDevice.Mcp.Tests;
+
+internal sealed class OwnedStdioProcess
+{
+    private readonly string directory;
+    private readonly Process process;
+    private readonly List<Task> io = [];
+    private readonly List<string> errors = [];
+    private readonly Stopwatch clock = Stopwatch.StartNew();
+    private readonly FileStream inputRaw, outputRaw, errorRaw;
+    private readonly TaskCompletionSource outputEof = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static readonly List<OwnedStdioProcess> retained = [];
+    private Task? exit, stderrPump;
+    private WireStream? input, output;
+    private bool started, stdinClosed, killed, exited, resourcesDisposed;
+    private int? pid, exitCode;
+    private long? birth;
+    internal StreamClientTransport Transport => new(input ?? throw new InvalidOperationException("Owned process not started."), output!);
+
+    internal OwnedStdioProcess(string directory, string dotnet, string server, string policy, string imports)
+    {
+        this.directory = directory;
+        var start = new ProcessStartInfo(dotnet)
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true,
+            RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = directory
+        };
+        start.Environment.Clear();
+        foreach (var key in new[] { "SystemRoot", "SystemDrive", "TEMP", "TMP", "PATHEXT" })
+            if (Environment.GetEnvironmentVariable(key) is { } value) start.Environment[key] = value;
+        start.Environment["PATH"] = Path.GetDirectoryName(dotnet) + Path.PathSeparator + Environment.SystemDirectory;
+        start.Environment["DOTNET_ROOT"] = Path.GetDirectoryName(dotnet); start.Environment["DOTNET_NOLOGO"] = "1";
+        foreach (var value in new[] { server, "--demo", "--data-dir", Path.Combine(directory, "data"), "--policy", policy, "--import-root", imports }) start.ArgumentList.Add(value);
+        process = new Process { StartInfo = start };
+        inputRaw = Raw("stdin.bin"); outputRaw = Raw("stdout.bin"); errorRaw = Raw("stderr.bin");
+        FileStream Raw(string name) => new(Path.Combine(directory, name), FileMode.CreateNew, FileAccess.Write, FileShare.Read, 81920, true);
+    }
+    internal void Start()
+    {
+        if (!process.Start()) throw new IOException("Owned Demo server did not start.");
+        started = true; _ = process.SafeHandle; pid = process.Id; birth = process.StartTime.ToUniversalTime().Ticks;
+        stderrPump = PumpErrorAsync(); io.Add(stderrPump);
+        input = new WireStream(this, process.StandardInput.BaseStream, inputRaw, write: true);
+        output = new WireStream(this, process.StandardOutput.BaseStream, outputRaw, write: false);
+        exit = process.WaitForExitAsync();
+    }
+    internal void SaveStart() => Evidence.Save(Path.Combine(directory, "server-start.json"), new
+    {
+        pid, birth, server = process.StartInfo.ArgumentList[0], scope = "owned-demo-only",
+        transport = "official StreamClientTransport", transportName = Transport.Name, actualStreams = "external process OS pipes", shell = false, killEntireTree = false
+    });
+    private Task<T> Track<T>(Task<T> task) { lock (io) io.Add(task); return task; }
+    private Task Track(Task task) { lock (io) io.Add(task); return task; }
+    private async Task PumpErrorAsync()
+    {
+        var buffer = new byte[81920];
+        int count;
+        while ((count = await process.StandardError.BaseStream.ReadAsync(buffer)) != 0)
+        {
+            await errorRaw.WriteAsync(buffer.AsMemory(0, count)); await errorRaw.FlushAsync();
+        }
+    }
+    internal bool IoTerminal { get { lock (io) return io.All(task => task.IsCompleted); } }
+    internal bool ProcessTerminal => !started || (exited && exit?.IsCompleted == true);
+    internal bool OutputEofObserved => outputEof.Task.IsCompletedSuccessfully;
+    internal async Task FinishPipesAsync(bool callsTerminal)
+    {
+        if (!callsTerminal) errors.Add("Original calls remain pending; stdin is not closed underneath active writes.");
+        else if (started)
+        {
+            try { process.StandardInput.Close(); stdinClosed = true; }
+            catch (Exception error) { errors.Add("Close actual stdin: " + error); }
+        }
+        if (started)
+        {
+            try { await exit!.WaitAsync(TimeSpan.FromSeconds(15)); exited = process.HasExited; exitCode = process.ExitCode; }
+            catch (Exception error)
+            {
+                errors.Add("Original process exit: " + error);
+                try
+                {
+                    if (!process.HasExited) { killed = true; process.Kill(false); }
+                    await exit!.WaitAsync(TimeSpan.FromSeconds(5)); exited = process.HasExited; exitCode = process.ExitCode;
+                }
+                catch (Exception cleanup) { errors.Add("Owned process cleanup: " + cleanup); }
+            }
+            if (output?.HasRead == true)
+            {
+                try { await outputEof.Task.WaitAsync(TimeSpan.FromSeconds(10)); }
+                catch (Exception error) { errors.Add("Actual stdout EOF: " + error); }
+            }
+            try { await stderrPump!.WaitAsync(TimeSpan.FromSeconds(10)); }
+            catch (Exception error) { errors.Add("Actual stderr drain: " + error); }
+        }
+        Task[] original;
+        lock (io) original = io.ToArray();
+        try { await Task.WhenAll(original).WaitAsync(TimeSpan.FromSeconds(10)); }
+        catch (Exception error) { errors.Add("Original pipe I/O: " + error); }
+    }
+    internal JsonElement SaveEnd(bool sdkTerminal, bool callsTerminal)
+    {
+        Task[] original;
+        lock (io) original = io.ToArray();
+        var terminal = (!started || (exited && exit?.IsCompleted == true)) && original.All(task => task.IsCompleted) && sdkTerminal && callsTerminal;
+        if (terminal)
+        {
+            try
+            {
+                inputRaw.Flush(); outputRaw.Flush(); errorRaw.Flush();
+                inputRaw.Dispose(); outputRaw.Dispose(); errorRaw.Dispose();
+                if (started) { process.StandardInput.Dispose(); process.StandardOutput.Dispose(); process.StandardError.Dispose(); }
+                process.Dispose(); resourcesDisposed = true;
+            }
+            catch (Exception error) { errors.Add("Terminal resource disposal: " + error); }
+        }
+        else
+        {
+            errors.Add("Original process/SDK/calls/I/O are nonterminal; resources retained, not disposed.");
+            lock (retained) retained.Add(this);
+        }
+        var streams = new List<object>();
+        foreach (var name in new[] { "stdin.bin", "stdout.bin", "stderr.bin" })
+        {
+            try
+            {
+                using var source = new FileStream(Path.Combine(directory, name), FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                streams.Add(new { name, bytes = source.Length, sha256 = Convert.ToHexString(SHA256.HashData(source)) });
+            }
+            catch (Exception error) { errors.Add("Raw stream hash: " + error); }
+        }
+        var report = Evidence.Json(new
+        {
+            pid, birth, exitCode, exited, eof = stdinClosed, stdinClosed, stdoutEof = outputEof.Task.IsCompletedSuccessfully, killed,
+            elapsedMs = clock.Elapsed.TotalMilliseconds, pendingPumps = original.Count(task => !task.IsCompleted), errors, streams,
+            exitTaskStatus = exit?.Status.ToString(), stderrTaskStatus = stderrPump?.Status.ToString(),
+            ioStatuses = original.Select(task => task.Status.ToString()).ToArray(), ownedResourcesDisposed = resourcesDisposed, ownedResourcesRetained = !terminal,
+            transport = "official StreamClientTransport", transportName = "in-memory-stream", actualStreams = "external process OS pipes",
+            stdoutConsumers = 1, shell = false, killEntireTree = false, runtimeVersion = Environment.Version.ToString()
+        });
+        Evidence.Save(Path.Combine(directory, "owned-process.json"), report);
+        return report;
+    }
+    private sealed class WireStream(OwnedStdioProcess owner, Stream pipe, FileStream raw, bool write) : Stream
+    {
+        internal bool HasRead { get; private set; }
+        public override bool CanRead => !write;
+        public override bool CanWrite => write;
+        public override bool CanSeek => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException("SDK pipe reads must use async I/O.");
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException("SDK pipe writes must use async I/O.");
+        public override void Flush() => throw new NotSupportedException("SDK pipe flushes must use async I/O.");
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) => ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            if (write) throw new NotSupportedException();
+            HasRead = true;
+            return new(owner.Track(ReadCore(buffer, ct)));
+        }
+        private async Task<int> ReadCore(Memory<byte> buffer, CancellationToken ct)
+        {
+            var count = await pipe.ReadAsync(buffer, ct);
+            if (count == 0) owner.outputEof.TrySetResult();
+            else { await raw.WriteAsync(buffer[..count], ct); await raw.FlushAsync(ct); }
+            return count;
+        }
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken ct) => WriteAsync(buffer.AsMemory(offset, count), ct).AsTask();
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
+        {
+            if (!write) throw new NotSupportedException();
+            return new(owner.Track(WriteCore(buffer, ct)));
+        }
+        private async Task WriteCore(ReadOnlyMemory<byte> buffer, CancellationToken ct)
+        {
+            await pipe.WriteAsync(buffer, ct); await raw.WriteAsync(buffer, ct); await raw.FlushAsync(ct);
+        }
+        public override Task FlushAsync(CancellationToken ct) => owner.Track(FlushCore(ct));
+        private async Task FlushCore(CancellationToken ct) { await pipe.FlushAsync(ct); await raw.FlushAsync(ct); }
+        protected override void Dispose(bool disposing) { }
+    }
+}
+
+```
+
+## tests/MatrixDevice.Mcp.Tests/packages.lock.json
+
+```json
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "JsonSchema.Net": {
+        "type": "Direct",
+        "requested": "[9.4.1, 9.4.1]",
+        "resolved": "9.4.1",
+        "contentHash": "7Nh0XyIse3a5nsc1nJJTECZVjxqHVE5jANGEPpQc2H+/M7u2sLueL93X6ZUuJLkLYy/pYzFmJhKYEpVIctaUZw==",
+        "dependencies": {
+          "JsonPointer.Net": "7.0.3"
+        }
+      },
+      "ModelContextProtocol": {
+        "type": "Direct",
+        "requested": "[2.2.0, 2.2.0]",
+        "resolved": "2.2.0",
+        "contentHash": "4Pb9u02Nwsp0poueDsqNdyGRojFxOYpljB7zDBsq+aHL+Afou3OgxlBc3GWFVnsRMRJrUtWqDh3s6k2JgPzmrQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Caching.Abstractions": "10.0.10",
+          "Microsoft.Extensions.Hosting.Abstractions": "10.0.10",
+          "ModelContextProtocol.Core": "[2.2.0]"
+        }
+      },
+      "AdvancedSharpAdbClient": {
+        "type": "Transitive",
+        "resolved": "3.6.16",
+        "contentHash": "w5p3s+9Rkx9tmn5S5KU0XSTap5YWGHOvQOw/40M0d7eGOHf7idhX+kizWPmnP1ahbkic/yiX03SMYNR1mJSAVw=="
+      },
+      "Humanizer.Core": {
+        "type": "Transitive",
+        "resolved": "3.0.10",
+        "contentHash": "yZIhtw8sYuvsONzQbZxWpR60tMWYHXoo0DL6nyOqSFiU5POjBTSEyWFpTQtJEZuy+oqiYTXKXY/Mjx7KnqIQFw=="
+      },
+      "Json.More.Net": {
+        "type": "Transitive",
+        "resolved": "3.0.1",
+        "contentHash": "fRctF2J2SILYG6wqP21drmeEODmCVkVQ/b3MndDu2fT1swfySyUgq7ePCk+aENGlDcIm05fyfjh9vcuqDEfv3w=="
+      },
+      "JsonPointer.Net": {
+        "type": "Transitive",
+        "resolved": "7.0.3",
+        "contentHash": "It/10weZ3oA+BGL+Gqyw9M6wsi4Tc16vWwU+u7x6LBwty57Y3aUh7bfcn2VWAzgVTAfGuCPb5KUpsH6IFjR08A==",
+        "dependencies": {
+          "Humanizer.Core": "3.0.10",
+          "Json.More.Net": "3.0.1"
+        }
+      },
+      "Microsoft.Data.Sqlite": {
+        "type": "Transitive",
+        "resolved": "10.0.12",
+        "contentHash": "xUq9xUc653ue7ac2rMfCaf8UQN+U3zS8poWYlugycpvJllplMM0Mk7v/+MM0CTlu9zGvbGML4BPH8YWhrUOfGw==",
+        "dependencies": {
+          "Microsoft.Data.Sqlite.Core": "10.0.12",
+          "SQLitePCLRaw.bundle_e_sqlite3": "2.1.12",
+          "SQLitePCLRaw.core": "2.1.12"
+        }
+      },
+      "Microsoft.Data.Sqlite.Core": {
+        "type": "Transitive",
+        "resolved": "10.0.12",
+        "contentHash": "2aL9eL5HQr0V4b8V909SD+jQAx6qnTTl7sT/v3D8dIvmr2UGdpZIQxqm1pj2Js3e4EYTvpw0oMH7DjapJJuPPw==",
+        "dependencies": {
+          "SQLitePCLRaw.core": "2.1.12"
+        }
+      },
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.8.3",
+        "contentHash": "K0B05oApxmviWalNHPMBBcRC7erKiDATz3ENNR/jqTR9JwIwLRefgDhj2jCRwL1aca99pXUe0qyQC73/xIuZig=="
+      },
+      "Microsoft.Extensions.Caching.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "4ZFBNE+jzR+CrWWlhOesnmywCW7pYKT0dxyAQRdL11yJwxe4jvcAu31eorFtEkoFeCDcUTeNssgPv2yaRRptaQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Primitives": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.Configuration.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "5Vnd2I75DmZCVEjSynIdJ/0EGafgnLQwgR3t2C2/fkjx/nRG+cLwxLLdInoHeCEpkD5K4Ov/g9ZCRYrl4TRsaA==",
+        "dependencies": {
+          "Microsoft.Extensions.Primitives": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.DependencyInjection.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA=="
+      },
+      "Microsoft.Extensions.Diagnostics.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "9uWiKpeOVac355STyChWR/pliFX/5CeLqChW9kKsaxyDH4EUTZxMkT4Jwp/J/peLm0GBFmSX5c0WCse3yCnq1Q==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10",
+          "Microsoft.Extensions.Options": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.FileProviders.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "c5zqFCY9DiIpMovLd7/d/CTiEtrMOuQ639dhv3PABtKQIKNQikSHwQt8+N679uii9q+B55lgK28Uv64FOwEu8w==",
+        "dependencies": {
+          "Microsoft.Extensions.Primitives": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.Hosting.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "5LugpYGHk+mkn0a8IZgcyfBca8PCTAU9RQFoMrTdtOOidq88M2SI5f3px6ugnzgxC+eTkvYYJi8pzlUnG5xdAQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration.Abstractions": "10.0.10",
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10",
+          "Microsoft.Extensions.Diagnostics.Abstractions": "10.0.10",
+          "Microsoft.Extensions.FileProviders.Abstractions": "10.0.10",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.Logging.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "zkFxGYUvdxAvIKTyXHrmW+Sux53D4SezD9dMyZ6hrwwzPQJNuwCRy1f5W7AvYTqacEGhWF2XderRQG1OvbV8og==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.Options": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "srnhnk7nE8krBiIXp71LvBmKBtraBONWSRzdjJgRv1Ko9Mp8IVNqv4vIS9hGeVteBig8aQkva9ZG+sC+o5sVcA==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10",
+          "Microsoft.Extensions.Primitives": "10.0.10"
+        }
+      },
+      "Microsoft.Extensions.Primitives": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "5wu/GrYVd8mG2DVUw3vFJzF+O336TyTGg/Kmcgw9bfwYhCoFiV5lR5QeEmKecJyrW4W54nMfD3p3589E8a7czQ=="
+      },
+      "ModelContextProtocol.Core": {
+        "type": "Transitive",
+        "resolved": "2.2.0",
+        "contentHash": "FeBfXU6T8k+jw4afg4sfxdEX2rL/e5oKOk9ROOGztu9k47+7Bz08sdaToYt2XvMY1opNbwxYQOFMj6wH9TInhA==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "10.8.3",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.10"
+        }
+      },
+      "SkiaSharp": {
+        "type": "Transitive",
+        "resolved": "4.153.1",
+        "contentHash": "TghYLOUaP3q6rTjQw7U9uQaaXh8lEs9rfA1U7/VtmyAptVDtj/SmjtcWzFWmcC/VMWxe3QgbV9uyvqDL7ySFtQ==",
+        "dependencies": {
+          "SkiaSharp.NativeAssets.Win32": "4.153.1",
+          "SkiaSharp.NativeAssets.macOS": "4.153.1"
+        }
+      },
+      "SkiaSharp.NativeAssets.macOS": {
+        "type": "Transitive",
+        "resolved": "4.153.1",
+        "contentHash": "YTojWeWIhnpF7uC8vpMxB5wRONKkDB2t3r/nNPA3DL2pgj9fqMXRevA/rIanYazWnco4jo1ufgp3HkXuh1Tz8A=="
+      },
+      "SkiaSharp.NativeAssets.Win32": {
+        "type": "Transitive",
+        "resolved": "4.153.1",
+        "contentHash": "Yqg6rChTVh0BUE8QQxtOA3uUBnihfgID4yex/AvDa0+os2bVcBjmI3Qj9tnOB+R1hd/Jry1Gwl8qw5JI9HZG8Q=="
+      },
+      "SQLitePCLRaw.bundle_e_sqlite3": {
+        "type": "Transitive",
+        "resolved": "2.1.12",
+        "contentHash": "mAgscpQMLw5/nfA1Q5oJVAT29yROUo1ifZGbbTpx/lwZpSxMUGoYbKfmvdm8oXER+RzxqBmmQzeBEVKfeHv2nw==",
+        "dependencies": {
+          "SQLitePCLRaw.lib.e_sqlite3": "2.1.12",
+          "SQLitePCLRaw.provider.e_sqlite3": "2.1.12"
+        }
+      },
+      "SQLitePCLRaw.core": {
+        "type": "Transitive",
+        "resolved": "2.1.12",
+        "contentHash": "ETpNw9DY3ckWLgRRAeCHj+GKOuPi61aeczkXhgHexUvqoZBAYg8RYESE2J7O1M7+o6QbdSEZwrw9bfqztUVWXg=="
+      },
+      "SQLitePCLRaw.lib.e_sqlite3": {
+        "type": "Transitive",
+        "resolved": "2.1.12",
+        "contentHash": "fWi8Dbknuhgg72fWinIdjXVaqO1hHL4YBBwVLnr7e1c9TAZwJ0QE38j9syW1hwx6HaqEVTwI+O07WPdZn8Rp0w=="
+      },
+      "SQLitePCLRaw.provider.e_sqlite3": {
+        "type": "Transitive",
+        "resolved": "2.1.12",
+        "contentHash": "W3oH4XIfCzFrgUSDKHhN6N+dgzA5YHOR2VxX8GB6Qy7CyrJJgxPEG8NirgYWlPQC5P2jz2knSsexWu4tDUL33g==",
+        "dependencies": {
+          "SQLitePCLRaw.core": "2.1.12"
+        }
+      },
+      "matrixdevice.core": {
+        "type": "Project",
+        "dependencies": {
+          "AdvancedSharpAdbClient": "[3.6.16, )",
+          "SkiaSharp": "[4.153.1, )"
+        }
+      },
+      "matrixdevice.features": {
+        "type": "Project",
+        "dependencies": {
+          "MatrixDevice.Core": "[1.0.0, )"
+        }
+      },
+      "matrixdevice.host": {
+        "type": "Project",
+        "dependencies": {
+          "MatrixDevice.Features": "[1.0.0, )",
+          "Microsoft.Data.Sqlite": "[10.0.12, )"
+        }
+      }
+    }
+  }
+}
+```
+
+## tests/MatrixDevice.Mcp.Tests/Program.cs
+
+```csharp
+using System.Diagnostics;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using MatrixDevice.Features;
+using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
+
+namespace MatrixDevice.Mcp.Tests;
+
+internal static class Program
+{
+    private static readonly List<object> results = [];
+    private static string output = "", dotnet = "", server = "";
+    private static readonly Schemas schemas = new();
+    private static int failures;
+    private static int sessions;
+    private static string? normalPreconditionFailure;
+    internal static async Task<int> Main(string[] args)
+    {
+        try
+        {
+            var options = Arguments.Parse(args, ["--dotnet", "--server", "--output"]);
+            dotnet = Arguments.Absolute(options["--dotnet"], false); server = Arguments.Absolute(options["--server"], false);
+            output = options["--output"];
+            if (!Path.IsPathFullyQualified(output) || Path.GetFullPath(output) != output || Directory.Exists(output) || File.Exists(output)) throw new ArgumentException("Output must be an absolute fresh directory.");
+            Directory.CreateDirectory(output);
+            Evidence.Save(Path.Combine(output, "inputs.json"), new { dotnet, dotnetSha256 = Evidence.Hash(dotnet), server, serverSha256 = Evidence.Hash(server), client = typeof(Program).Assembly.Location,
+                clientSha256 = Evidence.Hash(typeof(Program).Assembly.Location), sdk = typeof(ModelContextProtocol.Client.McpClient).Assembly.GetName().Version?.ToString(), protocol = "2025-11-25", scope = "OFFLINE-DEMO-STDIO-NOT-GUI-NOT-LIVE" });
+            await Run("P00-strict-startup-and-malformed-transport", async () =>
+            {
+                try { await StartupRejections.RunAsync(output, dotnet, server); }
+                finally { if (StartupRejections.UnresolvedOwnership is { } reason) normalPreconditionFailure = reason; }
+            });
+            await Run("N01-six-tools-wire-schemas-and-real-results", () => Session(async s =>
+            {
+                Check(new HashSet<string?>(s.Devices.GetProperty("devices").EnumerateArray().Select(row => row.GetProperty("target").GetProperty("serial").GetString())).SetEquals(["DEMO-001", "DEMO-002"]), "Authorized Demo A/B catalog differs.");
+                var reference = await Import(s, "parameterized.zip", Parameterized());
+                var a = await Start(s, reference, "DEMO-001", overrides: new { app = "com.android.settings" });
+                var b = await Start(s, reference, "DEMO-002", overrides: new { app = "com.matrix.demo" });
+                var ar = await s.Terminal(Id(a)); var br = await s.Terminal(Id(b));
+                var av = Result(ar); var bv = Result(br);
+                Check(av.Contains("演示应用已启动：com.android.settings", StringComparison.Ordinal) && bv.Contains("演示应用已启动：com.matrix.demo", StringComparison.Ordinal) && av != bv, "Original Demo launch output is missing or crossed targets.");
+                Check(Id(a) != Id(b), "Different targets shared a JobId.");
+                var unknown = false;
+                using var unknownDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                var unknownTask = s.Track(() => s.Client.CallToolAsync("matrix.not-a-tool", cancellationToken: unknownDeadline.Token).AsTask());
+                try { await unknownTask; } catch (McpException) { unknown = true; }
+                Check(unknown, "Unknown tool did not produce a protocol error.");
+            }));
+            await Run("C01-concurrent-id-conflict-busy-ledger-cancel-isolation", () => Session(async s =>
+            {
+                var wait = await Import(s, "wait.zip", Package(new() { Action = "wait", DurationMs = 60000 }, Launch("com.android.settings")));
+                var quick = await Import(s, "quick.zip", Package(Launch("com.matrix.demo")));
+                var operation = Guid.NewGuid().ToString(); var input = StartArguments(s, wait, "DEMO-001", operation);
+                var calls = Enumerable.Range(0, 3).Select(_ => s.Call("matrix.jobs.start", input, paced: false)).ToArray();
+                var admitted = await Task.WhenAll(calls);
+                Check(admitted.Select(Id).Distinct().Count() == 1 && admitted.Count(reply => !reply.GetProperty("replayed").GetBoolean()) == 1, "Same operation was admitted more than once.");
+                await s.Call("matrix.jobs.start", StartArguments(s, wait, "DEMO-002", operation), "INVALID_ARGUMENT");
+                var busyOperation = Guid.NewGuid().ToString(); var busy = StartArguments(s, quick, "DEMO-001", busyOperation);
+                await s.Call("matrix.jobs.start", busy, "BUSY");
+                var b = await Start(s, quick, "DEMO-002"); Check(Result(await s.Terminal(Id(b))).Contains("com.matrix.demo", StringComparison.Ordinal), "B did not continue independently.");
+                var cancel = await s.Call("matrix.jobs.cancel", new { serverEpoch = s.Epoch, jobId = Id(admitted[0]) });
+                Check(cancel.GetProperty("cancelRequested").GetBoolean(), "A cancellation was not requested.");
+                var stopped = await s.Terminal(Id(admitted[0]), "Cancelled"); Check(stopped.GetProperty("job").GetProperty("result").ValueKind == JsonValueKind.Null, "Cancelled wait ran its following launch.");
+                await s.Call("matrix.jobs.start", busy, "BUSY");
+                var next = await Start(s, wait, "DEMO-001");
+                var oldCancel = await s.Call("matrix.jobs.cancel", new { serverEpoch = s.Epoch, jobId = Id(admitted[0]) });
+                Check(!oldCancel.GetProperty("cancelRequested").GetBoolean() && oldCancel.GetProperty("terminal").GetBoolean(), "Old job was re-cancelled as current work.");
+                var current = await s.Call("matrix.jobs.get", new { serverEpoch = s.Epoch, jobId = Id(next) });
+                Check(current.GetProperty("job").GetProperty("state").GetString() == "Running", "Old JobId cancellation stopped the successor.");
+                await s.Call("matrix.jobs.cancel", new { serverEpoch = s.Epoch, jobId = Id(next) }); await s.Terminal(Id(next), "Cancelled");
+            }));
+            await Run("E01-input-identity-null-extra-unknown-references", () => Session(async s =>
+            {
+                var imported = await Import(s, "parameterized.zip", Parameterized());
+                foreach (var change in new Action<JsonObject>[]
+                {
+                    node => node["unexpected"] = 1,
+                    node => node.Remove("serial"),
+                    node => node["operationId"] = "bad-uuid",
+                    node => node["expectedIdentity"]!["generation"] = "9223372036854775808",
+                    node => node["expectedIdentity"]!["generation"] = 1,
+                    node => node["expectedIdentity"]!["transportId"] = 1,
+                    node => node["timeoutMs"] = 999
+                })
+                {
+                    var input = JsonNode.Parse(Evidence.Json(StartArguments(s, imported, "DEMO-001")).GetRawText())!.AsObject(); change(input);
+                    await s.Call("matrix.jobs.start", Evidence.Json(input), "INVALID_ARGUMENT", validInput: false);
+                }
+                var stale = JsonNode.Parse(Evidence.Json(StartArguments(s, imported, "DEMO-001")).GetRawText())!.AsObject(); stale["expectedIdentity"]!["generation"] = "999999";
+                await s.Call("matrix.jobs.start", Evidence.Json(stale), "IDENTITY_CHANGED");
+                await s.Call("matrix.jobs.start", StartArguments(s, imported, "DEMO-001", overrides: new { app = (string?)null }), "INVALID_ARGUMENT");
+                await s.Call("matrix.jobs.get", new { serverEpoch = s.Epoch, jobId = Guid.NewGuid().ToString() }, "UNKNOWN_REFERENCE");
+                await s.Call("matrix.jobs.cancel", new { serverEpoch = s.Epoch, jobId = Guid.NewGuid().ToString() }, "UNKNOWN_REFERENCE");
+                var badRef = JsonNode.Parse(Evidence.Json(StartArguments(s, imported, "DEMO-001")).GetRawText())!.AsObject(); badRef["scriptRef"] = Guid.NewGuid().ToString();
+                await s.Call("matrix.jobs.start", Evidence.Json(badRef), "UNKNOWN_REFERENCE");
+                var duplicate = await s.RawCall("matrix.jobs.get", "{\"serverEpoch\":" + JsonSerializer.Serialize(s.Epoch) + ",\"jobId\":\"00000000-0000-4000-8000-000000000001\",\"jobId\":\"00000000-0000-4000-8000-000000000002\"}");
+                Check(duplicate.GetProperty("isError").GetBoolean() && duplicate.GetProperty("structuredContent").GetProperty("error").GetProperty("code").GetString() == "INVALID_ARGUMENT", "Duplicate property did not reach strict rejection.");
+                using (var last = JsonDocument.Parse(Evidence.SnapshotLines(Path.Combine(s.EvidenceDirectory, "stdin.bin")).Last()))
+                    Check(last.RootElement.GetProperty("params").GetProperty("arguments").EnumerateObject().Count(field => field.Name == "jobId") == 2, "SDK did not preserve both duplicate properties on the actual wire.");
+                Evidence.Save(Path.Combine(s.EvidenceDirectory, "duplicate-response.json"), duplicate);
+                var valid = await Start(s, imported, "DEMO-001", overrides: new { app = "com.android.settings" }); await s.Terminal(Id(valid));
+            }));
+            await Run("E04-completed-RPC-id-reuse-rejects-own-connection", () => Session(async s =>
+            {
+                const string rpcId = "mcp-independent-completed-id";
+                await s.RawCall("matrix.capabilities", "{}", rpcId);
+                Exception? rejected = null;
+                try { await s.RawCall("matrix.capabilities", "{}", rpcId); }
+                catch (Exception error) { rejected = error; }
+                var sent = WireMessages(Path.Combine(s.EvidenceDirectory, "stdin.bin")).Where(message => message.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String && id.GetString() == rpcId && message.GetProperty("method").GetString() == "tools/call").ToArray();
+                if (sent.Length != 2) throw new SessionNotRun("Official public RequestId API did not emit both same-id requests; product lifetime-id rejection is NOT-RUN.");
+                if (rejected is McpException or IOException) s.ExpectRpcIdRejection();
+                Check(rejected is McpException or IOException, "Completed RPC-id reuse did not stop the actual connection with a protocol/transport error.");
+                var replies = WireMessages(Path.Combine(s.EvidenceDirectory, "stdout.bin")).Where(message => message.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String && id.GetString() == rpcId).ToArray();
+                Check(replies.Length == 1, "Reused completed RPC-id received a second response instead of a bounded connection rejection.");
+                Check(string.Join("\n", Evidence.SnapshotLines(Path.Combine(s.EvidenceDirectory, "stderr.bin"))).Contains("JSON-RPC id reuse", StringComparison.Ordinal), "RPC-id rejection lacks its actual typed-id fault diagnostic.");
+                Evidence.Save(Path.Combine(s.EvidenceDirectory, "rpc-id-reuse.json"), new { rpcId, sent, replies, rejection = rejected!.ToString() });
+            }));
+            await Run("B01-paths-bad-hash-package-and-frozen-source", () => Session(async s =>
+            {
+                var package = Package(Launch("com.android.settings"));
+                var reference = await Import(s, "source.zip", package); var source = Path.Combine(s.ImportRoot, "source.zip");
+                var sha = reference.GetProperty("sha256").GetString();
+                foreach (var path in new[] { source, "../source.zip", "./source.zip", "source.zip:stream", "sub//source.zip", "\\\\localhost\\share\\source.zip", "missing.zip" })
+                    await s.Call("matrix.scripts.import", new { serverEpoch = s.Epoch, relativePath = path, sha256 = sha }, "INVALID_ARGUMENT");
+                await s.Call("matrix.scripts.import", new { serverEpoch = s.Epoch, relativePath = "source.zip", sha256 = new string('0', 64) }, "INVALID_ARGUMENT");
+                File.WriteAllText(Path.Combine(s.ImportRoot, "plain.json"), "{\"not\":\"zip\"}");
+                await s.Call("matrix.scripts.import", new { serverEpoch = s.Epoch, relativePath = "plain.json", sha256 = Evidence.Hash(Path.Combine(s.ImportRoot, "plain.json")) }, "INVALID_ARGUMENT");
+                ScriptPackageService.Save(source, Package(Launch("com.matrix.demo")));
+                var result = await Start(s, reference, "DEMO-001");
+                Check(result.GetProperty("sha256").GetString() == sha && Result(await s.Terminal(Id(result))).Contains("com.android.settings", StringComparison.Ordinal), "Frozen import followed modified source bytes.");
+                Check(File.Exists(source), "Importer deleted the source.");
+            }));
+            await Run("B02-policy-A-only-denies-existing-demo-B", () => Session(async s =>
+            {
+                Check(s.Devices.GetProperty("devices").GetArrayLength() == 1 && s.Identity("DEMO-001").GetProperty("serial").GetString() == "DEMO-001", "A-only policy exposed B.");
+                var reference = await Import(s, "one.zip", Package(Launch("com.android.settings")));
+                await s.Call("matrix.jobs.start", new { serverEpoch = s.Epoch, operationId = Guid.NewGuid().ToString(), scriptRef = reference.GetProperty("scriptRef").GetString(), serial = "DEMO-002", expectedIdentity = new { generation = "1", transportId = (uint?)null } }, "UNAUTHORIZED");
+                await s.Terminal(Id(await Start(s, reference, "DEMO-001")));
+            }, serials: ["DEMO-001"]));
+            await Run("B03-missing-start-scope-is-not-import-authority", () => Session(async s =>
+            {
+                var reference = await Import(s, "one.zip", Package(Launch("com.android.settings")));
+                await s.Call("matrix.jobs.start", StartArguments(s, reference, "DEMO-001"), "UNAUTHORIZED");
+            }, scopes: ["devices.read", "scripts.import", "jobs.read", "jobs.cancel"]));
+            await Run("F01-deadline-and-EOF-owned-active-job", () => Session(async s =>
+            {
+                var reference = await Import(s, "wait.zip", Package(new() { Action = "wait", DurationMs = 60000 }, Launch("com.android.settings")));
+                var start = await Start(s, reference, "DEMO-001", timeout: 1000);
+                var terminal = await s.Terminal(Id(start), "Cancelled");
+                Check(terminal.GetProperty("job").GetProperty("terminalReason").GetString() == "deadline" && terminal.GetProperty("job").GetProperty("result").ValueKind == JsonValueKind.Null, "Deadline did not stop the following launch.");
+                var active = await Start(s, reference, "DEMO-002");
+                var running = await s.Call("matrix.jobs.get", new { serverEpoch = s.Epoch, jobId = Id(active) });
+                Check(running.GetProperty("job").GetProperty("state").GetString() == "Running", "EOF fixture has no accepted live job.");
+                Evidence.Save(Path.Combine(s.EvidenceDirectory, "eof-active.json"), new { jobId = Id(active), before = running });
+                s.ExpectShutdown(Id(active));
+                // Session disposal closes actual stdin; the server lifecycle report must prove drain.
+            }));
+            await Run("T01-script-reference-capacity", () => Session(async s =>
+            {
+                for (var index = 0; index < 16; index++) await Import(s, index + ".zip", Package(Launch("com.android.settings")) with { Manifest = Manifest("distinct-" + index) });
+                await Import(s, "seventeen.zip", Package(Launch("com.matrix.demo")), "CAPACITY");
+            }));
+            await Run("T09-70KiB-schema-valid-override-does-not-reserve-operation", () => Session(async s =>
+            {
+                var package = Parameterized();
+                package.Parameters.Add(new() { Key = "unused", Type = "string", DefaultValue = Evidence.Json("default") });
+                var reference = await Import(s, "unbound-parameter.zip", package);
+                var operation = Guid.NewGuid().ToString();
+                await s.Call("matrix.jobs.start", StartArguments(s, reference, "DEMO-001", operation, new { unused = new string('x', 70 * 1024) }), "CAPACITY");
+                var request = WireMessages(Path.Combine(s.EvidenceDirectory, "stdin.bin")).Single(message => message.TryGetProperty("method", out var method) && method.GetString() == "tools/call"
+                    && message.GetProperty("params").TryGetProperty("arguments", out var input) && input.TryGetProperty("operationId", out var id) && id.GetString() == operation);
+                var argumentsBytes = System.Text.Encoding.UTF8.GetByteCount(request.GetProperty("params").GetProperty("arguments").GetRawText());
+                var wireBytes = System.Text.Encoding.UTF8.GetByteCount(request.GetRawText());
+                Check(argumentsBytes > 65536 && wireBytes < 1024 * 1024, "Oversize business-body fixture did not actually cross 64KiB within the 1MiB wire limit.");
+                var accepted = await Start(s, reference, "DEMO-001", operation, new { unused = "short" });
+                Check(!accepted.GetProperty("replayed").GetBoolean(), "Rejected oversize body consumed the operation ledger key.");
+                Check(Result(await s.Terminal(Id(accepted))).Contains("com.android.settings", StringComparison.Ordinal), "Short legal follow-up did not reach the original Demo engine.");
+                Evidence.Save(Path.Combine(s.EvidenceDirectory, "oversize-business-body.json"), new { operation, argumentsBytes, wireBytes, accepted });
+            }));
+            await Run("T02-operation-ledger-100-and-replay-at-capacity", () => Session(async s =>
+            {
+                var reference = await Import(s, "wait.zip", Package(new ScriptStep { Action = "wait", DurationMs = 60000 }));
+                var key = Guid.NewGuid().ToString(); var input = StartArguments(s, reference, "DEMO-001", key); var accepted = await s.Call("matrix.jobs.start", input);
+                for (var index = 1; index < 100; index++) await s.Call("matrix.jobs.start", StartArguments(s, reference, "DEMO-001"), "BUSY");
+                await s.Call("matrix.jobs.start", StartArguments(s, reference, "DEMO-002"), "CAPACITY");
+                var replay = await s.Call("matrix.jobs.start", input); Check(Id(replay) == Id(accepted) && replay.GetProperty("replayed").GetBoolean(), "Capacity blocked accepted-key replay.");
+                await s.Call("matrix.jobs.cancel", new { serverEpoch = s.Epoch, jobId = Id(accepted) }); await s.Terminal(Id(accepted), "Cancelled");
+            }));
+            await Run("T03-500-log-window-and-real-Unicode-result-budget", () => Session(async s =>
+            {
+                var package = Package(Enumerable.Range(0, 600).Select(_ => Launch("com.android.settings")).ToArray());
+                var reference = await Import(s, "many.zip", package); var accepted = await Start(s, reference, "DEMO-001"); var terminal = await s.Terminal(Id(accepted));
+                Check(terminal.GetProperty("availableLogs").GetInt32() == 500 && terminal.GetProperty("logs").GetArrayLength() <= 100 && terminal.GetProperty("omittedLogCount").GetInt32() == 500 - terminal.GetProperty("logs").GetArrayLength(), "500 log window or omitted count is wrong.");
+                var withoutLogs = await s.Call("matrix.jobs.get", new { serverEpoch = s.Epoch, jobId = Id(accepted), logLimit = 0 });
+                var result = Result(withoutLogs); Check(result.Contains("[输出已截断]", StringComparison.Ordinal) && new System.Text.UTF8Encoding(false, true).GetByteCount(result) <= 16384, "Actual Chinese Demo result was not bounded at a valid Unicode boundary.");
+            }));
+            await Run("R01-new-process-epoch-rejects-old-request", async () =>
+            {
+                string? prior = null;
+                await Session(s => { prior = s.Epoch; return Task.CompletedTask; });
+                await Session(async s =>
+                {
+                    Check(s.Epoch != prior, "New server reused the prior epoch.");
+                    await s.Call("matrix.jobs.get", new { serverEpoch = prior, jobId = Guid.NewGuid().ToString() }, "UNKNOWN_REFERENCE");
+                });
+            });
+            NotRun("E02-transport-generation-change-and-lost-response", "The six tools expose no Demo connection mutation or delivery gate; no test RPC or same-process substitute was introduced.");
+            NotRun("F02-cancel-reserved-channel-under-three-imports", "A deterministic external importer blocking boundary is not available; concurrent quick calls do not prove saturation.");
+            NotRun("F03-cancel-exact-admission-boundary", "No public pre-admission barrier; pre-cancel token alone cannot prove both sides of the admission race.");
+            NotRun("B04-reparse-and-source-replacement-during-copy", "No privileged junction/symlink creation or timing-based race is performed.");
+            NotRun("T04-64MiB-staging-and-16MiB-archive-32MiB-extracted-128-entries", "Separate archive/quota fixtures remain required; reference capacity is not a substitute.");
+            NotRun("T05-deep-JSON-escape-expansion-and-long-errors", "The separate >1MiB no-newline and half-frame EOF cases cover only those actual preparse paths; depth, escaping and long-error budgets remain untested.");
+            NotRun("T06-crash-not-reading-output-and-forced-termination", "Only natural client EOF is exercised, not forced kill or backpressure.");
+            NotRun("T07-101st-terminal-job-eviction", "Unreachable through the 100-operation lifetime limit; existing Scheduler tests remain the evidence.");
+            NotRun("N02-tap-counter-and-unselected-device-backend-readback", "No readback tool is registered. Original launch-return text is checked, not claimed as node/tap counter proof; A-only policy tests real Demo B authorization.");
+            NotRun("R02-real-owner-competition-and-live-1-2", "This suite is strictly Demo and does not construct real runtime, contact ADB or invoke a simulator.");
+            NotRun("E03-protocol-mismatch-rejections", "Strict startup is tested separately, but a deliberately mismatched official client protocol remains untested.");
+            NotRun("T08-metadata-8KiB-parameter-keys-64KiB-and-non-BMP-response-budget", "Reference/result limits do not replace independent metadata, full parameter list or non-BMP/escaped-output expansion fixtures.");
+            NotRun("T10-65536-lifetime-RPC-id-capacity", "Completed-id reuse and 1024-byte id bounds do not replace the separate 65536-entry lifetime-hash stress test.");
+        }
+        catch (Exception error) { failures++; results.Add(new { caseId = "harness", status = "FIXTURE-FAIL", error = error.ToString() }); }
+        finally
+        {
+            if (Directory.Exists(output)) Evidence.Save(Path.Combine(output, "summary.json"), new { status = failures == 0 ? "PASS-LIMITED" : "FAIL", failures, results, sessions,
+                scope = "official-SDK-external-stdio-Demo-only", noGuiOrGuest = true, ownPendingWorkProof = "session-end.json and owned-process.json per session", unimplementedCoverageIsNotPassed = true });
+        }
+        return failures == 0 ? 0 : 1;
+    }
+    private static async Task Run(string id, Func<Task> action)
+    {
+        var watch = Stopwatch.StartNew(); string status; string? error = null;
+        try { await action(); status = "PASS-OFFLINE"; }
+        catch (Exception failure)
+        {
+            error = failure.ToString();
+            if (failure is SessionNotRun) status = "NOT-RUN";
+            else
+            {
+                failures++;
+                status = failure is SessionPreconditionFailure ? "PRECONDITION-FAIL" : failure is ProductFailure or McpException ? "PRODUCT-FAIL"
+                    : failure is AggregateException aggregate ? aggregate.Message.StartsWith("CLEANUP-FAIL", StringComparison.Ordinal) ? "CLEANUP-FAIL" : "MIXED-FAIL" : "FIXTURE-FAIL";
+            }
+        }
+        var result = new { caseId = id, status, elapsedMs = watch.Elapsed.TotalMilliseconds, error }; results.Add(result);
+        File.AppendAllText(Path.Combine(output, "cases.jsonl"), JsonSerializer.Serialize(result) + "\n"); Console.WriteLine(id + " " + status);
+    }
+    private static async Task Session(Func<StdioSession, Task> action, string[]? scopes = null, string[]? serials = null)
+    {
+        if (normalPreconditionFailure is not null) throw new SessionNotRun("Normal sessions stopped after the prior common precondition failure: " + normalPreconditionFailure);
+        StdioSession session;
+        try { session = await StdioSession.Open(output, "session-" + Interlocked.Increment(ref sessions).ToString("D2"), dotnet, server, schemas, scopes, serials); }
+        catch (Exception error)
+        {
+            normalPreconditionFailure = error.ToString();
+            if (error is SessionPreconditionFailure) throw;
+            throw new SessionPreconditionFailure("Owned session construction failed; no further normal process may start.", error);
+        }
+        Exception? primary = null, cleanup = null;
+        try { await action(session); } catch (Exception error) { primary = error; }
+        try { await session.DisposeAsync(); } catch (Exception error) { cleanup = error; normalPreconditionFailure = "Prior owned-session cleanup failed; no further normal server will be started: " + error; }
+        if (primary is not null && cleanup is not null) throw new AggregateException("MIXED-FAIL: primary and cleanup", primary, cleanup);
+        if (primary is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(primary).Throw();
+        if (cleanup is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cleanup).Throw();
+    }
+    private static void NotRun(string id, string reason)
+    {
+        var result = new { caseId = id, status = "NOT-RUN", reason }; results.Add(result);
+        File.AppendAllText(Path.Combine(output, "cases.jsonl"), JsonSerializer.Serialize(result) + "\n");
+    }
+    private static void Check(bool value, string message) => Evidence.Check(value, message);
+    private static JsonElement[] WireMessages(string path) => Evidence.SnapshotLines(path).Where(line => !string.IsNullOrWhiteSpace(line)).Select(line =>
+    {
+        using var document = JsonDocument.Parse(line); return document.RootElement.Clone();
+    }).ToArray();
+    private static string Id(JsonElement response) => response.GetProperty("jobId").GetString()!;
+    private static string Result(JsonElement response) => response.GetProperty("job").GetProperty("result").GetString() ?? "";
+    private static ScriptStep Launch(string app) => new() { Action = "launch", Value = app };
+    private static ScriptManifest Manifest(string id) => new() { Id = id, Name = "独立MCP测试 " + id, Version = "1.0" };
+    private static ScriptPackage Package(params ScriptStep[] steps) => new() { Manifest = Manifest("mcp-test"), Steps = steps.ToList() };
+    private static ScriptPackage Parameterized() => Package(Launch("com.android.settings")) with
+    {
+        Parameters = [new() { Key = "app", Type = "string", DefaultValue = Evidence.Json("com.android.settings") }],
+        ExecutionContract = new() { Version = 1, Bindings = [new() { StepIndex = 0, Field = "value", ParameterKey = "app" }] }
+    };
+    private static async Task<JsonElement> Import(StdioSession session, string name, ScriptPackage package, string? error = null)
+    {
+        var path = Path.Combine(session.ImportRoot, name); ScriptPackageService.Save(path, package);
+        return await session.Call("matrix.scripts.import", new { serverEpoch = session.Epoch, relativePath = name, sha256 = Evidence.Hash(path) }, error);
+    }
+    private static object StartArguments(StdioSession session, JsonElement reference, string serial, string? operation = null, object? overrides = null, int timeout = 300000)
+    {
+        var identity = session.Identity(serial);
+        var result = new Dictionary<string, object?> { ["serverEpoch"] = session.Epoch, ["operationId"] = operation ?? Guid.NewGuid().ToString(), ["scriptRef"] = reference.GetProperty("scriptRef").GetString(), ["serial"] = serial,
+            ["expectedIdentity"] = new { generation = identity.GetProperty("generation").GetString(), transportId = identity.GetProperty("transportId").ValueKind == JsonValueKind.Null ? (uint?)null : identity.GetProperty("transportId").GetUInt32() }, ["timeoutMs"] = timeout };
+        if (overrides is not null) result["parameterOverrides"] = overrides;
+        return result;
+    }
+    private static Task<JsonElement> Start(StdioSession session, JsonElement reference, string serial, string? operation = null, object? overrides = null, int timeout = 300000)
+        => session.Call("matrix.jobs.start", StartArguments(session, reference, serial, operation, overrides, timeout));
+}
+
+```
+
+## tests/MatrixDevice.Mcp.Tests/ProtocolSchema.json
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Tool": {
+      "description": "Definition for a tool the client can call.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+          "type": "object"
+        },
+        "annotations": {
+          "$ref": "#/$defs/ToolAnnotations",
+          "description": "Optional additional tool information.\n\nDisplay name precedence order is: title, annotations.title, then name."
+        },
+        "description": {
+          "description": "A human-readable description of the tool.\n\nThis can be used by clients to improve the LLM's understanding of available tools. It can be thought of like a \"hint\" to the model.",
+          "type": "string"
+        },
+        "execution": {
+          "$ref": "#/$defs/ToolExecution",
+          "description": "Execution-related properties for this tool."
+        },
+        "icons": {
+          "description": "Optional set of sized icons that the client can display in a user interface.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- `image/png` - PNG images (safe, universal compatibility)\n- `image/jpeg` (and `image/jpg`) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- `image/svg+xml` - SVG images (scalable but requires security precautions)\n- `image/webp` - WebP images (modern, efficient format)",
+          "items": {
+            "$ref": "#/$defs/Icon"
+          },
+          "type": "array"
+        },
+        "inputSchema": {
+          "description": "A JSON Schema object defining the expected parameters for the tool.",
+          "properties": {
+            "$schema": {
+              "type": "string"
+            },
+            "properties": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "properties": {},
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "required": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "object",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "description": "Intended for programmatic or logical use, but used as a display name in past specs or fallback (if title isn't present).",
+          "type": "string"
+        },
+        "outputSchema": {
+          "description": "An optional JSON Schema object defining the structure of the tool's output returned in\nthe structuredContent field of a CallToolResult.\n\nDefaults to JSON Schema 2020-12 when no explicit $schema is provided.\nCurrently restricted to type: \"object\" at the root level.",
+          "properties": {
+            "$schema": {
+              "type": "string"
+            },
+            "properties": {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "properties": {},
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "required": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "object",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        "title": {
+          "description": "Intended for UI and end-user contexts — optimized to be human-readable and easily understood,\neven by those unfamiliar with domain-specific terminology.\n\nIf not provided, the name should be used for display (except for Tool,\nwhere `annotations.title` should be given precedence over using `name`,\nif present).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "inputSchema",
+        "name"
+      ],
+      "type": "object"
+    },
+    "ListToolsResult": {
+      "description": "The server's response to a tools/list request from the client.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+          "type": "object"
+        },
+        "nextCursor": {
+          "description": "An opaque token representing the pagination position after the last returned result.\nIf present, there may be more results available.",
+          "type": "string"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/Tool"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tools"
+      ],
+      "type": "object"
+    },
+    "CallToolResult": {
+      "description": "The server's response to a tool call.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+          "type": "object"
+        },
+        "content": {
+          "description": "A list of content objects that represent the unstructured result of the tool call.",
+          "items": {
+            "$ref": "#/$defs/ContentBlock"
+          },
+          "type": "array"
+        },
+        "isError": {
+          "description": "Whether the tool call ended in an error.\n\nIf not set, this is assumed to be false (the call was successful).\n\nAny errors that originate from the tool SHOULD be reported inside the result\nobject, with `isError` set to true, _not_ as an MCP protocol-level error\nresponse. Otherwise, the LLM would not be able to see that an error occurred\nand self-correct.\n\nHowever, any errors in _finding_ the tool, an error indicating that the\nserver does not support tool calls, or any other exceptional conditions,\nshould be reported as an MCP error response.",
+          "type": "boolean"
+        },
+        "structuredContent": {
+          "additionalProperties": {},
+          "description": "An optional JSON object that represents the structured result of the tool call.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "type": "object"
+    },
+    "ToolAnnotations": {
+      "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**.\nThey are not guaranteed to provide a faithful description of\ntool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations\nreceived from untrusted servers.",
+      "properties": {
+        "destructiveHint": {
+          "description": "If true, the tool may perform destructive updates to its environment.\nIf false, the tool performs only additive updates.\n\n(This property is meaningful only when `readOnlyHint == false`)\n\nDefault: true",
+          "type": "boolean"
+        },
+        "idempotentHint": {
+          "description": "If true, calling the tool repeatedly with the same arguments\nwill have no additional effect on its environment.\n\n(This property is meaningful only when `readOnlyHint == false`)\n\nDefault: false",
+          "type": "boolean"
+        },
+        "openWorldHint": {
+          "description": "If true, this tool may interact with an \"open world\" of external\nentities. If false, the tool's domain of interaction is closed.\nFor example, the world of a web search tool is open, whereas that\nof a memory tool is not.\n\nDefault: true",
+          "type": "boolean"
+        },
+        "readOnlyHint": {
+          "description": "If true, the tool does not modify its environment.\n\nDefault: false",
+          "type": "boolean"
+        },
+        "title": {
+          "description": "A human-readable title for the tool.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ToolExecution": {
+      "description": "Execution-related properties for a tool.",
+      "properties": {
+        "taskSupport": {
+          "description": "Indicates whether this tool supports task-augmented execution.\nThis allows clients to handle long-running operations through polling\nthe task system.\n\n- \"forbidden\": Tool does not support task-augmented execution (default when absent)\n- \"optional\": Tool may support task-augmented execution\n- \"required\": Tool requires task-augmented execution\n\nDefault: \"forbidden\"",
+          "enum": [
+            "forbidden",
+            "optional",
+            "required"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Icon": {
+      "description": "An optionally-sized icon that can be displayed in a user interface.",
+      "properties": {
+        "mimeType": {
+          "description": "Optional MIME type override if the source MIME type is missing or generic.\nFor example: `\"image/png\"`, `\"image/jpeg\"`, or `\"image/svg+xml\"`.",
+          "type": "string"
+        },
+        "sizes": {
+          "description": "Optional array of strings that specify sizes at which the icon can be used.\nEach string should be in WxH format (e.g., `\"48x48\"`, `\"96x96\"`) or `\"any\"` for scalable formats like SVG.\n\nIf not provided, the client should assume that the icon can be used at any size.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "src": {
+          "description": "A standard URI pointing to an icon resource. May be an HTTP/HTTPS URL or a\n`data:` URI with Base64-encoded image data.\n\nConsumers SHOULD takes steps to ensure URLs serving icons are from the\nsame domain as the client/server or a trusted domain.\n\nConsumers SHOULD take appropriate precautions when consuming SVGs as they can contain\nexecutable JavaScript.",
+          "format": "uri",
+          "type": "string"
+        },
+        "theme": {
+          "description": "Optional specifier for the theme this icon is designed for. `light` indicates\nthe icon is designed to be used with a light background, and `dark` indicates\nthe icon is designed to be used with a dark background.\n\nIf not provided, the client should assume the icon can be used with any theme.",
+          "enum": [
+            "dark",
+            "light"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "src"
+      ],
+      "type": "object"
+    },
+    "ContentBlock": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TextContent"
+        },
+        {
+          "$ref": "#/$defs/ImageContent"
+        },
+        {
+          "$ref": "#/$defs/AudioContent"
+        },
+        {
+          "$ref": "#/$defs/ResourceLink"
+        },
+        {
+          "$ref": "#/$defs/EmbeddedResource"
+        }
+      ]
+    },
+    "TextContent": {
+      "description": "Text provided to or from an LLM.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+          "type": "object"
+        },
+        "annotations": {
+          "$ref": "#/$defs/Annotations",
+          "description": "Optional annotations for the client."
+        },
+        "text": {
+          "description": "The text content of the message.",
+          "type": "string"
+        },
+        "type": {
+          "const": "text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ImageContent": {
+      "description": "An image provided to or from an LLM.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+          "type": "object"
+        },
+        "annotations": {
+          "$ref": "#/$defs/Annotations",
+          "description": "Optional annotations for the client."
+        },
+        "data": {
+          "description": "The base64-encoded image data.",
+          "format": "byte",
+          "type": "string"
+        },
+        "mimeType": {
+          "description": "The MIME type of the image. Different providers may support different image types.",
+          "type": "string"
+        },
+        "type": {
+          "const": "image",
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType",
+        "type"
+      ],
+      "type": "object"
+    },
+    "AudioContent": {
+      "description": "Audio provided to or from an LLM.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+          "type": "object"
+        },
+        "annotations": {
+          "$ref": "#/$defs/Annotations",
+          "description": "Optional annotations for the client."
+        },
+        "data": {
+          "description": "The base64-encoded audio data.",
+          "format": "byte",
+          "type": "string"
+        },
+        "mimeType": {
+          "description": "The MIME type of the audio. Different providers may support different audio types.",
+          "type": "string"
+        },
+        "type": {
+          "const": "audio",
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ResourceLink": {
+      "description": "A resource that the server is capable of reading, included in a prompt or tool call result.\n\nNote: resource links returned by tools are not guaranteed to appear in the results of `resources/list` requests.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+          "type": "object"
+        },
+        "annotations": {
+          "$ref": "#/$defs/Annotations",
+          "description": "Optional annotations for the client."
+        },
+        "description": {
+          "description": "A description of what this resource represents.\n\nThis can be used by clients to improve the LLM's understanding of available resources. It can be thought of like a \"hint\" to the model.",
+          "type": "string"
+        },
+        "icons": {
+          "description": "Optional set of sized icons that the client can display in a user interface.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- `image/png` - PNG images (safe, universal compatibility)\n- `image/jpeg` (and `image/jpg`) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- `image/svg+xml` - SVG images (scalable but requires security precautions)\n- `image/webp` - WebP images (modern, efficient format)",
+          "items": {
+            "$ref": "#/$defs/Icon"
+          },
+          "type": "array"
+        },
+        "mimeType": {
+          "description": "The MIME type of this resource, if known.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Intended for programmatic or logical use, but used as a display name in past specs or fallback (if title isn't present).",
+          "type": "string"
+        },
+        "size": {
+          "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window usage.",
+          "type": "integer"
+        },
+        "title": {
+          "description": "Intended for UI and end-user contexts — optimized to be human-readable and easily understood,\neven by those unfamiliar with domain-specific terminology.\n\nIf not provided, the name should be used for display (except for Tool,\nwhere `annotations.title` should be given precedence over using `name`,\nif present).",
+          "type": "string"
+        },
+        "type": {
+          "const": "resource_link",
+          "type": "string"
+        },
+        "uri": {
+          "description": "The URI of this resource.",
+          "format": "uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "uri"
+      ],
+      "type": "object"
+    },
+    "EmbeddedResource": {
+      "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit\nof the LLM and/or the user.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+          "type": "object"
+        },
+        "annotations": {
+          "$ref": "#/$defs/Annotations",
+          "description": "Optional annotations for the client."
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextResourceContents"
+            },
+            {
+              "$ref": "#/$defs/BlobResourceContents"
+            }
+          ]
+        },
+        "type": {
+          "const": "resource",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "type"
+      ],
+      "type": "object"
+    },
+    "Annotations": {
+      "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
+      "properties": {
+        "audience": {
+          "description": "Describes who the intended audience of this object or data is.\n\nIt can include multiple entries to indicate content useful for multiple audiences (e.g., `[\"user\", \"assistant\"]`).",
+          "items": {
+            "$ref": "#/$defs/Role"
+          },
+          "type": "array"
+        },
+        "lastModified": {
+          "description": "The moment the resource was last modified, as an ISO 8601 formatted string.\n\nShould be an ISO 8601 formatted string (e.g., \"2025-01-12T15:00:58Z\").\n\nExamples: last activity timestamp in an open file, timestamp when the resource\nwas attached, etc.",
+          "type": "string"
+        },
+        "priority": {
+          "description": "Describes how important this data is for operating the server.\n\nA value of 1 means \"most important,\" and indicates that the data is\neffectively required, while 0 means \"least important,\" and indicates that\nthe data is entirely optional.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "TextResourceContents": {
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+          "type": "object"
+        },
+        "mimeType": {
+          "description": "The MIME type of this resource, if known.",
+          "type": "string"
+        },
+        "text": {
+          "description": "The text of the item. This must only be set if the item can actually be represented as text (not binary data).",
+          "type": "string"
+        },
+        "uri": {
+          "description": "The URI of this resource.",
+          "format": "uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "uri"
+      ],
+      "type": "object"
+    },
+    "BlobResourceContents": {
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "description": "See [General fields: `_meta`](/specification/2025-11-25/basic/index#meta) for notes on `_meta` usage.",
+          "type": "object"
+        },
+        "blob": {
+          "description": "A base64-encoded string representing the binary data of the item.",
+          "format": "byte",
+          "type": "string"
+        },
+        "mimeType": {
+          "description": "The MIME type of this resource, if known.",
+          "type": "string"
+        },
+        "uri": {
+          "description": "The URI of this resource.",
+          "format": "uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "blob",
+        "uri"
+      ],
+      "type": "object"
+    },
+    "Role": {
+      "description": "The sender or recipient of messages and data in a conversation.",
+      "enum": [
+        "assistant",
+        "user"
+      ],
+      "type": "string"
+    }
+  }
+}
+
+```
+
+## tests/MatrixDevice.Mcp.Tests/StartupRejections.cs
+
+```csharp
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+
+namespace MatrixDevice.Mcp.Tests;
+
+internal static class StartupRejections
+{
+    internal static string? UnresolvedOwnership { get; private set; }
+    private static object? retainedOwnership;
+    internal static async Task RunAsync(string output, string dotnet, string server)
+    {
+        var root = Path.Combine(output, "raw-rejections"); Directory.CreateDirectory(root);
+        var failures = new List<Exception>();
+        var cases = new[] { "missing-demo", "real", "duplicate-demo", "duplicate-data", "unknown", "missing-value", "bad-policy-json", "bad-policy-field", "existing-data", "oversize-no-newline", "partial-frame-eof", "string-rpc-id-over-1024-utf8" };
+        foreach (var name in cases)
+        {
+            var directory = Path.Combine(root, name); Directory.CreateDirectory(directory);
+            if (UnresolvedOwnership is { } stopped)
+            {
+                var skipped = new { caseId = name, status = "NOT-RUN", reason = stopped, processStarted = false };
+                Evidence.Save(Path.Combine(directory, "case.json"), skipped);
+                File.AppendAllText(Path.Combine(root, "cases.jsonl"), JsonSerializer.Serialize(skipped) + "\n");
+                continue;
+            }
+            var imports = Path.Combine(directory, "imports"); Directory.CreateDirectory(imports);
+            var data = Path.Combine(directory, "profile"); var other = Path.Combine(directory, "other-profile");
+            var policy = Path.Combine(directory, "policy.json");
+            Evidence.Save(policy, new { scopeOwner = "test-owner", scopes = new[] { "devices.read", "scripts.import", "jobs.start", "jobs.read", "jobs.cancel" }, authorizedSerials = new[] { "DEMO-001", "DEMO-002" } });
+            var arguments = new List<string> { "--demo", "--data-dir", data, "--policy", policy, "--import-root", imports };
+            var malformed = name is "oversize-no-newline" or "partial-frame-eof" or "string-rpc-id-over-1024-utf8";
+            switch (name)
+            {
+                case "missing-demo": arguments.RemoveAt(0); break;
+                case "real": arguments[0] = "--real"; break;
+                case "duplicate-demo": arguments.Add("--demo"); break;
+                case "duplicate-data": arguments.AddRange(["--data-dir", other]); break;
+                case "unknown": arguments.Add("--unknown"); break;
+                case "missing-value": arguments.Add("--policy"); break;
+                case "bad-policy-json": File.WriteAllText(policy, "{\"scopeOwner\":"); break;
+                case "bad-policy-field": File.WriteAllText(policy, "{\"scopeOwner\":\"test-owner\",\"scopes\":[],\"authorizedSerials\":[],\"unexpected\":true}"); break;
+                case "existing-data": Directory.CreateDirectory(data); File.WriteAllText(Path.Combine(data, "sentinel.txt"), "owned fixture must stay unchanged"); break;
+            }
+            var policyHash = Evidence.Hash(policy); var serverHash = Evidence.Hash(server);
+            var sentinel = name == "existing-data" ? Evidence.Hash(Path.Combine(data, "sentinel.txt")) : null;
+            var payload = name == "oversize-no-newline" ? Enumerable.Repeat((byte)'x', 1024 * 1024 + 1).ToArray()
+                : name == "partial-frame-eof" ? Encoding.UTF8.GetBytes("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":")
+                : name == "string-rpc-id-over-1024-utf8" ? Encoding.UTF8.GetBytes("{\"jsonrpc\":\"2.0\",\"id\":\"" + new string('x', 1025) + "\",\"method\":\"tools/list\",\"params\":{}}\n") : [];
+            Exception? failure = null; object? processResult = null;
+            try
+            {
+                var result = await Child(directory, dotnet, server, arguments, payload); processResult = result;
+                if (result.Killed || !result.Exited || result.PendingStreams != 0 || result.Errors.Count != 0)
+                    UnresolvedOwnership = "Raw owned child was killed, nonterminal, or had cleanup errors; no further raw or normal processes may start. " + name;
+                Evidence.Check(result.Exited && result.ExitCode != 0 && !result.Killed && result.PendingStreams == 0 && result.Errors.Count == 0, "Raw rejection did not terminate naturally with drained streams.");
+                Evidence.Check(new FileInfo(Path.Combine(directory, "stderr.bin")).Length > 0, "Rejected startup/partial transport omitted stderr diagnostics.");
+                if (!malformed) Evidence.Check(new FileInfo(Path.Combine(directory, "stdout.bin")).Length == 0, "Rejected startup polluted stdout.");
+                else foreach (var line in File.ReadLines(Path.Combine(directory, "stdout.bin")).Where(line => !string.IsNullOrWhiteSpace(line)))
+                    using (var message = JsonDocument.Parse(line)) Evidence.Check(message.RootElement.GetProperty("jsonrpc").GetString() == "2.0", "Malformed-input response polluted stdout with non-protocol text.");
+                Evidence.Check(Evidence.Hash(server) == serverHash && Evidence.Hash(policy) == policyHash && Directory.GetFileSystemEntries(imports).Length == 0, "Raw negative modified a protected input.");
+                if (malformed)
+                {
+                    using var document = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(data, "mcp-lifecycle.json"))); var life = document.RootElement;
+                    Evidence.Check(life.GetProperty("inputFailure").ValueKind != JsonValueKind.Null && life.GetProperty("ownedJobs").GetArrayLength() == 0 && life.GetProperty("handlerDrained").GetBoolean()
+                        && life.GetProperty("runtimeDisposed").GetBoolean() && life.GetProperty("pendingProtocolCredits").GetInt32() == 0 && !life.GetProperty("cleanExit").GetBoolean(), "Malformed input lacks actual input-failure/zero-job/drain evidence.");
+                    foreach (var field in new[] { "inputIoTerminal", "outputIoTerminal", "ownedJobsTerminal" }) Evidence.Check(life.GetProperty(field).GetBoolean(), "Malformed input retained nonterminal owned work: " + field);
+                    Evidence.Check(result.InputAcceptedBytes >= (name == "oversize-no-newline" ? 1024 * 1024 : payload.Length), "Malformed fixture did not send the required boundary bytes.");
+                    if (name == "oversize-no-newline") Evidence.Check(File.ReadAllText(Path.Combine(directory, "stderr.bin")).Contains("Stdio request exceeds 1048576 bytes before SDK deserialization", StringComparison.Ordinal), "Oversize negative did not reach the actual pre-SDK byte boundary guard.");
+                    if (name == "partial-frame-eof") Evidence.Check(File.ReadAllText(Path.Combine(directory, "stderr.bin")).Contains("Incomplete final stdio message", StringComparison.Ordinal), "Partial-frame negative did not reach the actual incomplete-EOF guard.");
+                    if (name == "string-rpc-id-over-1024-utf8") Evidence.Check(File.ReadAllText(Path.Combine(directory, "stderr.bin")).Contains("JSON-RPC string id exceeds 1024 UTF-8 bytes", StringComparison.Ordinal), "Long-id negative did not reach the actual 1024-byte boundary guard.");
+                }
+                else if (sentinel is null) Evidence.Check(!Directory.Exists(data) && !File.Exists(data) && !Directory.Exists(other) && !File.Exists(other), "Rejected arguments created the target runtime directory.");
+                else Evidence.Check(Directory.GetFileSystemEntries(data).Length == 1 && Evidence.Hash(Path.Combine(data, "sentinel.txt")) == sentinel, "Rejected existing profile mutated its sentinel or added runtime files.");
+            }
+            catch (Exception error)
+            {
+                failure = error; failures.Add(error);
+                if (processResult is null) UnresolvedOwnership = "Raw child did not return ownership evidence; no further raw or normal processes may start. " + name + ": " + error;
+            }
+            var report = new { caseId = name, status = failure is null ? "PASS-OFFLINE" : failure is ProductFailure ? "PRODUCT-FAIL" : "FIXTURE-FAIL", failure = failure?.ToString(), arguments,
+                malformedTransportOnly = malformed, payloadBytes = payload.Length, payloadSha256 = Convert.ToHexString(SHA256.HashData(payload)), process = processResult };
+            Evidence.Save(Path.Combine(directory, "case.json"), report);
+            File.AppendAllText(Path.Combine(root, "cases.jsonl"), JsonSerializer.Serialize(report) + "\n");
+        }
+        if (failures.Count > 0) throw new AggregateException("Raw startup/transport rejection subcases failed; originals retained.", failures);
+    }
+    private sealed record ChildResult(int Pid, long Birth, int? ExitCode, bool Exited, bool Killed, int PendingStreams, long InputAcceptedBytes, string? InputWriteFailure, double ElapsedMs, IReadOnlyList<string> Errors, IReadOnlyList<object> Raw, string? ExitTaskStatus, string[] StreamStatuses, bool ResourcesDisposed);
+    private static async Task<ChildResult> Child(string directory, string dotnet, string server, IReadOnlyList<string> arguments, byte[] input)
+    {
+        var start = new ProcessStartInfo(dotnet) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = directory };
+        start.Environment.Clear();
+        foreach (var key in new[] { "SystemRoot", "SystemDrive", "TEMP", "TMP", "PATH", "PATHEXT" }) if (Environment.GetEnvironmentVariable(key) is { } value) start.Environment[key] = value;
+        start.Environment["PATH"] = Path.GetDirectoryName(dotnet) + Path.PathSeparator + Environment.SystemDirectory;
+        start.Environment["DOTNET_ROOT"] = Path.GetDirectoryName(dotnet); start.Environment["DOTNET_NOLOGO"] = "1";
+        start.ArgumentList.Add(server); foreach (var value in arguments) start.ArgumentList.Add(value);
+        await File.WriteAllBytesAsync(Path.Combine(directory, "stdin.bin"), input);
+        var stdout = new FileStream(Path.Combine(directory, "stdout.bin"), FileMode.CreateNew, FileAccess.Write, FileShare.Read, 81920, true);
+        var stderr = new FileStream(Path.Combine(directory, "stderr.bin"), FileMode.CreateNew, FileAccess.Write, FileShare.Read, 81920, true);
+        var process = new Process { StartInfo = start }; var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var clock = Stopwatch.StartNew(); var errors = new List<string>(); var pumps = new List<Task>();
+        Task? exit = null; var resourcesDisposed = false;
+        var pid = 0; long birth = 0, accepted = 0; int? exitCode = null; var killed = false; var exited = false; string? inputWriteFailure = null;
+        try
+        {
+            if (!process.Start()) throw new IOException("Raw negative child did not start.");
+            _ = process.SafeHandle; pid = process.Id; birth = process.StartTime.ToUniversalTime().Ticks;
+            pumps.Add(process.StandardOutput.BaseStream.CopyToAsync(stdout)); pumps.Add(process.StandardError.BaseStream.CopyToAsync(stderr));
+            var send = Send(); pumps.Add(send);
+            exit = process.WaitForExitAsync();
+            await exit.WaitAsync(deadline.Token); exited = process.HasExited; exitCode = process.ExitCode;
+            await Task.WhenAll(pumps).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch (Exception error)
+        {
+            errors.Add(error.ToString());
+            if (pid != 0)
+            {
+                try { if (!process.HasExited) { killed = true; process.Kill(false); } exit ??= process.WaitForExitAsync(); await exit.WaitAsync(TimeSpan.FromSeconds(5)); exited = process.HasExited; exitCode = process.ExitCode; }
+                catch (Exception cleanup) { errors.Add("Process cleanup: " + cleanup); }
+            }
+        }
+        finally
+        {
+            deadline.Cancel();
+            try { await Task.WhenAll(pumps).WaitAsync(TimeSpan.FromSeconds(10)); } catch (Exception error) { errors.Add("Stream drain: " + error); }
+            var terminal = pumps.All(task => task.IsCompleted) && (pid == 0 || (exited && exit?.IsCompleted == true));
+            if (terminal)
+            {
+                try { await stdout.FlushAsync(); await stderr.FlushAsync(); stdout.Dispose(); stderr.Dispose(); deadline.Dispose(); process.Dispose(); resourcesDisposed = true; }
+                catch (Exception error) { errors.Add("Terminal resource disposal: " + error); }
+            }
+            else
+            {
+                errors.Add("Original raw child task/pumps remain nonterminal; owned resources retained, not disposed.");
+                retainedOwnership = new { process, deadline, stdout, stderr, pumps, exit };
+            }
+        }
+        var raw = new List<object>();
+        foreach (var name in new[] { "stdin.bin", "stdout.bin", "stderr.bin" })
+        {
+            try
+            {
+                using var stream = new FileStream(Path.Combine(directory, name), FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                raw.Add(new { name, bytes = stream.Length, sha256 = Convert.ToHexString(SHA256.HashData(stream)) });
+            }
+            catch (Exception error) { errors.Add("Raw stream hash: " + error); }
+        }
+        GC.KeepAlive(retainedOwnership);
+        return new(pid, birth, exitCode, exited, killed, pumps.Count(task => !task.IsCompleted), accepted, inputWriteFailure, clock.Elapsed.TotalMilliseconds, errors, raw, exit?.Status.ToString(), pumps.Select(task => task.Status.ToString()).ToArray(), resourcesDisposed);
+        async Task Send()
+        {
+            try
+            {
+                for (var offset = 0; offset < input.Length; offset += 8192)
+                {
+                    var count = Math.Min(8192, input.Length - offset);
+                    await process.StandardInput.BaseStream.WriteAsync(input.AsMemory(offset, count), deadline.Token); accepted += count;
+                }
+                await process.StandardInput.BaseStream.FlushAsync(deadline.Token);
+            }
+            catch (IOException error) { inputWriteFailure = error.ToString(); }
+            finally { process.StandardInput.Close(); }
+        }
+    }
+}
+
+```
+
+## tests/MatrixDevice.Mcp.Tests/StdioSession.cs
+
+```csharp
+using System.Diagnostics;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Json.Schema;
+using ModelContextProtocol;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+
+namespace MatrixDevice.Mcp.Tests;
+
+internal sealed class ProductFailure(string message) : Exception(message);
+internal sealed class SessionPreconditionFailure(string message, Exception inner) : Exception(message, inner);
+internal sealed class SessionNotRun(string message) : Exception(message);
+
+internal static class Evidence
+{
+    internal static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
+    internal static void Check(bool condition, string message) { if (!condition) throw new ProductFailure(message); }
+    internal static JsonElement Json(object? value) => JsonSerializer.SerializeToElement(value);
+    internal static JsonElement ProtocolJson<T>(T value) => JsonSerializer.SerializeToElement(value, McpJsonUtilities.DefaultOptions.GetTypeInfo<T>());
+    internal static string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+    internal static void Save(string path, object value) => File.WriteAllText(path, JsonSerializer.Serialize(value, Options));
+    internal static IEnumerable<string> SnapshotLines(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var remaining = stream.Length;
+        using var line = new MemoryStream();
+        var buffer = new byte[8192];
+        while (remaining > 0)
+        {
+            var count = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+            if (count == 0) break;
+            remaining -= count;
+            for (var index = 0; index < count; index++)
+            {
+                if (buffer[index] != (byte)'\n') { line.WriteByte(buffer[index]); continue; }
+                yield return new System.Text.UTF8Encoding(false, true).GetString(line.GetBuffer(), 0, checked((int)line.Length)).TrimEnd('\r');
+                line.SetLength(0);
+            }
+        }
+    }
+}
+
+internal static class Arguments
+{
+    internal static Dictionary<string, string> Parse(string[] args, string[] names)
+    {
+        if (args.Length != names.Length * 2) throw new ArgumentException("Every required option must occur exactly once with a value.");
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (var index = 0; index < args.Length; index += 2)
+            if (!names.Contains(args[index], StringComparer.Ordinal) || args[index + 1].StartsWith("--", StringComparison.Ordinal) || !result.TryAdd(args[index], args[index + 1]))
+                throw new ArgumentException("Unknown, duplicate or missing option: " + args[index]);
+        return result;
+    }
+    internal static string Absolute(string path, bool directory)
+    {
+        if (!Path.IsPathFullyQualified(path) || Path.GetFullPath(path) != path || (directory ? !Directory.Exists(path) : !File.Exists(path)))
+            throw new ArgumentException("Expected an existing canonical absolute path: " + path);
+        return path;
+    }
+}
+
+internal sealed class Schemas
+{
+    private readonly JsonObject contract = Load("ContractSchema.json");
+    private readonly JsonObject protocol = Load("ProtocolSchema.json");
+    internal static readonly string[] Names = ["matrix.capabilities", "matrix.devices.list", "matrix.scripts.import", "matrix.jobs.start", "matrix.jobs.get", "matrix.jobs.cancel"];
+    private static readonly string[] Definitions = ["Capabilities", "DevicesList", "ScriptImport", "JobStart", "JobGet", "JobCancel"];
+    internal void Protocol(string definition, JsonElement value) => Validate(Root(protocol, definition), value, "MCP wire " + definition);
+    internal void Contract(string tool, bool output, JsonElement value)
+        => Validate(Root(contract, Definitions[Array.IndexOf(Names, tool)] + (output ? "Output" : "Input")), value, tool + (output ? " output" : " input"));
+    internal static void Validate(JsonElement schema, JsonElement value, string label)
+    {
+        RejectExternalReferences(schema);
+        var compiled = JsonSchema.Build(schema);
+        var result = compiled.Evaluate(value, new EvaluationOptions { RequireFormatValidation = true });
+        Evidence.Check(result.IsValid, "Schema rejected " + label + ": " + JsonSerializer.Serialize(result));
+    }
+    internal static bool Rejects(JsonElement schema, JsonElement value)
+    {
+        RejectExternalReferences(schema);
+        return !JsonSchema.Build(schema).Evaluate(value, new EvaluationOptions { RequireFormatValidation = true }).IsValid;
+    }
+    private static JsonElement Root(JsonObject bundle, string name) => Evidence.Json(new JsonObject
+    {
+        ["$schema"] = "https://json-schema.org/draft/2020-12/schema", ["type"] = "object",
+        ["$ref"] = "#/$defs/" + name, ["$defs"] = bundle["$defs"]!.DeepClone()
+    });
+    private static JsonObject Load(string name)
+    {
+        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("MatrixDevice.Mcp.Tests." + name) ?? throw new InvalidOperationException("Missing embedded schema " + name);
+        return JsonNode.Parse(stream)!.AsObject();
+    }
+    private static void RejectExternalReferences(JsonElement node)
+    {
+        if (node.ValueKind == JsonValueKind.Object)
+            foreach (var field in node.EnumerateObject())
+            {
+                if (field.Name == "$ref") Evidence.Check(field.Value.GetString()!.StartsWith("#", StringComparison.Ordinal), "External schema resolution is forbidden.");
+                RejectExternalReferences(field.Value);
+            }
+        else if (node.ValueKind == JsonValueKind.Array) foreach (var item in node.EnumerateArray()) RejectExternalReferences(item);
+    }
+}
+
+internal sealed class StdioSession : IAsyncDisposable
+{
+    private readonly Schemas schemas;
+    private readonly string directory;
+    private readonly OwnedStdioProcess owned;
+    private readonly List<Task> pending = [];
+    private readonly List<string> cleanupErrors = [];
+    private readonly List<Tool> tools = [];
+    private readonly HashSet<string> acceptedJobs = new(StringComparer.Ordinal);
+    private readonly HashSet<string> shutdownJobs = new(StringComparer.Ordinal);
+    private static readonly List<StdioSession> retained = [];
+    private long lastCall;
+    private bool expectedRpcIdRejection;
+    private bool closing;
+    private Task? sdkDisposeTask;
+    private Task<ClientCompletionDetails>? sdkCompletionTask;
+    private readonly SemaphoreSlim pace = new(1, 1);
+    internal required McpClient Client { get; init; }
+    internal string Epoch { get; private set; } = "";
+    internal string ImportRoot { get; }
+    internal string DataDirectory { get; }
+    internal JsonElement Devices { get; private set; }
+    internal string EvidenceDirectory => directory;
+    private StdioSession(string directory, Schemas schemas, OwnedStdioProcess owned)
+    {
+        this.directory = directory; this.schemas = schemas; this.owned = owned;
+        ImportRoot = Path.Combine(directory, "imports"); DataDirectory = Path.Combine(directory, "data");
+    }
+    internal static async Task<StdioSession> Open(string root, string label, string dotnet, string server, Schemas schemas,
+        string[]? scopes = null, string[]? serials = null, string protocol = "2025-11-25")
+    {
+        var directory = Path.Combine(root, label); Directory.CreateDirectory(directory);
+        var imports = Path.Combine(directory, "imports"); Directory.CreateDirectory(imports);
+        var policy = Path.Combine(directory, "policy.json");
+        Evidence.Save(policy, new { scopeOwner = "test-owner", scopes = scopes ?? new[] { "devices.read", "scripts.import", "jobs.start", "jobs.read", "jobs.cancel" }, authorizedSerials = serials ?? new[] { "DEMO-001", "DEMO-002" } });
+        var owned = new OwnedStdioProcess(directory, dotnet, server, policy, imports);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        McpClient client; Task<McpClient>? creation = null;
+        try
+        {
+            owned.Start(); owned.SaveStart();
+            creation = McpClient.CreateAsync(owned.Transport, new McpClientOptions { ProtocolVersion = protocol, InitializationTimeout = TimeSpan.FromSeconds(20), ClientInfo = new() { Name = "matrix-independent-stdio-tests", Version = "1" } }, cancellationToken: deadline.Token);
+            client = await creation;
+        }
+        catch (Exception error)
+        {
+            Exception? transportError = error;
+            while (transportError is not null && transportError is not ClientTransportClosedException) transportError = transportError.InnerException;
+            var details = (transportError as ClientTransportClosedException)?.Details;
+            JsonElement? processEnd = null;
+            var evidenceErrors = new List<string>();
+            try { await owned.FinishPipesAsync(callsTerminal: true); processEnd = owned.SaveEnd(sdkTerminal: creation is null || (creation.IsCompleted && owned.OutputEofObserved), callsTerminal: true); }
+            catch (Exception cleanup) { evidenceErrors.Add("Owned process cleanup: " + cleanup); }
+            var raw = new List<object>();
+            var metadata = new Dictionary<string, JsonElement>();
+            foreach (var name in new[] { "stdin.bin", "stdout.bin", "stderr.bin", "server-start.json", "owned-process.json" })
+            {
+                var path = Path.Combine(directory, name);
+                try
+                {
+                    if (!File.Exists(path)) { raw.Add(new { name, exists = false }); continue; }
+                    using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    raw.Add(new { name, exists = true, snapshotBytes = stream.Length, sha256 = Convert.ToHexString(SHA256.HashData(stream)), terminalProven = false });
+                    if (name is "server-start.json" or "owned-process.json")
+                    {
+                        stream.Position = 0;
+                        using var document = JsonDocument.Parse(stream); metadata[name] = document.RootElement.Clone();
+                    }
+                }
+                catch (Exception evidenceError) { evidenceErrors.Add(name + ": " + evidenceError); }
+            }
+            Exception primary = error;
+            try
+            {
+                Evidence.Save(Path.Combine(directory, "initialization-failure.json"), new
+                {
+                    error = error.ToString(), creationStatus = creation?.Status.ToString(), creationTerminal = creation?.IsCompleted,
+                    sdkCleanupOwner = true, secondSdkOwnerCleanupAttempted = false, actualProcessOwner = "test owned process",
+                    completionDetailsType = details?.GetType().FullName, sdkCompletionError = details?.Exception?.ToString(),
+                    processEnd, raw, metadata, evidenceErrors
+                });
+            }
+            catch (Exception evidenceError) { primary = new AggregateException("Initialization and evidence preservation failed.", error, evidenceError); }
+            throw new SessionPreconditionFailure("Official session initialization failed; subsequent normal sessions must not repeat this common precondition.", primary);
+        }
+        var session = new StdioSession(directory, schemas, owned) { Client = client };
+        try
+        {
+            Evidence.Check(client.NegotiatedProtocolVersion == protocol, "Negotiated protocol was not pinned.");
+            var listed = await client.ListToolsAsync(new ListToolsRequestParams(), deadline.Token);
+            schemas.Protocol("ListToolsResult", Evidence.ProtocolJson(listed));
+            var wireList = session.WireResults("tools/list").Single(); session.ValidateToolList(wireList);
+            Evidence.Check(listed.Tools.Select(tool => tool.Name).SequenceEqual(Schemas.Names), "Six tool names/order differs from the approved contract.");
+            foreach (var tool in listed.Tools)
+            {
+                schemas.Protocol("Tool", Evidence.ProtocolJson(tool));
+                Evidence.Check(tool.InputSchema.GetProperty("type").GetString() == "object" && tool.OutputSchema is { } output && output.GetProperty("type").GetString() == "object", "Tool schema root must explicitly be object: " + tool.Name);
+                Evidence.Check(Schemas.Rejects(tool.InputSchema, Evidence.Json(new { unexpected = 1 })) && Schemas.Rejects(tool.OutputSchema!.Value, Evidence.Json(new { ok = true })), "Actual schema failed to reject incomplete/extra-field instances: " + tool.Name);
+                session.tools.Add(tool);
+            }
+            Evidence.Save(Path.Combine(directory, "tools-list.json"), wireList);
+            var capabilities = await session.Call("matrix.capabilities", new { });
+            session.Epoch = capabilities.GetProperty("serverEpoch").GetString()!;
+            session.Devices = await session.Call("matrix.devices.list", new { });
+            return session;
+        }
+        catch (Exception primary)
+        {
+            try { await session.DisposeAsync(); }
+            catch (Exception cleanup) { throw new SessionPreconditionFailure("Common session precondition and cleanup failed.", new AggregateException(primary, cleanup)); }
+            throw new SessionPreconditionFailure("Common tools-list/schema/capabilities/devices precondition failed.", primary);
+        }
+    }
+    internal JsonElement Identity(string serial) => Devices.GetProperty("devices").EnumerateArray().Single(row => row.GetProperty("target").GetProperty("serial").GetString() == serial).GetProperty("target").Clone();
+    internal T Track<T>(Func<T> create) where T : Task
+    {
+        lock (pending)
+        {
+            if (closing) throw new InvalidOperationException("Owned session is closing; no new calls are accepted.");
+            var task = create(); pending.Add(task); return task;
+        }
+    }
+    internal async Task<JsonElement> Call(string name, object arguments, string? error = null, bool validInput = true, bool paced = true)
+    {
+        if (paced)
+        {
+            await pace.WaitAsync();
+            try
+            {
+                var remaining = 120 - Stopwatch.GetElapsedTime(lastCall).TotalMilliseconds;
+                if (remaining > 0) await Task.Delay(TimeSpan.FromMilliseconds(remaining));
+                lastCall = Stopwatch.GetTimestamp();
+            }
+            finally { pace.Release(); }
+        }
+        var input = arguments is JsonElement element ? element : Evidence.Json(arguments);
+        if (validInput) { schemas.Contract(name, false, input); Schemas.Validate(tools.Single(tool => tool.Name == name).InputSchema, input, name + " actual input"); }
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var task = Track(() => Client.CallToolAsync(new CallToolRequestParams { Name = name, Arguments = input.EnumerateObject().ToDictionary(field => field.Name, field => field.Value.Clone()) }, deadline.Token).AsTask());
+        var response = await task;
+        schemas.Protocol("CallToolResult", Evidence.ProtocolJson(response));
+        Evidence.Check(response.StructuredContent is not null, "Missing structuredContent: " + name);
+        var body = response.StructuredContent!.Value.Clone();
+        var text = response.Content.OfType<TextContentBlock>().Single().Text;
+        Evidence.Check(JsonElement.DeepEquals(body, JsonDocument.Parse(text).RootElement), "Text and structured content differ.");
+        schemas.Contract(name, true, body);
+        Schemas.Validate(tools.Single(tool => tool.Name == name).OutputSchema!.Value, body, name + " actual output");
+        Evidence.Check(response.IsError == (error is not null) && body.GetProperty("ok").GetBoolean() == (error is null), "isError/ok disagrees with expected outcome: " + name);
+        if (error is not null) Evidence.Check(body.GetProperty("error").GetProperty("code").GetString() == error, "Wrong business error: " + body);
+        if (name == "matrix.jobs.start" && error is null) lock (acceptedJobs) acceptedJobs.Add(body.GetProperty("jobId").GetString()!);
+        lock (pending) File.AppendAllText(Path.Combine(directory, "calls.jsonl"), JsonSerializer.Serialize(new { name, input, expectedError = error, response, bodyBytes = System.Text.Encoding.UTF8.GetByteCount(body.GetRawText()) }) + "\n");
+        Evidence.Check(System.Text.Encoding.UTF8.GetByteCount(body.GetRawText()) <= 65536, "Business response exceeded 64KiB.");
+        return body;
+    }
+    internal async Task<JsonElement> RawCall(string name, string arguments, string? rpcId = null)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var doc = JsonDocument.Parse("{\"name\":" + JsonSerializer.Serialize(name) + ",\"arguments\":" + arguments + "}");
+        var task = Track(() => Client.SendRequestAsync<JsonElement, JsonElement>("tools/call", doc.RootElement.Clone(), requestId: rpcId is null ? default : new RequestId(rpcId), cancellationToken: deadline.Token).AsTask());
+        var reply = await task;
+        schemas.Protocol("CallToolResult", reply);
+        var body = reply.GetProperty("structuredContent"); schemas.Contract(name, true, body);
+        Schemas.Validate(tools.Single(tool => tool.Name == name).OutputSchema!.Value, body, name + " raw actual output");
+        Evidence.Check(JsonElement.DeepEquals(body, JsonDocument.Parse(reply.GetProperty("content")[0].GetProperty("text").GetString()!).RootElement), "Raw negative structured/text content differs.");
+        return reply;
+    }
+    internal void ExpectShutdown(string jobId) => shutdownJobs.Add(jobId);
+    internal void ExpectRpcIdRejection() => expectedRpcIdRejection = true;
+    internal async Task<JsonElement> Terminal(string jobId, string? expected = "Completed")
+    {
+        var clock = Stopwatch.StartNew();
+        while (clock.Elapsed < TimeSpan.FromSeconds(12))
+        {
+            var reply = await Call("matrix.jobs.get", new { serverEpoch = Epoch, jobId, logLimit = 100 });
+            if (reply.GetProperty("job").GetProperty("state").GetString() is "Completed" or "Failed" or "Cancelled")
+            {
+                if (expected is not null) Evidence.Check(reply.GetProperty("job").GetProperty("state").GetString() == expected, "Unexpected actual terminal state: " + reply);
+                return reply;
+            }
+        }
+        throw new ProductFailure("Job did not reach a terminal state in 12s.");
+    }
+    public async ValueTask DisposeAsync()
+    {
+        Task[] originalCalls;
+        lock (pending) { closing = true; originalCalls = pending.ToArray(); }
+        try { await Task.WhenAll(originalCalls).WaitAsync(TimeSpan.FromSeconds(10)); }
+        catch (Exception error) { if (originalCalls.Any(task => !task.IsCompleted)) cleanupErrors.Add("Pending requests: " + error); }
+        var callsTerminal = originalCalls.All(task => task.IsCompleted);
+        try { await owned.FinishPipesAsync(callsTerminal); }
+        catch (Exception error) { cleanupErrors.Add("Owned pipe/process shutdown: " + error); }
+        ClientCompletionDetails? completion = null;
+        if (callsTerminal && owned.IoTerminal && owned.ProcessTerminal)
+        {
+            try { sdkDisposeTask = Client.DisposeAsync().AsTask(); await sdkDisposeTask.WaitAsync(TimeSpan.FromSeconds(55)); }
+            catch (Exception error) { cleanupErrors.Add("SDK disposal: " + error); }
+            try { sdkCompletionTask = Client.Completion; completion = await sdkCompletionTask.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (Exception error) { cleanupErrors.Add("SDK completion: " + error); }
+        }
+        else cleanupErrors.Add("SDK disposal not attempted while original calls/process/pipe I/O remain nonterminal.");
+        var sdkTerminal = sdkDisposeTask?.IsCompleted == true && sdkCompletionTask?.IsCompleted == true;
+        if (!callsTerminal || !sdkTerminal || !owned.IoTerminal || !owned.ProcessTerminal) lock (retained) retained.Add(this);
+        JsonElement? processEnd = null, lifecycle = null;
+        try
+        {
+            processEnd = this.owned.SaveEnd(sdkTerminal, callsTerminal);
+            if (!expectedRpcIdRejection) Evidence.Check(processEnd.Value.GetProperty("exited").GetBoolean() && processEnd.Value.GetProperty("exitCode").GetInt32() == 0 && processEnd.Value.GetProperty("stdinClosed").GetBoolean()
+                && processEnd.Value.GetProperty("stdoutEof").GetBoolean() && !processEnd.Value.GetProperty("killed").GetBoolean() && processEnd.Value.GetProperty("pendingPumps").GetInt32() == 0
+                && processEnd.Value.GetProperty("errors").GetArrayLength() == 0 && processEnd.Value.GetProperty("ownedResourcesDisposed").GetBoolean(), "Original owned server/pipes did not drain naturally.");
+            lifecycle = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(DataDirectory, "mcp-lifecycle.json"))).RootElement.Clone();
+            var life = lifecycle.Value;
+            if (!expectedRpcIdRejection) Evidence.Check(life.GetProperty("version").GetInt32() == 1 && life.GetProperty("serverEpoch").GetString() == Epoch && life.GetProperty("processId").GetInt32() == processEnd.Value.GetProperty("pid").GetInt32()
+                && life.GetProperty("mode").GetString() == "demo" && life.GetProperty("stdinEof").GetBoolean() && life.GetProperty("handlerDrained").GetBoolean() && life.GetProperty("runtimeDisposed").GetBoolean()
+                && life.GetProperty("cleanExit").GetBoolean() && life.GetProperty("pendingProtocolCredits").GetInt32() == 0, "Server's actual EOF/ownership report does not prove natural drain.");
+            if (!expectedRpcIdRejection) foreach (var field in new[] { "inputFailure", "outputFailure", "protocolFailure", "failure" }) Evidence.Check(life.GetProperty(field).ValueKind == JsonValueKind.Null, "Server lifecycle failure: " + field);
+            Evidence.Check(life.GetProperty("stagingCleanupFailures").GetInt32() == 0, "Server retained a staging cleanup failure.");
+            foreach (var field in new[] { "inputIoTerminal", "outputIoTerminal", "ownedJobsTerminal" }) Evidence.Check(life.GetProperty(field).GetBoolean(), "Server retained nonterminal owned I/O or jobs: " + field);
+            if (expectedRpcIdRejection)
+            {
+                Evidence.Check(processEnd.Value.GetProperty("exited").GetBoolean() && processEnd.Value.GetProperty("exitCode").GetInt32() != 0 && !processEnd.Value.GetProperty("killed").GetBoolean()
+                    && processEnd.Value.GetProperty("stdoutEof").GetBoolean() && processEnd.Value.GetProperty("pendingPumps").GetInt32() == 0 && processEnd.Value.GetProperty("errors").GetArrayLength() == 0
+                    && processEnd.Value.GetProperty("ownedResourcesDisposed").GetBoolean(), "Expected RPC-id fault did not drain the owned server naturally.");
+                Evidence.Check(life.GetProperty("version").GetInt32() == 1 && life.GetProperty("serverEpoch").GetString() == Epoch && life.GetProperty("processId").GetInt32() == processEnd.Value.GetProperty("pid").GetInt32()
+                    && life.GetProperty("mode").GetString() == "demo" && life.GetProperty("handlerDrained").GetBoolean() && life.GetProperty("runtimeDisposed").GetBoolean()
+                    && !life.GetProperty("cleanExit").GetBoolean() && life.GetProperty("pendingProtocolCredits").GetInt32() == 0 && life.GetProperty("outputFailure").ValueKind == JsonValueKind.Null
+                    && (life.GetProperty("inputFailure").ValueKind != JsonValueKind.Null || life.GetProperty("protocolFailure").ValueKind != JsonValueKind.Null), "RPC-id rejection lacks actual fault/owned drain evidence.");
+                Evidence.Check(completion is not null && sdkTerminal, "Expected RPC-id fault has no terminal SDK stream session.");
+            }
+            var owned = life.GetProperty("ownedJobs").EnumerateArray().ToArray();
+            Evidence.Check(acceptedJobs.SetEquals(owned.Select(job => job.GetProperty("jobId").GetString()!)), "Lifecycle has missing or unobserved accepted jobs.");
+            foreach (var job in owned)
+            {
+                Evidence.Check(job.GetProperty("terminal").GetBoolean() && job.GetProperty("state").GetString() is "Completed" or "Cancelled" or "Failed", "Accepted job did not drain to a real terminal state.");
+                if (shutdownJobs.Contains(job.GetProperty("jobId").GetString()!)) Evidence.Check(job.GetProperty("state").GetString() == "Cancelled" && job.GetProperty("terminalReason").GetString() == "shutdown", "EOF did not cancel the accepted active job.");
+            }
+            if (!expectedRpcIdRejection) Evidence.Check(completion is { Exception: null } && sdkTerminal, "SDK stream session did not complete cleanly.");
+            ValidateRaw();
+        }
+        catch (Exception error) { cleanupErrors.Add("Evidence/lifecycle: " + error); }
+        Evidence.Save(Path.Combine(directory, "session-end.json"), new { completionType = completion?.GetType().FullName, sdkCompletionError = completion?.Exception?.ToString(),
+            processEnd, lifecycle, expectedRpcIdRejection, sdkDisposePending = sdkDisposeTask is { IsCompleted: false }, sdkDisposeStatus = sdkDisposeTask?.Status.ToString(),
+            sdkCompletionPending = sdkCompletionTask is { IsCompleted: false }, sdkCompletionStatus = sdkCompletionTask?.Status.ToString(), pendingRequests = pending.Count(task => !task.IsCompleted), cleanupErrors });
+        if (callsTerminal && sdkTerminal) pace.Dispose();
+        if (cleanupErrors.Count != 0) throw new AggregateException("CLEANUP-FAIL", cleanupErrors.Select(message => new InvalidOperationException(message)));
+    }
+    private void ValidateRaw()
+    {
+        var handshake = false;
+        var requests = Evidence.SnapshotLines(Path.Combine(directory, "stdin.bin")).Where(line => !string.IsNullOrWhiteSpace(line)).Select(line =>
+        {
+            using var document = JsonDocument.Parse(line); return document.RootElement.Clone();
+        }).ToArray();
+        foreach (var line in File.ReadLines(Path.Combine(directory, "stdout.bin")).Where(line => !string.IsNullOrWhiteSpace(line)))
+        {
+            Evidence.Check(System.Text.Encoding.UTF8.GetByteCount(line) <= 1024 * 1024, "Wire response exceeded 1MiB.");
+            using var message = JsonDocument.Parse(line);
+            Evidence.Check(message.RootElement.GetProperty("jsonrpc").GetString() == "2.0", "Non-protocol stdout pollution.");
+            if (message.RootElement.TryGetProperty("result", out var result) && result.ValueKind == JsonValueKind.Object && result.TryGetProperty("protocolVersion", out var version)) handshake |= version.GetString() == "2025-11-25";
+            if (!message.RootElement.TryGetProperty("result", out result) || !message.RootElement.TryGetProperty("id", out var id)) continue;
+            var request = requests.First(row => row.TryGetProperty("id", out var requestId) && JsonElement.DeepEquals(requestId, id));
+            if (request.GetProperty("method").GetString() == "tools/list") ValidateToolList(result);
+            if (request.GetProperty("method").GetString() == "tools/call") schemas.Protocol("CallToolResult", result);
+        }
+        Evidence.Check(handshake, "Raw initialize result lacks pinned protocol proof.");
+    }
+    private JsonElement[] WireResults(string method)
+    {
+        var requests = Evidence.SnapshotLines(Path.Combine(directory, "stdin.bin")).Select(line =>
+        {
+            using var document = JsonDocument.Parse(line); return document.RootElement.Clone();
+        }).Where(row => row.TryGetProperty("id", out _) && row.GetProperty("method").GetString() == method).ToArray();
+        var results = Evidence.SnapshotLines(Path.Combine(directory, "stdout.bin")).Select(line =>
+        {
+            using var document = JsonDocument.Parse(line); return document.RootElement.Clone();
+        }).Where(row => row.TryGetProperty("id", out var replyId) && requests.Any(request => JsonElement.DeepEquals(request.GetProperty("id"), replyId)))
+            .Select(row => row.GetProperty("result").Clone()).ToArray();
+        Evidence.Check(results.Length > 0, "Actual raw result is absent for the matching stdin request id: " + method);
+        return results;
+    }
+    private void ValidateToolList(JsonElement result)
+    {
+        schemas.Protocol("ListToolsResult", result);
+        foreach (var tool in result.GetProperty("tools").EnumerateArray()) schemas.Protocol("Tool", tool);
+    }
+}
+
+```
+
 ## tests/MatrixDevice.Tests/ApplicationBatchTests.cs
 
 ```csharp
@@ -32614,6 +36732,11 @@ try {
     if ($Verify) {
         & $DotnetPath (Join-Path $projectPath 'tests/MatrixDevice.Tests/bin/Release/net10.0/MatrixDevice.Tests.dll')
         if ($LASTEXITCODE -ne 0) { throw 'Verification failed' }
+        $mcpEvidence = 'artifacts/mcp-stdio-main/verify-' + [Guid]::NewGuid().ToString('N')
+        Write-Output ('MCP_EVIDENCE_RELATIVE=' + $mcpEvidence)
+        & $DotnetPath (Join-Path $projectPath 'tests/MatrixDevice.Mcp.Tests/bin/Release/net10.0/MatrixDevice.Mcp.Tests.dll') --dotnet $DotnetPath --server (Join-Path $projectPath 'src/MatrixDevice.Mcp/bin/Release/net10.0/MatrixDevice.Mcp.dll') --output (Join-Path $projectPath $mcpEvidence)
+        if ($LASTEXITCODE -ne 0) { throw 'MCP Demo verification failed' }
+        Write-Output ('MCP_DEMO_VERIFIED_RELATIVE=' + $mcpEvidence)
     }
 } finally {
     $env:MATRIX_DOTNET_EXE = $oldDotnet
