@@ -108,6 +108,8 @@ API请求全部结束也会唤醒已有应用读取待办，不再依赖手动�
 
 同一离线诊断入口现增加[原位子树记录](docs/codex/apple-experience/AP042_PEER_CACHE_DIAGNOSTICS.md)，不改变原查询、断言或等待。独立与主仓各193项、无窗参数VM4通过，但原页面诊断仍PRODUCT-FAIL；日志确认实际视觉切页后公开子树未更新，不证明唯一根因或产品已修复。该记录不替代真实GUI或模拟器验收。
 
+另有仅供受控测试的 `--probe-workspace-client --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY --nonce 32_HEX_DIGITS --arm client|control --width 390 --height 640` 入口。它先写ready、异步等待严格身份匹配的release，再执行原正文契约；不会自动运行官方客户端或操作模拟器。外部协作协议和[实际双臂结果](docs/codex/apple-experience/AP042_CLIENT_OBSERVATION.md)表明两组均过、时差约102ms，但control也出现自动化状态变化，不能归因显式读取、关闭原失败或称全GUI验收。常规启动路径不变。
+
 新增受限的CMFA实机测试入口，仅供固定摘要、已验证专用实例与新证据目录使用，不限制正式应用页的通用APK选择。独立及主仓158项回归通过；实例1真实共享安装、精确2.11.35.Meta/211035及启动进程成立，但首次权限页挡住主页，原流程如实FAIL。后续另立[本轮owned停止/卸载验证](docs/codex/apple-experience/A07_OWNED_CLEANUP.md)，实际两个包进程停止、安装保留后再卸载，普通及含保留记录查询和列表均缺包，51步骤通过。当前测试安装已移除、原APK保留，未再安装/启动或授权VPN/权限，也未改原FAIL；详见[首轮记录](docs/codex/apple-experience/A07_CMFA_APPLICATIONS.md)。这些是共享后端证据，当前GUI、双实例同步及最终30分钟仍待，默认离线测试不触发实机入口。
 
 安装支持多选APK，确认全部目标与文件后逐项执行；卸载仅针对实际勾选的应用行，确认串号、包名和不可撤销的数据损失，执行前重新检查系统应用，执行后刷新列表核验对应包已移除。底部显示逐项状态、实际任务进度与失败原因；“停止后续”不回滚或中断已经提交的操作。更多菜单保留启动、停止和清数据，清数据仍需确认。确认后目标、运行时、连接代次或transport变化会拒绝执行，不回退到旧设备。

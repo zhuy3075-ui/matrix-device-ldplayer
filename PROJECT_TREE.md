@@ -37,6 +37,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- AP040_APPLICATION_FEEDBACK.md
 |   |   |   |-- AP041_OFFLINE_DIAGNOSTICS.md
 |   |   |   |-- AP041_REPORT_RELIABILITY.md
+|   |   |   |-- AP042_CLIENT_OBSERVATION.md
 |   |   |   |-- AP042_PEER_CACHE_DIAGNOSTICS.md
 |   |   |   |-- AP042_WORKSPACE_ACCESSIBILITY.md
 |   |   |   |-- AP043_SKY_AB.md
@@ -318,6 +319,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- UnifiedDeviceTile.cs
 |   |   |   |-- WallView.cs
 |   |   |   |-- WorkspaceAccessibilitySmoke.cs
+|   |   |   |-- WorkspaceClientObservation.cs
 |   |   |   +-- WorkspaceShell.cs
 |   |   |-- WorkspaceTabControl.cs
 |   |   +-- WorkspaceViewModel.cs

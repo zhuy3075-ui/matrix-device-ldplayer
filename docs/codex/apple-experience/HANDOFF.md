@@ -2,6 +2,15 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
+## 当前执行：官方客户端纯文本对照
+
+- 上一轮为progress：诊断已实际推送`91beac619dd09847263be4a66b1926e7f033e2c5`，远端同值/test49e不变；12路径/337源/340ZIP/171段完整独审。回执`artifacts/workspace-cache-main/push-complete.json` SHA402B94752E6538783EC7ECB23375589680B2C112A8A92D3740ACA51D8824130F，不重复该交付；AP042仍PRODUCT-FAIL。
+- [官方客户端对照](AP042_CLIENT_OBSERVATION.md)两源已冻结：App74AA6AD1...A8487、新fixture5975F73A...E930C7，旧25Smoke/原App链保持。独立预检193/四拒绝/PDB39过，execution17B44B20...13C7A；批准manifest E4F339C4...540D744含46递归文件，Desktop3021DB40...6529217。
+- 真正两臂已执行且所有session7368/21931/4231终态：client43316/0，control18724/0，原AP042均146→71→146、Product全过/旧五任务与9解绑保持；client官方text-only一次读116节点/截图0。实际gate33800.9152/33902.6336ms差101.7184ms，comparison8AAF9F0A...542258C。两组before无Window/tabs peer/listener，after均有Window/tabs和structure listener；control本arm无Sky仍变化，不能归因显式读取或单纯等待。
+- 生命周期单owner一次清理全完成，controlledAbort/closed true，不称normalClose。client summary A9C06543...2532E4、control507CEC3D...8AB6B00，两个execution1E8AEDBD...BCAF5B/3FDE153B...230113、四raw0B，noTimeout/kill/cleanup。Root原件都在artifacts/workspace-client-main；真正启动前一项manifest数组排序拒绝及旧helper已保留，非产品红，不重编译/重跑该失败。
+- 当前已精确集成双源，主仓唯一Build44200 child0/73.093s、193/51.03s，157全文同独立实际/PDB39/155原raw/25Smoke与cfgPNG保持，独审有限接纳。外层session5958实际1：root构建中改非编译spec两段，唯一doc护栏E284→93D4触发正确拒绝；十源码guard没变。原execution903A0CF6...CCC969与HARNESS-DOCUMENT-GUARD-FAIL记录FC4EC4D4...91D0ACC保留，禁止称整wrapper绿或重跑，rootDLL F889C112...00861；重建旧doc另标reconstruction，不冒充原快照。
+- 全必需exec已结束/owned0/锁root，下一门只冻正式文档、完整包及精确index独审后单独推原私有feature，实际Git决定交付，不合并发布。随后A14a2 JobId/逐目标冻结身份/状态/取消，不再追加本项对照。原离线Product失败/AP045输入、全部GUI/实机/最终30分钟仍开放，guest/ADB/账号/权限未触。
+
 ## 当前执行：AP042只读诊断已复测，待有限交付
 
 - 上轮为progress：A14a1已实际提交推送`84e0b5842945db2db79a22a5c2ca4b7027ebe94c`，远端同值/test49e4710不变；回执`artifacts/script-bindings-main/push-complete.json` SHA1C07BF5697D4A144F4EA5B07E0CCF5DC41DD7B7447B97739E15E7AB7EF67F555，20路径/336源/339ZIP/171汇编段均独审。以下参数阶段的“待交付”为历史，不重做。

@@ -14,6 +14,14 @@ public partial class App : Application
         base.OnStartup(e);
         try
         {
+            if (e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase))
+            {
+                var observation = WorkspaceClientObservation.Parse(e.Args);
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                var observationExit = await WorkspaceClientObservation.RunAsync(observation);
+                Shutdown(observationExit);
+                return;
+            }
             if (e.Args.Contains("--verify-script-parameters", StringComparer.OrdinalIgnoreCase))
             {
                 ValidateLayoutArguments(e.Args, "--verify-script-parameters", "脚本参数");
@@ -153,6 +161,13 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
+            if (e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase))
+            {
+                Console.Error.WriteLine(ex);
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                Shutdown(1);
+                return;
+            }
             if (e.Args.Contains("--verify-script-parameters", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--smoke", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-responsive-shell", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-device-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor-layout", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-unified-access", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-one-click-start", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-monitor", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--diagnose-offline-geometry", StringComparer.OrdinalIgnoreCase)) Console.Error.WriteLine(ex);
             else MessageBox.Show(UiErrorPresentation.Describe(ex), "矩阵设备启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
             ShutdownMode = ShutdownMode.OnExplicitShutdown;

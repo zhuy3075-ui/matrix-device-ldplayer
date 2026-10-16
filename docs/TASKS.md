@@ -24,7 +24,7 @@
 
 当前A13补验：[AP-042](codex/apple-experience/AP042_WORKSPACE_ACCESSIBILITY.md)历史组件红绿与主仓曾通过，最新[A14a1旧链](codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)却146→146→146/应用owner缺3/旧残留111，后继NOT-RUN，当前PRODUCT-FAIL开放；[AP-043/AP045](codex/apple-experience/AP043_SKY_AB.md)初始正文可读但官方导航几何错误/无后置state亦保留。原null与根因未定，不重跑凑绿、不用独立无窗VM替代全GUI。真实GUI、双实例同步、应用GUI安装卸载和最终双实例30分钟、A08-A16仍必交付。
 
-最新进展：[A14a1](codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)已实际推84e0b58，不重做。[AP042切页子树只读诊断](codex/apple-experience/AP042_PEER_CACHE_DIAGNOSTICS.md)独立/主仓各193与VM4通过，但原390诊断均PRODUCT-FAIL：实际visual4→27→4、原返回树仍146×3/缺3/残留111；466条记录完整/error0/drop0，未改生产/断言/等待。独审只准诊断有限交付，非修复；下一步另定官方纯文本读取前后对照，不恢复已停止的输入分支。历史实例1只读17步/2关闭不替代当前双实例；批次身份/任务/取消/回传、MCP/抓包及原完整验收门保持。
+最新进展：原位诊断91beac6已推，不重做。[官方纯文本对照](codex/apple-experience/AP042_CLIENT_OBSERVATION.md)独立193/四拒绝/PDB39通过，两臂实际均146→71→146、实际时差101.7184ms；control也出现Window peer/listener，因果未证。主仓精确集成后193/157输入/PDB39有限独审过，但root构建中改非编译doc触发outer1/HARNESS-DOCUMENT-GUARD-FAIL，原件保留，不称整绿或重跑。现待有限测试能力核包/index交付；下一项A14a2逐目标作业身份/状态/取消。原离线Product失败/AP045输入、全部GUI/真实双实例/应用GUI/最终30分钟与MCP/抓包保持。
 
 执行规则：一项先复现/定义预期，再小改、全基线、页面/安全实机、独立verifier、文档/清单、commit/push；独立实现worktree不共享写同一文件。单个拒绝点最多3轮review-fix；需要额外权限或不明风险时停止该动作，记录并继续其他安全工作，不向用户反复提问。
 

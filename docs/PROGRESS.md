@@ -1,5 +1,13 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / AP042官方纯文本受控对照
+
+- Goal/Decision：用最早strict Demo测试入口和ready/release单门区分整个官方观察流程条件；App原链与25Smoke保持，只新增测试类。规范、源与原件见[两臂记录](codex/apple-experience/AP042_CLIENT_OBSERVATION.md)，无Reset/Invalidate、激活/输入/截图或guest/ADB。
+- Verification：独立Build193与四Parse拒绝通过/PDB39；冻结同46递归文件的client/control各一次。client官方唯一nonce窗口一次list/一次text-only state得到116索引正文，截图0。两臂原Product全过、146→71→146，gate33800.9152/33902.6336ms，差101.7184ms，原五任务/观察清理完整；受控Abort与单次VM清理，不称normalClose。
+- Evidence/Limit：client/control summary A9C06543...2532E4 / 507CEC3D...8AB6B00，comparison8AAF9F0A...542258C。初始公开条件同，但两组释放前都有Window/tabs peer与structure listener；helper既有加载，control无法排除环境客户端观察。不能证明读取或等待的因果，也不改判原失败。真正启动前一项清单顺序harness拒绝保留，不算产品红。
+- Main：实际Build44200 child0/73.093s、193/51.03s、157全文/PDB39独审同，但outer1/HARNESS-DOCUMENT-GUARD-FAIL保留：root在构建中改唯一非编译spec两段，十源码guard保持。execution903A0CF6...CCC969、护栏FC4EC4D4...91D0ACC，不称整轮绿、不重跑。独审只接纳实际编译测试限域证据，完整包/index后单独推私有feature，Git实际为准。
+- Next/Risks：保持生产peer和停止的AP045输入分支，不反复做对照凑绿。随后A14a2作业身份/取消，原完整GUI/真实双实例/应用GUI/最终30分钟及A08-A16继续，goal active。
+
 ## 2026-10-16 / AP042切页子树只读诊断
 
 - Goal/Decision：定位实际正文切换与公开peer子树不一致；只给原WorkspaceAccessibilitySmoke加有界原位日志，保留原三阶段、一次GetChildren、Product断言、等待和清理。不改生产或重置缓存；[规格与实际结果](codex/apple-experience/AP042_PEER_CACHE_DIAGNOSTICS.md)。

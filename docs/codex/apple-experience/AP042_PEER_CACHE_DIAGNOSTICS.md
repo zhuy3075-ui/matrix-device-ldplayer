@@ -65,4 +65,6 @@
 
 ## 裁决与下一步
 
+后续[官方客户端读取对照](AP042_CLIENT_OBSERVATION.md)现已实际两臂均过，未改本fixture或生产peer；control也出现Window peer/listener变化，不能解释本阶段原失败。后续绿不改写上述独立/主仓Product红或全GUI缺口。
+
 独立verifier仅批准诊断源码有限交付，不批准AP042修复或整体验收。正式文档与完整核包/index审过后单独推原私有feature，不合并发布；实际提交以Git记录为准。下一阶段另定“官方客户端读取前后对照”轻规格，先用受支持的纯文本读取区分条件，不预称完整provider初始化或因果成立；不得恢复AP045输入、使用私有反射/原生UIA或强制Reset凑绿。真实双实例、应用GUI安装卸载、最终30分钟及A08-A16仍必交付，完整目标active。
