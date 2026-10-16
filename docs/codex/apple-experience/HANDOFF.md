@@ -2,6 +2,16 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
+## 当前执行：A08b自动化工作区
+
+- A14a2已真实提交并推送77366305c34c8c7246c2d10f637ef9498b73b366；下方该任务“待推送”为历史，不重做。当前A08四源已精确主仓集成并最终代表通过；两用户PNG及配置原样，不进入提交。下一门仅文档/核包/精确index审核与单功能push，以实际Git为准。
+- [A08规格与记录](A08_SCRIPT_WORKSPACE.md)已独立静审。`script-workspace-tests`原r01仅fixture编译失败；r02实际209/209、日志选中12→-1真红（anchor/offset保持），六布局红及State cast/disabled enabledHit误oracle混合，原EB80A268…C4041完整保留。七窗口均有界清理，session74158终态。
+- `script-workspace-layout`两生产源：ScriptsView四视图复用原控件，WorkspaceViewModel同源entry引用尾窗增量。r01候选只读TextBox默认TwoWay为真产品错误，后显式OneWay；r02/r03仅390记录预算仍红，原件保留。最终原Cancel按钮迁到记录页签头，先释放旧Header逻辑父，caption独立44高，不改全局error/主题或96标准。当前390参数/记录98、日志88、结果118，100高错误压力真实成立。
+- 最终四源raw：ScriptsView AA2E5383...C0ED6、VM74A234AD...D19A、AppA446E818...DDBE、fixtureF2DBACA6...941A。独立原r01Build209/VM9过但runner误解CP936首拒绝outer1；continuation首十二例9PASS/3测试包字段Value未到动作。仅夹具一行改value必要重建后VM9/12WPF全过，八非Desktop DLL/PDB与44文件保持，不伪称该轮再跑209。最终独立execution38370BBA...41ED7、report1C60FC7B...75441、review33811821...60A2；原失败不覆盖。
+- 主仓唯一session14716已终态outer0：Build47936 exit0/73.330秒、209/51.36秒、1既有测试警告/0错；VM65336 exit0/505ms旧4新5过；四严格拒参均实际exit1、CP936准确/无副作用；WPF13736 exit0/25.241秒十二PASS/十二cleaned。实际编辑Run/非法JSON零接纳/按JobId取消A且B继续、六尺寸对象保真、575步500尾窗隔离与31PNG均已核，选中12→12/Reset0。主仓execution254611E9...7DD46、report8C9FBEC2...52DB3、after3D85CFEF...D3166，独立只读终态已有限批准；7child/14raw全终态排空、owned0，163源/159原raw/26旧Smoke/PDB4/配置及PNG保持。Root基线565CA8B4...7C614，下一门打包与精确14路径独审，不再重跑此代表。
+- 并行A15a只新增独立树`mcp-interface-design/docs/codex/automation-expansion/MCP_DESIGN.md`，最初C39/次稿E316快照保留，第三轮A4349C98...7CEC3已获独立设计有限批准；另阶段集成/单独push，不混入A08。六tool Schema仅文档静检，未运行SDK/接通MCP；真实写跨Desktop占用不共享是明确前置阻断，不声称已支持安全实机并发。
+- 原AP042/AP045及双实例同步/当前GUI安装卸载/最终双实例30分钟、全12页/DPI、完整RPA/MCP/抓包仍必交付；本轮无真实设备、共享ADB、账号、代理/CA/VPN动作，不拿自有WPF逻辑调用充外部GUI验收。
+
 ## 当前执行：A14a2逐任务身份与取消
 
 - 前一官方对照已实际交付 dc497ae0e1b808b1283efcc484518a21762d53bb，远端同值/test49e不变，回执 artifacts/workspace-client-main/push-complete.json；下方“待交付”为历史，不重做。

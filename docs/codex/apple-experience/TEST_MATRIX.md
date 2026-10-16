@@ -59,6 +59,7 @@
 | SCRIPT-PARAM-VM 参数编辑业务 | 真实ZIP导入→原ParameterEditor编辑→StartScriptAsync→原Scheduler→自有Demo节点效果；legacy保存编辑但执行literal | null/非法JSON在metadata、准备状态、日志与后端调用前拒绝；公共任务/转发与Dispose清理、无窗口/用户配置/API | 同四例原2PRODUCT红2PASS，作者/独立/主仓4PASS；独立三入口拒绝、PDB36和旧24Smoke保持。无Window/物理输入/文件选择器/尺寸或实机，不替代SCRIPT-01、AP042与全RPA |
 | SCRIPT-JOB 任务身份与回传 | 同引擎JobId、目标/参数快照、独立状态/日志/真实启动输出、旧ID取消隔离、有界历史 | 预取消/占用/非法身份零接纳；队列前驱与在途排空、transport替换、SetDevice等待后generation变化拒绝且无副作用派发 | [A14a2](A14_SCRIPT_JOBS.md)独立及主仓各209/209含新16例；最后协议屏障对tap及真正第二次am-start发送分别验证，自有随机loopback并非真实5037。原193精确保持，1条测试警告/0错，非Android或全RPA |
 | SCRIPT-JOB-VM 任务页面业务 | 导入→运行→改选择/改包→独立记录/日志→按JobId取消；在线忙/闲目标逐项汇总 | 旧任务不取消同串号新运行；失效行不写metadata/动作；只为接纳目标保存参数；关闭排空 | 独立及主仓原4+新5全部PASS/cleanup，真实自有Demo效果；无Window/原生输入，页面实际控件、文件选择器和六尺寸尚待，不代替完整GUI/实机 |
+| SCRIPT-WORKSPACE 自动化正文 | 实际自有WPF六尺寸/四视图，原5参数列/8任务列及首中末全文、真实编辑提交后Run、按原表选任务取消A且B继续 | 390×640含长摘要/目标和100高错误仍可读；非法JSON零接纳，resize对象/选择/参数保真；活动日志选择保持、575步500尾窗与任务来源隔离 | [A08b/AP048/049](A08_SCRIPT_WORKSPACE.md)独立及主仓原209/VM9/十二组WPF全PASS/cleaned，31张实际渲染；旧编码/测试包前置失败保留。仅程序内控件/Demo，不关闭原生picker、物理输入、AP042/AP045、DPI或真实模拟器 |
 | API-01 接口 | 普通网关/设备端口/自动化启动，health/devices、请求实际设备效果与响应一致 | 端口占用/服务拥有权/停后排空、错误状态、旧transport/未授权拒绝 | NOT-RUN |
 | API-02 接口 | 当前UI方法/路径/body编辑→发送→结果；设备地址双击复制 | 格式坏值、超时、日志脱敏；停止设备端口不误认为关模拟器；当前无归档/密钥显示/专用取消入口 | NOT-RUN |
 | API-03 接口 | 27条自动化路由逐一正常/坏输入/目标隔离 | 私有agent、节点setText/ROM等缺支持要NOT-IMPLEMENTED或BLOCKED，不以501当业务成功 | NOT-RUN |

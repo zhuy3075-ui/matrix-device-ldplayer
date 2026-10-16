@@ -869,14 +869,35 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     }
 
     private void StopScripts() { foreach (var row in Targets()) runtime.Scripts.Stop(row.Serial); RefreshCommands(); }
-    private void OnScriptLog(string serial, ScriptLogEntry entry) => Application.Current.Dispatcher.BeginInvoke(() => { if (SelectedScriptJob is null && CurrentDevice?.Serial == serial) { ScriptLogs.Add(FormatScriptLog(entry)); while (ScriptLogs.Count > 500) ScriptLogs.RemoveAt(0); } });
+    private void OnScriptLog(string serial, ScriptLogEntry entry) => Application.Current.Dispatcher.BeginInvoke(() => { if (SelectedScriptJob is null && CurrentDevice?.Serial == serial) LoadScriptLogs(); });
     private void OnScriptStatus(ScriptRunStatus state) => Application.Current.Dispatcher.BeginInvoke(() => { var row = Devices.FirstOrDefault(row => row.Serial == state.Serial); if (row is not null) row.ScriptState = LocalizationService.Current.Get(state.State.ToString()); RefreshCommands(); Changed(nameof(HasActiveOperations)); });
+    private ScriptScheduler? scriptLogSource;
+    private Guid? scriptLogJob;
+    private string? scriptLogSerial;
+    private IReadOnlyList<ScriptLogEntry> displayedScriptLogEntries = [];
     private void LoadScriptLogs()
     {
-        ScriptLogs.Clear();
-        var entries = SelectedScriptJob is { } job ? runtime.Scripts.GetJobLogs(job.JobId) : CurrentDevice is { } device ? runtime.Scripts.GetLogs(device.Serial) : [];
-        foreach (var entry in entries) ScriptLogs.Add(FormatScriptLog(entry));
-        Changed(nameof(ScriptLogContext));
+        var source = runtime.Scripts;
+        var job = SelectedScriptJob?.JobId;
+        var serial = job is null ? CurrentDevice?.Serial : null;
+        var entries = job is { } id ? source.GetJobLogs(id) : serial is not null ? source.GetLogs(serial) : [];
+        var sameSource = ReferenceEquals(source, scriptLogSource) && job == scriptLogJob && serial == scriptLogSerial;
+        var removed = 0; var retained = 0;
+        if (sameSource && ScriptLogs.Count == displayedScriptLogEntries.Count && entries.Count > 0)
+        {
+            // Snapshots keep the original entry objects, including legitimate repeated messages.
+            while (removed < displayedScriptLogEntries.Count && !ReferenceEquals(displayedScriptLogEntries[removed], entries[0])) removed++;
+            retained = displayedScriptLogEntries.Count - removed;
+            if (retained > entries.Count || Enumerable.Range(0, retained).Any(index => !ReferenceEquals(displayedScriptLogEntries[removed + index], entries[index]))) retained = 0;
+        }
+        if (retained == 0)
+        {
+            if (ScriptLogs.Count > 0) ScriptLogs.Clear();
+        }
+        else for (var index = 0; index < removed; index++) ScriptLogs.RemoveAt(0);
+        for (var index = retained; index < entries.Count; index++) ScriptLogs.Add(FormatScriptLog(entries[index]));
+        scriptLogSource = source; scriptLogJob = job; scriptLogSerial = serial; displayedScriptLogEntries = entries;
+        if (!sameSource) Changed(nameof(ScriptLogContext));
     }
     private static string FormatScriptLog(ScriptLogEntry entry)
     {

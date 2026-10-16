@@ -1,5 +1,13 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / A08b自动化工作区与日志阅读
+
+- Goal/Decision：复用原参数/记录/日志和原运行/取消命令，四视图分配有限正文；保留5/8列、长文全文与44逻辑命中区。原同源日志整表Reset使选中项12→-1，改引用尾窗增量；原滚动锚点未丢失，不扩大故障。
+- Files：仅ScriptsView、WorkspaceViewModel、App严格Demo入口及新ResponsiveScriptsSmoke四源。原CancelSelectedScriptJob按钮迁到运行记录页签头；不改引擎、HTTP、共享主题/ADB或用户配置。[完整规格与原红记录](codex/apple-experience/A08_SCRIPT_WORKSPACE.md)。
+- Verification：独立首次Build209/51.74秒及VM9过；runner误读CP936首拒绝导致outer1保留。窄续验首次WPF9PASS/3测试包字段Value未到动作；只改单行value必要重建后12PASS/12cleaned，未伪称又跑209。最终主仓唯一session14716 outer0，Build47936=73.330秒、209/51.36秒、1既有测试CS9124/0错，VM65336=505ms原4新5过，四严格前运行拒绝通过，WPF13736=25.241秒、十二例全PASS/cleaned。
+- Evidence：execution254611E9...7DD46、workspace8C9FBEC2...52DB3、after3D85CFEF...D3166；独立只读终态审已核7child/14raw、31PNG与四源实际PDB、163输入/159原raw/26旧Smoke及三保护文件。无timeout/kill/清理错、backendActive0/Windows0/owned0。390参数/记录98、日志88、结果118；真实编辑Run与取消隔离、六尺寸往返、575步500尾窗/源隔离均有控件断言。
+- Next/Risks：核包/精确index后按原授权单功能提交推送私有feature，以实际Git决定交付；不合并发布。原native picker/物理输入/全GUI/AP042/AP045/实机双实例/当前应用GUI安装卸载/最终30分钟/DPI和完整RPA/MCP/抓包继续开放。下一步优先真实功能补验；独立MCP设计单独交付，不混此功能。
+
 ## 2026-10-16 / A14a2逐目标脚本任务
 
 - Goal/Decision：不另建执行引擎，补齐JobId、目录代次/transport冻结、状态/日志/结果与按任务取消；旧RunAsync/Stop(serial)兼容，共用设备占用。实施规格与边界见[A14a2](codex/apple-experience/A14_SCRIPT_JOBS.md)。

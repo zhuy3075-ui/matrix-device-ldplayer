@@ -14,6 +14,19 @@ public partial class App : Application
         base.OnStartup(e);
         try
         {
+            if (e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase))
+            {
+                ValidateLayoutArguments(e.Args, "--verify-script-workspace", "自动化工作区");
+                if (e.Args.Any(arg => arg.Equals("--width", StringComparison.OrdinalIgnoreCase) || arg.Equals("--height", StringComparison.OrdinalIgnoreCase) || arg.Equals("--screenshot", StringComparison.OrdinalIgnoreCase)))
+                    throw new ArgumentException("自动化工作区验收使用固定六尺寸，不接受 --width、--height 或 --screenshot。");
+                var workspaceDirectoryIndex = Array.FindIndex(e.Args, arg => arg.Equals("--data-dir", StringComparison.OrdinalIgnoreCase));
+                var workspaceDirectory = Path.GetFullPath(e.Args[workspaceDirectoryIndex + 1]);
+                if (Directory.Exists(workspaceDirectory) || File.Exists(workspaceDirectory)) throw new ArgumentException("自动化工作区验收必须使用尚不存在的独立 artifacts 目录。");
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                await MatrixDevice.Desktop.MainWindow.RunScriptWorkspaceVerificationAsync(workspaceDirectory, Dispatcher);
+                Shutdown(0);
+                return;
+            }
             if (e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase))
             {
                 var observation = WorkspaceClientObservation.Parse(e.Args);
@@ -162,7 +175,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase))
+            if (e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(ex);
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
