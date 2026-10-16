@@ -1,5 +1,13 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / AP-041受控离线几何诊断
+
+- Goal/Context：A07c/d已实际推送a23348b，原s01首设备指针前置及报告保存失败保留；先证明无图/几何链，不改缓存、原负例或生产输入。
+- Decision/Files：新增独立严格Demo/fresh目录诊断入口和OfflineGeometryDiagnostics；新mode禁截图、激活/指针/guest，仅原合法发布MainA/CurrentB与row-only同代/增代Offline对照。r1仅静态准备，r2补实际窗口尺寸并删截图能力，无新增等待/重试；21旧Smoke及147其它源保持。
+- Verification：独立d01原158/51.42秒及三参数拒绝、新390诊断过；root-r01 Build22880 exit0/72.003秒（实际20.09/158的51.12），diag40764 exit0/1.955秒，0警告错误。两报告同3E0F0766...D1DACE，各实际390×640/27记录检查/6同步快照/22Task全完成/cleanuptrue/errors0；同代撤图Visible且旧公式NaN、增代保图有限映射的受控假设成立，不推旧s01具体字段。
+- Evidence：独立审7A903AF9...C30B10、root独审80C101EF...B5FD3/executionACF6A83E...5AE14/末9F49C71A...70561、DLL95F0FF99...CFC21；实际PDB27、5次root149/canonical全文同已执行d01、147原raw/21旧/config/两PNG同。所有child/raw流终态，无timeoutkill/owned残留；三拒绝的预期stderr完整保留。见[诊断规格及记录](codex/apple-experience/AP041_OFFLINE_DIAGNOSTICS.md)。
+- Next/Risks：终态独审仅准限域诊断源码交付，待完整核包/精确暂存独审再推原私有feature；不合并发布，实际提交读Git/回执。下一小修评估原offline负例不对无图重新定位及原报告局部非有限编码，保留全部原Down/Up/零副作用断言；source-generation撤图仅静态候选。不关闭AP019/020/033、旧S01/11NOTRUN、实机双实例/当前GUI安装卸载/最终30分钟及A08-A16，goal active。
+
 ## 2026-10-16 / 应用正文有限域验收与独立入口缺口
 
 - Goal/Context：解AP037/038/039并保留所有旧失败；不继续猜测修改生产，不把编译或源文件数量当运行覆盖。AppView局部响应式及共享字符串Tooltip Wrap保留，业务tail/API/350ms/身份门禁不变。

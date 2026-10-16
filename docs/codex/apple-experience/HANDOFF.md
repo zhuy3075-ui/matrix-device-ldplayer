@@ -2,6 +2,17 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
+## 当前执行：AP-041 安全诊断已运行，待限域交付
+
+- A07c/d 已实际交付：`a23348ba78093b3fcde385c87dde3ddfd81a818d` 已推原私有 feature，远端同值；test 仍 `49e471081d2648a4d533cc98ec00be4f5a103c77`。双独审核 15 路径、319 源、322 ZIP 项、161 源码段，主配置与两用户 PNG 保持；回执 `artifacts/app-layout-main/push-complete.json` SHA `30EDDDF8253DB39C41AC49ACBA676F26F8FA97C6736863D0B290124470AADFF0`。不要重复打包、提交或推送该阶段，不合并发布。
+- 新隔离实现树 `.worktrees/device-offline-diagnostics` 与验证树 `.worktrees/device-offline-verifier` 均基于 a23348b；只新增 Demo 离线几何诊断，不改原设备负例、缓存、主题或输入门禁。r1 仅静态准备，补实际尺寸/拒绝截图参数后的 r2 已双独审并实际运行；两源 App `6999B4725C7638781CEBF34D6B46F23F4183A45FFDEBB60663ADB129FA6D1BC8`、fixture `545A8CBFF9713F407D2560C0844B4CB1E8EC51C08DAE14265CAB106D1B979FA0` 已按批准机械导入 root，并完成下述主仓 r01。原 r1 原件/false 合同都保留，不重跑 d01。
+- 独立 d01 已 terminal：Build 30468 exit0/76.709 秒，实际构建24.48/158项51.42/0警告错误；三拒绝预期exit1/精确stderr且目录均未建；新诊断46996 exit0/2.015秒。5 child/10 raw流终态、owned0、无timeout/kill/清理错。报告 `3E0F0766BF6AF78A5DDBA9B469CA87CE4872B6F852AEC3FBBA1536C0D2D1DACE`、独审 `7A903AF9E610F24333C5895FFE43A639BD86097C3D99D9F42EF8BECC29C30B10`、execution `9F675AC3AECDED27A178701A10C8837964D774594600ED8A97F629184D530CB3`、末 after `FFFB4D1260C3889C361434F899809798076F42336469ACDB4919B20B2EB1C0E5`，位于 verifier `artifacts/ap041/diagnostic-d01` 与 `artifacts/od/d01/diagnose-390x640`。实际窗口390×640，六快照受监测状态/cache读取前后不变，22 Task全完成；同代Offline撤图/Visible但公式非有限、gen+1保图对照均成立，仅限row-only受控Demo、Catalog仍Ready/g1，不倒填旧s01坏字段或OS/WPF根因。
+- root-r01 已 terminal，session23267/Build22880 exit0/72.003秒（构建20.09/158项51.12/0警告错误），diag40764 exit0/1.955秒。报告实际同3E0F...D1DACE，execution `ACF6A83E83DD7118BB3E0CE26DC753584725BAA02BB5CE32DD0E8DB6B505AE14`、末after `9F49C71A4E9FF33A9F81EC57DC8BD9ACFE352A4A3CCAD513FE97A964A9770561`，DLL `95F0FF99D18652DA6A2A7191383E9D49851A4E18995D781DC63026438ACCFC21`。两child/四原流终态、owned0、无timeoutkill/清理错；实际390×640/27记录检查/6只读快照/22Task全完成与两对照成立。5次149/147原raw/21旧源/实际d01末快照规范化全文/PDB27/config/PNG守卫到末，新DLL/三PDB诊断前后同；未重跑三拒绝、旧Smoke/native或真实模拟器。
+- 当前所有必需exec已结束，锁归root。主仓runner6D821507...0080D及原148预导入335E...DCC9C保留，不重跑r01。终态独审 `80C101EFDD1A490A5C82DEC2E1BA1C793C135A44F54233FA39CE7205873B5FD3` 已通过，仅准原私有开发分支诊断源码交付。正式9路径待冻结，再用已准备root `artifacts/ap041-main/New-VerifiedPackage.ps1` SHA `E469F4FB7BEAAF643B6C5BD05F34DA436DDD20584DAE3D5ABD96C628A725554D` 在fresh package-p01核包（321源/324ZIP/162段仅预期，以实际为准），校验后仅回写3生成清单，精确12路径index再独审。实际提交/远端和`artifacts/ap041-main/push-complete.json`回执决定是否已交付，未实际记录前不宣称已push或重复运行，不合并发布。用户PNG/配置/APK/SDK/本轮raw排除，历史tracked AP021保持。
+- 下一独立小修推荐只对offline-reject复用现有positionAfterInterrupt:false，加中断后只读状态，保留真实Down/Up/捕获释放/两端零派发断言；它是组合安全拒绝，不是单Online守卫隔离。原source-generation-reject也可能撤图，但仅静态候选，不顺手整批跳过。原device-layout出口推荐局部double转换器：有限数结构不变，非有限明确null+分类，必须用同一真实出口验证嵌套Point/Size/Rect.Empty/异常和写出失败；不全局放行NaN、不丢原FAIL。此建议尚未实施/执行，原S01/AP019/020/033/11NOTRUN与全部实机缺口不关闭。
+- CMFA 原下载包仍为 `AF7F05D8801798A8E75DE682E5F67070138BECB8623B7A341C3E5CD042A3753D`，安装/启动实证与权限主页阻断按旧报告保留；测试安装已 owned 清理，不因最新消息重复安装、接受权限或启用 VPN。S01/AP041/11 NOT-RUN、实机双实例同步/当前应用 GUI 安装卸载/最终 30 分钟、真实 DPI 与 A08-A16 继续开放。
+- 下方为已结束阶段的历史，不再授予任何运行或重跑权限。后续以本节、实际 Git、冻结源和新执行回执为准。
+
 ## 当前执行：独立提示高度诊断
 
 - 最新完成执行：主仓r01单次Build15420 exit0/71.867秒（实际19.92/158项51.12/0警告错误），完整Smoke41364 exit0/164.976秒，新12/2890/12清理/111Task、原17源链/15报告/12页过。报告5F864A7E...AF3B7F、独审3EA80FE0...3EE1BE、acceptance543C1611...C10CC、afterD2451427...6793FA，DLL4058AD1A...AB1757；四源已在主仓且与c02同，5快照148/144原raw/20旧源/API/Main/PDB24/配置同，原流/owned0。全必需exec结束，锁归root，不重做r01。
