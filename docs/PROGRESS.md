@@ -1,5 +1,20 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / AP-043受控对照与导航失败
+
+- Goal/Decision：按独审计划在同一冻结共同目录顺序替换Old/New两DLL/PDB，各一次官方纯文本首读；不Build、不改生产、不触guest。详见[受控对照](codex/apple-experience/AP043_SKY_AB.md)。
+- Verification：Old48个总节点止空Tab，New200个总节点包含真实设备正文；实际CLR/WPF两模块一致，原Release46/共同44/七guards全同。仅证初始读取改善，不证明全历史环境或完整GUI。
+- Failure/Cleanup：New应用导航官方click明确isError，无法取得输入坐标，无freshstate；停止且不重试。两个精确自有进程externalKill，session86146/11102父0/child-1、流完整、无timeout/清理错，不称正常Close；原整树null仍保留。
+- Next/Risks：AP042整体验收未获批准；独审允许考虑仅正文可达的开发分支源码交付，仍须文档/核包/index审核与实际Git回执，不合并发布。转独立A08脚本格式小目标实际红绿；原全GUI/双实例同步/当前GUI安装卸载/最终30分钟与A08-A16均保持，goal active。
+
+## 2026-10-16 / AP-042正文无障碍候选，外部验收未通过
+
+- Goal/Context：旧2ca79ce已交付；官方Sky纯文本曾只读到无头Tab根，先用真实owner红测确认正文断链，不与AP033或截图超时合并根因。
+- Decision/Files：Main仅替换创建类型，新WorkspaceTabControl复用原Style、标准视觉树peer+Pane，不造节点或手动清缓存；新WorkspaceAccessibilitySmoke及App安全mode单hook，旧22与原几何/业务保持。规格和原件索引见[AP-042](codex/apple-experience/AP042_WORKSPACE_ACCESSIBILITY.md)。
+- Verification：独立红三阶段同根仅1节点、5可视owner缺失；独立绿与主仓各158及旧14/3E通过，同根146→71→146、5owner唯一可达/状态样式正确、无旧页残留。主仓Build23328/73.585秒、mode19844/2.281秒，全流终态，152/148/旧22/PDB30守卫保持。
+- External/Decision：fresh官方Sky首读accessibility:null，已核false/true请求且无工具显式错误；未导航或重试，精确owned清理后child-1/父session61577 exit0，不冒称正常Close。独审暂拒按已修复交付，不核包/暂存/commit/push，保留四源候选；已交付仍2ca79ce。
+- Next/Risks：先新规格的旧E729/新F18受控单次A/B，旧也null就停；共同依赖和比较范围需冻结，不以旧失败反复重跑凑绿。全GUI、真实双实例/应用GUI/最终30分钟、AP041/S01/11NOTRUN及A08-A16继续，goal active。
+
 ## 2026-10-16 / AP-041验收报告出口稳健性
 
 - Goal/Context：诊断5263587已推原私有feature；原s01报告二次失败仍待修，先修同一真实writer，不改原指针或生产输入。

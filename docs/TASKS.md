@@ -12,7 +12,7 @@
 | A05 | P1/阶段离线验收完成，真实路径仍属A11 | A04已推送2b1fe6e | 职责隔离15155a7、操作文案6c4adce、设备/主控76d0e43；[b2报告](codex/apple-experience/A05_MONITOR_RESPONSIVE.md)为监控正文，本阶段独立提交 | b2独立freeze4：150/六监控各952/308、六设备889或847、三桌面、六shell135、42CLI；主仓150/五代表首轮通过。AP019/020首败保留，真实视频/输入/ADB/稳定性不由离线替代 |
 | A06 | P1/a、b1、b2a、b2b、c1及c2离线验收完成，余项开放 | A04 | [a发布隔离](codex/apple-experience/A06_DEBUG_PUBLICATION.md)e235657、[b1首载调度](codex/apple-experience/A06_AUTOMATIC_LOADING.md)ef74216；[b2a节点正文](codex/apple-experience/A06_NODE_RESPONSIVE.md)29ab03f；[b2b截屏正文](codex/apple-experience/A06_SCREENSHOT_RESPONSIVE.md)c7b6d24；[c1完成缓存](codex/apple-experience/A06_COMPLETED_CACHE.md)90815e8；[c2同行恢复首载](codex/apple-experience/A06_RECONNECT_LOADING.md)原19例11红保留 | c2独立150/0警告错误、三桌面各19/289/19清理及旧18/10/11/16/49全套/六shell135，主仓150/1000完整同19及旧五套/390shell135通过；生产C288/MainF243/夹具F1AC。依冻结10/核包/独审13路径后单独push，以实际Git记录为准。原生保存/在途裁剪、AP019/020/023/028及实机仍开放，不把自有1000窗口19例当六尺寸每控件实测 |
 | A07 | P0/a、b1、b2及c/d有限域验过，实机/补验仍开放 | A01,A04 | 当前ApplicationsView批次（非旧VM捷径）；[改名身份](codex/apple-experience/A07_APPLICATION_IDENTITY.md)、[待办](codex/apple-experience/A07_APPLICATION_PENDING.md)、[API排空](codex/apple-experience/A07_API_DRAIN.md)、[正文适应](codex/apple-experience/A07_APPLICATION_RESPONSIVE.md)及[测量诊断](codex/apple-experience/A07_TOOLTIP_DIAGNOSTICS.md)保留原红与门禁；[CMFA首验](codex/apple-experience/A07_CMFA_APPLICATIONS.md)/[owned清理](codex/apple-experience/A07_OWNED_CLEANUP.md)不冒充GUI | c02与主仓r01各158/0警告错误、新12/2890/12清理、原17源Smoke链/12页过；当前505字体成员含344隐藏全1.5，非DPI/字体绑定保真。s01六壳层格各135过，但首设备指针前置及报告保存失败，11格NOT-RUN/AP041；20是冻结旧源数，不是20模式已跑。独审仅准原开发分支有限域交付，提交以Git记录为准，不合并发布。真实双实例/当前GUI安装卸载/最终30分钟及权限页缺口保持，不重装授权凑绿 |
-| A08 | P1/未开始 | A04 | 终端/文本/自动化页面视觉、布局及逐控件路径 | 实际命令/文本回读/脚本参数步骤与取消，六尺寸、独立验证，每修复push |
+| A08 | P1/a脚本格式边界开始，余项未验 | A04 | 终端/文本/自动化页面视觉、布局及逐控件路径；先统一picker和实际ZIP加载契约 | 独立树先实际非法格式红、合法包兼容与Demo效果绿；实际命令/文本回读/脚本参数步骤与取消、六尺寸、独立验证仍必需，每修复push |
 | A09 | P1/未开始 | A04 | 接口/工具/设置逐路径与视觉布局；依赖能力逐项登记 | 路由/端口/归档/保存重启/错误恢复/禁用解释有证据；每修复push |
 | A10 | P2/AP-033已补诊断取证，修复和其余细节开放 | A05-A09 | 交互、长内容、键盘/触控、对比度/减少动画/DPI；AP-011/012/015/019/020/023及候选AP-017保持 | [AP-033](codex/apple-experience/AP033_INPUT_DIAGNOSTICS.md)单测试49+保持旧断言，独立150过、完整GUI旧坐标前置仍FAIL；三快照活动源null且OS后续移动，成因未明。非产品修复/全页验收。P2仍必交付，修复分别验证push，不把后续绿或未复现候选当完成 |
 | A11 | P0/未开始 | 全部实现 | 冻结最终版本，独立单/双实例实机全路径和30分钟稳定性，完整回归 | 逐需求/控件/能力都有足够证据，失败/未验不计通过；环境不被误改 |
@@ -21,6 +21,8 @@
 | A14 | P1/已追加，待实现 | A13a、A08；AI部分再依A15a/A15b与A16b | 复用设备/自动化/终端/接口职责；本地RPA包上传校验、参数、目标冻结、分发执行、作业状态/取消/回传；MCP脚本与指定应用动态分析 | 合法包真实效果回读，非法包零执行，逐目标不串扰，取消无新步骤；AI链路关联脚本/目标/采集产物。不执行未知代码或冒称沙箱 |
 | A15 | P2/已追加，待设计与最小接入验证 | A13a；脚本工具复用A14a的包契约 | A15a设计群控MCP工具、Schema、权限/错误/取消/限额；A15b提供供A14c使用的最小stdio接入与真实客户端验证 | 握手/列工具/调用/结果真实可达；逐台覆盖明确授权集合，未授权与身份变化拒绝；双实例不串扰，N目标仅离线逻辑证明，不外推23路容量 |
 | A16 | P3/已追加，初步调研完成，POC未运行 | A13a、独立测试应用/服务及采集权限 | A16a比较代理/HTTP Toolkit/VPN/原始包；A16b先验证受控方案，再实现指定实例会话、停止清理、分析/导出并供A14c使用 | 有官方依据与明确选型；自有请求对应实际捕获记录、目标隔离及停止/容量/退出清理均过。HTTPS/应用级隔离各自验证，无明文能力不报成功 |
+
+当前A13补验：[AP-042](codex/apple-experience/AP042_WORKSPACE_ACCESSIBILITY.md)组件红绿及主仓通过，原158/14/3E保持；[AP-043](codex/apple-experience/AP043_SKY_AB.md)受控对照Old48/New200总节点，证初始设备正文可读且实际两runtime模块一致，但应用导航官方click报坐标几何不可用，无后置state，立即停测并精确清理。原整树null仍未定因，整体验收未过；独审允许考虑仅正文可达的开发分支源码交付，仍依文档/核包/index及实际Git，不宣称全GUI恢复。转独立A08格式小目标，不重跑探测凑绿；真实GUI、双实例同步、应用GUI安装卸载和最终双实例30分钟、A08-A16仍保持必交付。
 
 执行规则：一项先复现/定义预期，再小改、全基线、页面/安全实机、独立verifier、文档/清单、commit/push；独立实现worktree不共享写同一文件。单个拒绝点最多3轮review-fix；需要额外权限或不明风险时停止该动作，记录并继续其他安全工作，不向用户反复提问。
 

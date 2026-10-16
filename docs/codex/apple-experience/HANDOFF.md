@@ -2,6 +2,24 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
+## 当前执行：AP-043对照结束，转A08脚本包边界
+
+- AP043仅复用冻结二进制，无新Build或生产改动。Old session86146与New session11102均terminal父0/child-1，精确自有externalKill，无timeout/runnerKill/清理错，双raw均0B且完整；所有必需GUI/exec已结束。不复用旧window或索引。
+- 相同probe-bin共同44和实际coreclr/wpfgfx两模块下，Old48个总节点止空Tab，New200个总节点包含真实设备正文/筛选/表格。独立核原Release46/共同44/七guards全同。New应用入口21的官方点击失败isError=true、`coordinate input geometry is unavailable`，无后置state，切页效果未知；不重试/截图恢复/外部输入绕过。
+- 原件及限制见[AP043对照](AP043_SKY_AB.md)。仅证初始正文暴露改善，不关闭先前整树null、页面导航、原失败或全GUI缺口。独审允许考虑AP042仅正文可达的私有开发分支源码交付，仍须完整文档/核包/index审；尚未提交推送时已交付feature仍2ca79ce，test49e4710。源码交付不等于整体验收通过，实际Git/回执决定状态，不重复已完成交付。
+- 下一安全小目标A08脚本格式边界：独立script-format-fix从2ca起，只改实际Load归档格式拒绝、脚本picker、正式测试与轻规格。先实际红后绿；不带入未批准AP042，不触guest/ADB或用户配置，不把拒绝非法格式代替A14完整RPA实现。
+- 用户CMFA APK可作安装卸载样本；先前共享层安装/进程启动已证，当前GUI/权限主页/双实例/最终30分钟仍未过，不因用户重申可用而重复安装、授权或开启VPN。七guards保持；下节为已结束阶段历史，不授重跑。
+
+## 历史：AP-042候选冻结，首次官方观察未过
+
+- 已交付私有feature为2ca79ce2cb49ece68724b3ff3fcf108500a6c52a，test仍49e4710；报告子项已真实核包并推送，勿按下方历史重做。当前AP042没有核包/暂存/commit/push，生成三清单暂未重做，不把候选当已交付稳定版。
+- 两独立树workspace-accessibility-fix/verifier均基于2ca。主仓已机械导入四冻结源：App090430564F683EC740FD110E6F9410B061FA676FA8BB92B0DE2530EE6BABB0BD；Main294E2A0BFF5A0FB77D87893A7176830B74C3FEE6CEC414F86FF30FAB5834D10E；新WorkspaceTabControl5CC6A8FF61EB3764D20CB8C16B2B3158F2C5A335E57FCD99EA9F6FC5C2957C07；新WorkspaceAccessibilitySmoke845059CECD87E5C187DE9C4DED933637D5C7DE94F0E5DC88585D31BAAC9013BD。App/fixture红绿相同；只Main创建一行与最小标准Pane peer，保留原Style、模板/选择、旧22、原几何及业务。
+- 实际红5owner均缺，3phase每树仅根；独立绿及主仓同root1/Pane、146→71→146、5matches1/metadata-state-style通过/0residue，原158/14/3E与5+22任务清理过。root session7586全终态，Build23328 exit0/73.585秒、mode19844 exit0/2.281秒；execution6844B7C701160A26B111B25FB6F7549FCBE55D19C3B44CEBCCAC5767888BB592、末401E2D61055453689F1BCD39221518CD9FCCFDDC3E1947A0AB87779414CFA27D、summary0675A09D2DF4B0222345EC658BAD2EBB3B539E42DE57C3B9DA045F21F95116FC。152输入/148原/旧22/PDB30和独立已执行canonical全文已实审；独立绿末A3DF5C7BA6199887C2EFE673D380FF04B0A78A21D5FC5DA0E548269B77073FEB。无效的green-receipt.json null草稿不得作通过证据，另有INVALID notice；用真实原件与独审文字结论。
+- 主仓DLL F18C0E9A1292F07074D3045130F2AC4C2047F8F947E87FD63D3817C073CF8387。官方Sky fresh1000×700/PID68696/window198643342首个false/true读返回accessibility:null；screenshots=[]是未请求截图的预期，不算截图失败。请求transcript49110已实核，request-transcript A7251572...58CB57，返回54374E66...0197A。未输入、activate、导航或重试，不以自制UIA/Win32绕过。不能断言工具或产品同因；独审暂拒已修复交付。
+- 该自有Demo已精确PID/UTC ticks/路径/--demo/profile核后externalKill，owned-cleanup FBBF0D79...A7775；session61577父exit0/child-1、流完整无timeout，terminal76F3AFD7...CCA5C。runner.killAttempted=false不是无kill或自然关闭。当前所有必需exec/GUI已结束，锁root；不得复用已关闭window198643342/旧索引，Sky输入保持停止。
+- 下一最小工作：先新规格并独审旧E729/新F18在相同共同依赖、SDK、fresh1000×700配置、同Sky下各一次纯文本A/B；旧也null就停、不启动候选、不重试。若用旧DLL副本而非原完整构建，必须如实限定比较范围并核共同依赖。尚未实施该runner或授运行。另一备选为自有WindowAutomationPeer全父链只读诊断，非外部控制或Sky替代。详见[AP042规格及裁决](AP042_WORKSPACE_ACCESSIBILITY.md)。
+- 最新用户APK仍AF7F05D8...A3753D；已有共享层安装/进程启动与owned卸载实证，不是APK不兼容。权限页主页、当前应用GUI、双实例同步和最终双实例30分钟未过，不重装/授权/VPN凑绿。AP040/AP041/S01/11NOTRUN、AP019/020/033与A08-A16全部必交付；配置E4E与两用户PNG不改，不清旧worktree。以下为历史，不授重跑或重复推送权限。
+
 ## 当前执行：AP-041 报告子项已修，待限域交付
 
 - 上阶段诊断已实际交付 `5263587911b0534fe56c60a864cf6fdcc6ff9d13`，回执 `artifacts/ap041-main/push-complete.json` SHA `ECCB1681A3E6BBD6F10BA11FDB665C72C75526A1A57340067B80ABDE403D7D2B`。不要依下方历史再打包/推该阶段。

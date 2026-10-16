@@ -51,6 +51,13 @@
 | AP-040 | P2/已观察，待独立专项修正 | 读取应用后的批次摘要仍无条件包含“安装命令完成（包名未核验）0”，信息重复且易被理解成执行过安装 | c02自有glyph图及ApplicationsView原ApplicationBatchSummary证实该安装专属零计数字段总被拼接；本轮布局候选未改业务tail，不混入修复。后续按实际Operation/非零状态展示必要结果，并测试List/Install/混合失败取消，不因此否定本轮布局阅读或冒称安装发生 |
 | AP-041 | P1/报告子项已修，原指针负例未复验 | s01首device390×640的offline-reject未达OS/WPF指针一致前置，随后非有限Double使原JSON报告再次失败；受控诊断证明同代row Offline撤图但Visible时旧公式可非有限 | [报告出口](AP041_REPORT_RELIABILITY.md)同一实际writer红6PASS/8FAIL，局部double编码后原14类全PASS；独立与主仓各158及原3E几何/22Task/cleanup保持，8条预期stderr完整，FAIL/原异常/有限JSON不变，全局仍拒绝NaN。仅报告子项通过；原S01/11NOTRUN、AP019/020/033及实机仍开放，不推原具体坏字段或OS同因。下一独立阶段评估有效图像/有限坐标的后置定位合同，保留每个原Down/Up及零副作用断言，不整批跳负例 |
 
+## 工作区无障碍补验
+
+| ID | 级别/状态 | 事实与边界 | 处理/后续 |
+|---|---|---|---|
+| AP-042 | P1/组件与初始正文可达通过，整体未验 | 旧无头Tab没有ItemsHost；实际红三阶段同根仅1节点，5个可视正文owner不可达。最小标准Pane peer后独立及主仓同根146→71→146、5owner与状态样式通过，旧158/14/3E保持；AP043证初始设备正文外部可读 | [规格与原件](AP042_WORKSPACE_ACCESSIBILITY.md)；独审允许考虑仅正文源码的开发分支限域交付，仍须核包/index审。隐藏Tab的UIA SelectionPattern变化已声明；导航门与原null不关闭，不标官方控制或全GUI恢复 |
+| AP-043 | P1/初始正文改善已证，外部导航缺口开放 | 首轮F18整树null原件保留；[受控对照](AP043_SKY_AB.md)共同44及实际CLR/WPF同，Old48总节点止空Tab、New200总节点含设备正文。New应用入口click报coordinate input geometry is unavailable/isError，无后置state，效果未知 | 立即停，不重试/截图恢复/输入绕过；两个自有进程精确externalKill、流完整无timeout。仅证初始读取，不归为纯环境或peer同因；应用导航/返回/正常Close未验，AP042完整交付未批准，转A08安全工作 |
+
 ## 修复记录规则
 
 每个问题记录红测命令/错误、最小diff、绿测/独立复验、未验证范围和commit。原失败轮次保留本机artifacts。最多3轮review-fix；未解决需明确风险，不绕过断言或缩小用户目标。不得仅将控件禁用后称功能正常。

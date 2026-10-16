@@ -34,6 +34,8 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- AP033_INPUT_DIAGNOSTICS.md
 |   |   |   |-- AP041_OFFLINE_DIAGNOSTICS.md
 |   |   |   |-- AP041_REPORT_RELIABILITY.md
+|   |   |   |-- AP042_WORKSPACE_ACCESSIBILITY.md
+|   |   |   |-- AP043_SKY_AB.md
 |   |   |   |-- CONTROL_CATALOG.md
 |   |   |   |-- DEFECTS.md
 |   |   |   |-- HANDOFF.md
@@ -306,7 +308,9 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- UnifiedDevicesView.cs
 |   |   |   |-- UnifiedDeviceTile.cs
 |   |   |   |-- WallView.cs
+|   |   |   |-- WorkspaceAccessibilitySmoke.cs
 |   |   |   +-- WorkspaceShell.cs
+|   |   |-- WorkspaceTabControl.cs
 |   |   +-- WorkspaceViewModel.cs
 |   |-- MatrixDevice.Features/
 |   |   |-- Applications/

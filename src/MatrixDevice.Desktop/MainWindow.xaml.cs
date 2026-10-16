@@ -111,7 +111,7 @@ public partial class MainWindow : Window
     private void BuildShell()
     {
         BuildWorkspaceLayout();
-        tabs = new TabControl { Background = Brushes.White, BorderThickness = new Thickness(0), Template = WorkspaceContentTemplate() };
+        tabs = new WorkspaceTabControl { Background = Brushes.White, BorderThickness = new Thickness(0), Template = WorkspaceContentTemplate() };
         InitializeUnifiedDevices();
         AddTab("设备墙 / 主控", BuildWallPage());
         AddTab("节点", BuildNodesPage());
