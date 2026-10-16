@@ -16,6 +16,7 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
     private readonly AdbServerEpoch serverEpoch = new();
     private Dictionary<string, uint> transports = new(StringComparer.Ordinal);
     private readonly AsyncLocal<uint?> pinnedTransport = new();
+    private readonly AsyncLocal<(string Serial, Action Require)?> pinnedIdentity = new();
     public void InheritServerEpoch(ExistingAdbTransport source) => serverEpoch.Require(source.serverEpoch.Snapshot);
     public uint? CurrentTransport(string serial) { lock (transportGate) return transports.TryGetValue(serial, out var id) ? id : null; }
     public void ReplaceTransports(Dictionary<string, uint> current) { lock (transportGate) transports = current; }
@@ -31,6 +32,15 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
         pinnedTransport.Value = expected;
         try { return await action(ct).ConfigureAwait(false); }
         finally { pinnedTransport.Value = previous; }
+    }
+    public async Task<T> RunIdentityPinnedAsync<T>(string serial, uint expected, Action requireIdentity,
+        Func<CancellationToken, Task<T>> action, CancellationToken ct)
+    {
+        requireIdentity();
+        var previous = pinnedIdentity.Value;
+        pinnedIdentity.Value = (serial, requireIdentity);
+        try { return await RunPinnedAsync(serial, expected, action, ct).ConfigureAwait(false); }
+        finally { pinnedIdentity.Value = previous; }
     }
     public async Task<byte[]> ExecuteAsync(string? serial, string[] args, CancellationToken ct)
     {
@@ -53,6 +63,11 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
                 await socket.ReadAdbResponseAsync(token).ConfigureAwait(false);
                 var text = await socket.ReadStringAsync(token).ConfigureAwait(false);
                 return Encoding.UTF8.GetBytes(args[0] == "devices" ? "List of devices attached\n" + text : text);
+            }
+            if (pinnedIdentity.Value is { } identity)
+            {
+                if (identity.Serial != serial) throw new DeviceException($"任务不能跨设备发送：expected={identity.Serial}, actual={serial}。", 409, 1003);
+                identity.Require();
             }
             var transport = pinnedTransport.Value ?? CurrentTransport(serial) ?? throw new DeviceException($"ADB transport has not been discovered: {serial}.", 503, 2000);
             RequireTransport(serial, transport);
@@ -122,6 +137,11 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
                 "uninstall" => "pm uninstall " + AdbDeviceBackend.Quote(args[1]),
                 _ => throw new DeviceException($"Unsupported ADB operation: {args[0]}.", 400, 1007)
             };
+            if (pinnedIdentity.Value is { } sending)
+            {
+                sending.Require();
+                RequireTransport(serial, transport);
+            }
             await socket.SendAdbRequestAsync("shell,v2,raw:" + command, token).ConfigureAwait(false);
             await socket.ReadAdbResponseAsync(token).ConfigureAwait(false);
             await socket.SendAsync(new byte[] { 4, 0, 0, 0, 0 }, token).ConfigureAwait(false);

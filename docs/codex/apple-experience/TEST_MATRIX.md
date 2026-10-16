@@ -57,6 +57,8 @@
 | SCRIPT-FORMAT 自动化格式边界 | 实际Load接受合法ZIP的.json后缀与附带资源，导入Tap0、显式调度Tap1；picker只列jxscript/zip | 六非法非ZIP格式中文400/1007且Tap0，I/O/内层JSON/动作/压缩大小保持原错误；仅ZIP构造catch，不覆盖全部损坏归档 | [A08a/AP044](A08_SCRIPT_FORMAT.md)实际red163/169仅六格式红；实现/独立/主仓各169全过，原158不变。PASS-OFFLINE-PACKAGE-BOUNDARY，不代替GUI文件选择、SCRIPT-01实机或完整RPA |
 | SCRIPT-PARAM 参数执行 | V1真实ZIP Load/Save/Load→原Scheduler，Value/默认/覆盖的实际差异动作、A/B隔离及未指定第三目标零动作 | null不回退、类型/范围/字段/版本/Probability拒绝；深快照/旧包/等待取消保持，全局JSON不变 | [A14a1/AP046](A14_SCRIPT_PARAMETER_BINDINGS.md)Core原红170/193保留，作者/独立/主仓各193通过、原169精确保持。仅参数绑定合同，不代表jobId/transport pin竞态、GUI或guest执行已验 |
 | SCRIPT-PARAM-VM 参数编辑业务 | 真实ZIP导入→原ParameterEditor编辑→StartScriptAsync→原Scheduler→自有Demo节点效果；legacy保存编辑但执行literal | null/非法JSON在metadata、准备状态、日志与后端调用前拒绝；公共任务/转发与Dispose清理、无窗口/用户配置/API | 同四例原2PRODUCT红2PASS，作者/独立/主仓4PASS；独立三入口拒绝、PDB36和旧24Smoke保持。无Window/物理输入/文件选择器/尺寸或实机，不替代SCRIPT-01、AP042与全RPA |
+| SCRIPT-JOB 任务身份与回传 | 同引擎JobId、目标/参数快照、独立状态/日志/真实启动输出、旧ID取消隔离、有界历史 | 预取消/占用/非法身份零接纳；队列前驱与在途排空、transport替换、SetDevice等待后generation变化拒绝且无副作用派发 | [A14a2](A14_SCRIPT_JOBS.md)独立及主仓各209/209含新16例；最后协议屏障对tap及真正第二次am-start发送分别验证，自有随机loopback并非真实5037。原193精确保持，1条测试警告/0错，非Android或全RPA |
+| SCRIPT-JOB-VM 任务页面业务 | 导入→运行→改选择/改包→独立记录/日志→按JobId取消；在线忙/闲目标逐项汇总 | 旧任务不取消同串号新运行；失效行不写metadata/动作；只为接纳目标保存参数；关闭排空 | 独立及主仓原4+新5全部PASS/cleanup，真实自有Demo效果；无Window/原生输入，页面实际控件、文件选择器和六尺寸尚待，不代替完整GUI/实机 |
 | API-01 接口 | 普通网关/设备端口/自动化启动，health/devices、请求实际设备效果与响应一致 | 端口占用/服务拥有权/停后排空、错误状态、旧transport/未授权拒绝 | NOT-RUN |
 | API-02 接口 | 当前UI方法/路径/body编辑→发送→结果；设备地址双击复制 | 格式坏值、超时、日志脱敏；停止设备端口不误认为关模拟器；当前无归档/密钥显示/专用取消入口 | NOT-RUN |
 | API-03 接口 | 27条自动化路由逐一正常/坏输入/目标隔离 | 私有agent、节点setText/ROM等缺支持要NOT-IMPLEMENTED或BLOCKED，不以501当业务成功 | NOT-RUN |

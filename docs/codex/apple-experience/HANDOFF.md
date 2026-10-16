@@ -2,7 +2,15 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 当前执行：官方客户端纯文本对照
+## 当前执行：A14a2逐任务身份与取消
+
+- 前一官方对照已实际交付 dc497ae0e1b808b1283efcc484518a21762d53bb，远端同值/test49e不变，回执 artifacts/workspace-client-main/push-complete.json；下方“待交付”为历史，不重做。
+- 三隔离来源的15源码已冻结并经独立实际验证：原193+新16=209/209，原参数VM4+新任务VM5全过/cleanup、0Window；Build8004/74.997秒及VM22776/537ms，四raw均排空、owned0。实际1条测试CS9124警告、0错误，不写0警告。独立execution79BD1618...56015，candidate9D6A0A8B...6D22E。
+- 根问题为串号状态覆盖及逐动作捕获transport，不是旧“停止所选”语义错误。共用原引擎/占用表，JobId冻结目标，队列与SetDevice后发送前pin；按任务取消/100终态/500日志/真实启动结果16KiB。五VM例证明改选择/包、旧ID、新旧占用与失效身份，非GUI/guest。
+- 主仓15源raw精确导入后唯一代表已终态：session16687 outer0，Build17752 exit0/74.518秒、209/51.75秒，VM12508 exit0/606ms、旧4/新5全部PASS/cleanup。162输入/实际PDB49项源文档保持，四raw排空且error/postflight null，无timeout/kill/owned残留；execution D630E854...E2AF4、新VM529C39D1...991D0。独立preflight递归helper失败已终态且产品子进程未启动，原件F215...8C388保留，非产品红；不重跑代表。
+- 后续：只冻结本阶段15源码/7文档，完整源码包及3生成清单→独立精确范围审→按原授权单功能推私有feature。实际Git决定交付；全部必需exec已结束。不合并发布，真实双实例同步/当前GUI安装卸载/最终双实例30分钟、原AP042失败/AP045停止、六尺寸/DPI、完整RPA/MCP/抓包均保持开放。下一阶段优先自动化原生控件/上传流程及MCP最小契约，不再重复本任务协议测试凑绿。
+
+## 历史：官方客户端纯文本对照
 
 - 上一轮为progress：诊断已实际推送`91beac619dd09847263be4a66b1926e7f033e2c5`，远端同值/test49e不变；12路径/337源/340ZIP/171段完整独审。回执`artifacts/workspace-cache-main/push-complete.json` SHA402B94752E6538783EC7ECB23375589680B2C112A8A92D3740ACA51D8824130F，不重复该交付；AP042仍PRODUCT-FAIL。
 - [官方客户端对照](AP042_CLIENT_OBSERVATION.md)两源已冻结：App74AA6AD1...A8487、新fixture5975F73A...E930C7，旧25Smoke/原App链保持。独立预检193/四拒绝/PDB39过，execution17B44B20...13C7A；批准manifest E4F339C4...540D744含46递归文件，Desktop3021DB40...6529217。

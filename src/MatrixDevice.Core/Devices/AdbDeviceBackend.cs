@@ -10,7 +10,7 @@ using System.Xml.Linq;
 
 namespace MatrixDevice.Core;
 
-public sealed class AdbDeviceBackend : IDeviceBackend
+public sealed class AdbDeviceBackend : IDeviceBackend, IIdentityPinnedDeviceBackend
 {
     private readonly AppSettings _settings;
     private readonly ExistingAdbTransport _transport;
@@ -37,6 +37,30 @@ public sealed class AdbDeviceBackend : IDeviceBackend
         var endpoint = serverEndpoint ?? new IPEndPoint(IPAddress.Loopback, 5037);
         if (!IPAddress.IsLoopback(endpoint.Address)) throw new ArgumentException("ADB server must be on loopback.", nameof(serverEndpoint));
         _transport = new ExistingAdbTransport(settings, endpoint);
+    }
+
+    public IIdentityPinnedDeviceCommands BindIdentity(DeviceCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        return new IdentityCommands(this, catalog);
+    }
+
+    private sealed class IdentityCommands(AdbDeviceBackend owner, DeviceCatalog catalog) : IIdentityPinnedDeviceCommands
+    {
+        public bool IsDemo => false;
+        public Task<string> StartAppAsync(DeviceCommandTarget target, string packageName, CancellationToken ct = default)
+            => owner.StartAppCoreAsync(target.Serial, packageName, null, ct, target, catalog);
+        public Task TapAsync(DeviceCommandTarget target, int x, int y, CancellationToken ct = default)
+        {
+            ValidatePoint(x, y);
+            return owner.CommandAsync(target.Serial, $"input tap {x} {y}", ct, target, catalog);
+        }
+        public Task SwipeAsync(DeviceCommandTarget target, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default)
+        {
+            ValidatePoint(x1, y1); ValidatePoint(x2, y2);
+            if (durationMs < 1 || durationMs > 60000) throw new DeviceException($"Invalid swipe duration: {durationMs}.", 400, 1007);
+            return owner.CommandAsync(target.Serial, $"input swipe {x1} {y1} {x2} {y2} {durationMs}", ct, target, catalog);
+        }
     }
 
     public Task<string> ConnectNetworkAsync(string ip, int port, CancellationToken ct = default)
@@ -278,6 +302,10 @@ public sealed class AdbDeviceBackend : IDeviceBackend
         return CommandAsync(serial, "input text " + Quote(text.Replace(" ", "%s", StringComparison.Ordinal)), ct);
     }
     public Task<string> StartAppAsync(string serial, string packageName, string? activity = null, CancellationToken ct = default)
+        => StartAppCoreAsync(serial, packageName, activity, ct);
+
+    private Task<string> StartAppCoreAsync(string serial, string packageName, string? activity, CancellationToken ct,
+        DeviceCommandTarget? target = null, DeviceCatalog? catalog = null)
     {
         ValidatePackage(packageName);
         if (activity is not null && !Regex.IsMatch(activity, @"^[A-Za-z0-9_.$]+$")) throw new DeviceException($"Invalid activity: {activity}.", 400, 1007);
@@ -300,7 +328,7 @@ public sealed class AdbDeviceBackend : IDeviceBackend
             if (!output.Contains("Status: ok", StringComparison.OrdinalIgnoreCase))
                 throw new DeviceException($"Android activity launch was not confirmed: serial={serial}, package={packageName}: {output}", 502, 2000);
             return output;
-        }, ct);
+        }, ct, target, catalog);
     }
     public Task<string> StopAppAsync(string serial, string packageName, CancellationToken ct = default) { ValidatePackage(packageName); return ShellAsync(serial, "am force-stop " + packageName, ct: ct); }
     public async Task<bool> ClearAppAsync(string serial, string packageName, CancellationToken ct = default) { ValidatePackage(packageName); return (await ShellAsync(serial, "pm clear " + packageName, ct: ct)).Trim() == "Success"; }
@@ -452,16 +480,25 @@ public sealed class AdbDeviceBackend : IDeviceBackend
         }
     }
 
-    private Task CommandAsync(string serial, string command, CancellationToken ct) => RunDeviceAsync(serial, async token => { await ExecuteAsync(serial, ["shell", command], token); }, ct);
-    private Task<T> RunDeviceAsync<T>(string serial, Func<CancellationToken, Task<T>> action, CancellationToken ct)
+    private Task CommandAsync(string serial, string command, CancellationToken ct, DeviceCommandTarget? target = null, DeviceCatalog? catalog = null)
+        => RunDeviceAsync(serial, async token => { await ExecuteAsync(serial, ["shell", command], token); return true; }, ct, target, catalog);
+    private Task<T> RunDeviceAsync<T>(string serial, Func<CancellationToken, Task<T>> action, CancellationToken ct,
+        DeviceCommandTarget? target = null, DeviceCatalog? catalog = null)
     {
         AuthorizeSerial(serial);
-        var expected = _transport.CurrentTransport(serial) ?? throw new DeviceException($"ADB transport has not been discovered: {serial}; refresh devices first.", 503, 2000);
-        return _queue.RunAsync(serial, token => _transport.RunPinnedAsync(serial, expected, async pinned =>
+        if (target is not null) DeviceCommandIdentity.Require(catalog!, target, false);
+        var expected = target is not null ? target.TransportId!.Value
+            : _transport.CurrentTransport(serial) ?? throw new DeviceException($"ADB transport has not been discovered: {serial}; refresh devices first.", 503, 2000);
+        return _queue.RunAsync(serial, token => target is null
+            ? _transport.RunPinnedAsync(serial, expected, Execute, token)
+            : _transport.RunIdentityPinnedAsync(serial, expected, () => DeviceCommandIdentity.Require(catalog!, target, false), Execute, token), ct);
+
+        async Task<T> Execute(CancellationToken pinned)
         {
             if (_identityGuards.TryGetValue(serial, out var verify)) await verify(pinned).ConfigureAwait(false);
+            if (target is not null) DeviceCommandIdentity.Require(catalog!, target, false);
             return await action(pinned).ConfigureAwait(false);
-        }, token), ct);
+        }
     }
     internal uint? ObservedTransportId(string serial) => _transport.CurrentTransport(serial);
     private Task RunDeviceAsync(string serial, Func<CancellationToken, Task> action, CancellationToken ct) => RunDeviceAsync(serial, async token => { await action(token).ConfigureAwait(false); return true; }, ct);

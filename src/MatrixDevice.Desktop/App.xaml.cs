@@ -32,6 +32,7 @@ public partial class App : Application
                 if (Directory.Exists(scriptDirectory) || File.Exists(scriptDirectory)) throw new ArgumentException("脚本参数 VM 验收必须使用尚不存在的独立 artifacts 目录。");
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
                 await ScriptParameterEditingSmoke.RunAsync(scriptDirectory, Dispatcher);
+                await ScriptJobEditingSmoke.RunAsync(scriptDirectory, Dispatcher);
                 Shutdown(0);
                 return;
             }

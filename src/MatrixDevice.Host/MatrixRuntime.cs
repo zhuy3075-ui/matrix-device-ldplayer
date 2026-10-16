@@ -74,7 +74,7 @@ public sealed class MatrixRuntime : IAsyncDisposable
             var top = y ?? 0;
             return PngImage.Crop(png, left, top, width ?? size.Width - left, height ?? size.Height - top);
         };
-        scripts = new ScriptScheduler(backend);
+        scripts = new ScriptScheduler(backend, catalog, demo);
         input = new InputCoordinator(catalog, backend);
         if (demo) ldPlayer = new LdPlayerService(new DemoLdConsoleRunner(), true);
         else if (!string.IsNullOrWhiteSpace(settings.LdConsolePath))

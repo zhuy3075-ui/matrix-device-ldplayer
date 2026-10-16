@@ -31,6 +31,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- A07_TOOLTIP_DIAGNOSTICS.md
 |   |   |   |-- A08_SCRIPT_FORMAT.md
 |   |   |   |-- A13_SQLITE_PATH.md
+|   |   |   |-- A14_SCRIPT_JOBS.md
 |   |   |   |-- A14_SCRIPT_PARAMETER_BINDINGS.md
 |   |   |   |-- AP008_DEPENDENCIES.md
 |   |   |   |-- AP033_INPUT_DIAGNOSTICS.md
@@ -225,6 +226,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- DeviceCatalog.cs
 |   |   |   |-- ExistingAdbSocket.cs
 |   |   |   |-- ExistingAdbTransport.cs
+|   |   |   |-- IdentityPinnedDeviceCommands.cs
 |   |   |   |-- NetworkDeviceScanner.cs
 |   |   |   |-- PngImage.cs
 |   |   |   +-- SerialCommandQueue.cs
@@ -263,6 +265,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- packages.lock.json
 |   |   |-- Presentation.cs
 |   |   |-- ResponsiveLayout.cs
+|   |   |-- ScriptJobWorkspace.cs
 |   |   |-- Themes/
 |   |   |   +-- ModernTheme.xaml
 |   |   |-- UiErrorPresentation.cs
@@ -306,6 +309,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- ResponsiveScreenshotSmoke.cs
 |   |   |   |-- ResponsiveShellSmoke.cs
 |   |   |   |-- ScreenshotView.cs
+|   |   |   |-- ScriptJobEditingSmoke.cs
 |   |   |   |-- ScriptParameterEditingSmoke.cs
 |   |   |   |-- ScriptsView.cs
 |   |   |   |-- SettingsView.cs
@@ -343,6 +347,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- packages.lock.json
 |   |   +-- Scripts/
 |   |       |-- ScriptExecutionCompiler.cs
+|   |       |-- ScriptJobs.cs
 |   |       |-- ScriptPackageService.cs
 |   |       +-- ScriptScheduler.cs
 |   +-- MatrixDevice.Host/
@@ -379,6 +384,7 @@ MatrixDevice.Reconstructed/
 |       |-- packages.lock.json
 |       |-- Program.cs
 |       |-- ScreenVideoTests.cs
+|       |-- ScriptJobTests.cs
 |       +-- ScriptParameterTests.cs
 +-- tools/
     |-- Build.ps1

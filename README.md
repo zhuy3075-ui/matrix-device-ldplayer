@@ -126,7 +126,9 @@ Automator 默认 `http://127.0.0.1:17171/`，路径允许 `/api/` 前缀。所�
 
 新脚本可显式声明 `executionContract: {"version":1,"bindings":[{"stepIndex":0,"field":"value","parameterKey":"targetApp"}]}`，绑定步骤的完整 `value` 或等待动作的 `durationMs`。取值优先级为显式覆盖、参数Value、DefaultValue；显式null不回退，类型、范围或绑定无效时在运行前拒绝。新契约不接受Probability；未声明契约的旧包保持原字面量执行。格式、兼容与实际验证范围见[参数绑定](docs/codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)。
 
-`examples/parameterized/`是参数化包的两个JSON源文件，不是可直接导入的普通JSON。可运行 `Compress-Archive -Path ./examples/parameterized/*.json -DestinationPath ./artifacts/parameterized-example.zip` 生成ZIP，在自动化页导入，参数JSON字符串应保留引号，例如 `"com.android.settings"`。`--verify-script-parameters --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`仅运行无窗VM业务专项，不读用户配置；它不代表GUI点击、真实模拟器、完整作业/MCP或抓包验收。
+`examples/parameterized/`是参数化包的两个JSON源文件，不是可直接导入的普通JSON。可运行 `Compress-Archive -Path ./examples/parameterized/*.json -DestinationPath ./artifacts/parameterized-example.zip` 生成ZIP，在自动化页导入，参数JSON字符串应保留引号，例如 `"com.android.settings"`。`--verify-script-parameters --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`运行原四项参数与新增五项任务的无窗VM业务专项，不读用户配置；它不代表GUI点击、真实模拟器、完整RPA/MCP或抓包验收。
+
+自动化页新增[逐目标运行记录](docs/codex/apple-experience/A14_SCRIPT_JOBS.md)：每台被接纳设备有独立JobId，冻结目录代次和ADB transport；队列出队及实际发送命令前重新核验，不因切换设备勾选或重连把旧任务发往新身份。“取消此任务”只取消选中记录，“停止所选设备”仍按当前设备勾选；已完成任务编号不能取消后来的新运行。记录保留100条终态及全部活动任务，每任务500条日志；真实启动返回文本最多16KiB，有明确截断标记。取消不会撤回已完成或已发送的设备动作，历史不跨运行时/重启持久化。独立及主仓各209项、原4/新5 VM案例已通过，最终构建有1条测试CS9124警告、0错误；真实模拟器与完整GUI仍按原矩阵另验，不将本项当完整脚本闭环完成。
 
 ## 数据与设备边界
 

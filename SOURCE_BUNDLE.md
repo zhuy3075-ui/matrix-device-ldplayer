@@ -1183,7 +1183,7 @@ using System.Xml.Linq;
 
 namespace MatrixDevice.Core;
 
-public sealed class AdbDeviceBackend : IDeviceBackend
+public sealed class AdbDeviceBackend : IDeviceBackend, IIdentityPinnedDeviceBackend
 {
     private readonly AppSettings _settings;
     private readonly ExistingAdbTransport _transport;
@@ -1210,6 +1210,30 @@ public sealed class AdbDeviceBackend : IDeviceBackend
         var endpoint = serverEndpoint ?? new IPEndPoint(IPAddress.Loopback, 5037);
         if (!IPAddress.IsLoopback(endpoint.Address)) throw new ArgumentException("ADB server must be on loopback.", nameof(serverEndpoint));
         _transport = new ExistingAdbTransport(settings, endpoint);
+    }
+
+    public IIdentityPinnedDeviceCommands BindIdentity(DeviceCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        return new IdentityCommands(this, catalog);
+    }
+
+    private sealed class IdentityCommands(AdbDeviceBackend owner, DeviceCatalog catalog) : IIdentityPinnedDeviceCommands
+    {
+        public bool IsDemo => false;
+        public Task<string> StartAppAsync(DeviceCommandTarget target, string packageName, CancellationToken ct = default)
+            => owner.StartAppCoreAsync(target.Serial, packageName, null, ct, target, catalog);
+        public Task TapAsync(DeviceCommandTarget target, int x, int y, CancellationToken ct = default)
+        {
+            ValidatePoint(x, y);
+            return owner.CommandAsync(target.Serial, $"input tap {x} {y}", ct, target, catalog);
+        }
+        public Task SwipeAsync(DeviceCommandTarget target, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default)
+        {
+            ValidatePoint(x1, y1); ValidatePoint(x2, y2);
+            if (durationMs < 1 || durationMs > 60000) throw new DeviceException($"Invalid swipe duration: {durationMs}.", 400, 1007);
+            return owner.CommandAsync(target.Serial, $"input swipe {x1} {y1} {x2} {y2} {durationMs}", ct, target, catalog);
+        }
     }
 
     public Task<string> ConnectNetworkAsync(string ip, int port, CancellationToken ct = default)
@@ -1451,6 +1475,10 @@ public sealed class AdbDeviceBackend : IDeviceBackend
         return CommandAsync(serial, "input text " + Quote(text.Replace(" ", "%s", StringComparison.Ordinal)), ct);
     }
     public Task<string> StartAppAsync(string serial, string packageName, string? activity = null, CancellationToken ct = default)
+        => StartAppCoreAsync(serial, packageName, activity, ct);
+
+    private Task<string> StartAppCoreAsync(string serial, string packageName, string? activity, CancellationToken ct,
+        DeviceCommandTarget? target = null, DeviceCatalog? catalog = null)
     {
         ValidatePackage(packageName);
         if (activity is not null && !Regex.IsMatch(activity, @"^[A-Za-z0-9_.$]+$")) throw new DeviceException($"Invalid activity: {activity}.", 400, 1007);
@@ -1473,7 +1501,7 @@ public sealed class AdbDeviceBackend : IDeviceBackend
             if (!output.Contains("Status: ok", StringComparison.OrdinalIgnoreCase))
                 throw new DeviceException($"Android activity launch was not confirmed: serial={serial}, package={packageName}: {output}", 502, 2000);
             return output;
-        }, ct);
+        }, ct, target, catalog);
     }
     public Task<string> StopAppAsync(string serial, string packageName, CancellationToken ct = default) { ValidatePackage(packageName); return ShellAsync(serial, "am force-stop " + packageName, ct: ct); }
     public async Task<bool> ClearAppAsync(string serial, string packageName, CancellationToken ct = default) { ValidatePackage(packageName); return (await ShellAsync(serial, "pm clear " + packageName, ct: ct)).Trim() == "Success"; }
@@ -1625,16 +1653,25 @@ public sealed class AdbDeviceBackend : IDeviceBackend
         }
     }
 
-    private Task CommandAsync(string serial, string command, CancellationToken ct) => RunDeviceAsync(serial, async token => { await ExecuteAsync(serial, ["shell", command], token); }, ct);
-    private Task<T> RunDeviceAsync<T>(string serial, Func<CancellationToken, Task<T>> action, CancellationToken ct)
+    private Task CommandAsync(string serial, string command, CancellationToken ct, DeviceCommandTarget? target = null, DeviceCatalog? catalog = null)
+        => RunDeviceAsync(serial, async token => { await ExecuteAsync(serial, ["shell", command], token); return true; }, ct, target, catalog);
+    private Task<T> RunDeviceAsync<T>(string serial, Func<CancellationToken, Task<T>> action, CancellationToken ct,
+        DeviceCommandTarget? target = null, DeviceCatalog? catalog = null)
     {
         AuthorizeSerial(serial);
-        var expected = _transport.CurrentTransport(serial) ?? throw new DeviceException($"ADB transport has not been discovered: {serial}; refresh devices first.", 503, 2000);
-        return _queue.RunAsync(serial, token => _transport.RunPinnedAsync(serial, expected, async pinned =>
+        if (target is not null) DeviceCommandIdentity.Require(catalog!, target, false);
+        var expected = target is not null ? target.TransportId!.Value
+            : _transport.CurrentTransport(serial) ?? throw new DeviceException($"ADB transport has not been discovered: {serial}; refresh devices first.", 503, 2000);
+        return _queue.RunAsync(serial, token => target is null
+            ? _transport.RunPinnedAsync(serial, expected, Execute, token)
+            : _transport.RunIdentityPinnedAsync(serial, expected, () => DeviceCommandIdentity.Require(catalog!, target, false), Execute, token), ct);
+
+        async Task<T> Execute(CancellationToken pinned)
         {
             if (_identityGuards.TryGetValue(serial, out var verify)) await verify(pinned).ConfigureAwait(false);
+            if (target is not null) DeviceCommandIdentity.Require(catalog!, target, false);
             return await action(pinned).ConfigureAwait(false);
-        }, token), ct);
+        }
     }
     internal uint? ObservedTransportId(string serial) => _transport.CurrentTransport(serial);
     private Task RunDeviceAsync(string serial, Func<CancellationToken, Task> action, CancellationToken ct) => RunDeviceAsync(serial, async token => { await action(token).ConfigureAwait(false); return true; }, ct);
@@ -1762,7 +1799,7 @@ using System.Text.RegularExpressions;
 
 namespace MatrixDevice.Core;
 
-public sealed class DemoDeviceBackend : IDeviceBackend
+public sealed class DemoDeviceBackend : IDeviceBackend, IIdentityPinnedDeviceBackend
 {
     private sealed class DeviceState
     {
@@ -1783,6 +1820,23 @@ public sealed class DemoDeviceBackend : IDeviceBackend
     {
         foreach (var (serial, width, height, model) in new[] { ("DEMO-001", 360, 640, "演示设备 A"), ("DEMO-002", 412, 720, "演示设备 B") })
             _devices[serial] = new DeviceState { Info = new DeviceInfo { Serial = serial, Name = model + "（模拟）", Brand = "演示", Model = model, AndroidVersion = "模拟", State = "Ready", ConnectionType = "Simulation", Width = width, Height = height, Rotation = 0 } };
+    }
+
+    public IIdentityPinnedDeviceCommands BindIdentity(DeviceCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        return new IdentityCommands(this, catalog);
+    }
+
+    private sealed class IdentityCommands(DemoDeviceBackend owner, DeviceCatalog catalog) : IIdentityPinnedDeviceCommands
+    {
+        public bool IsDemo => true;
+        public Task<string> StartAppAsync(DeviceCommandTarget target, string packageName, CancellationToken ct = default)
+            => owner.Run(target.Serial, device => StartApp(device, packageName), ct, target, catalog);
+        public Task TapAsync(DeviceCommandTarget target, int x, int y, CancellationToken ct = default)
+            => owner.Run(target.Serial, device => Tap(device, x, y), ct, target, catalog);
+        public Task SwipeAsync(DeviceCommandTarget target, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default)
+            => owner.Run(target.Serial, device => Swipe(device, x1, y1, x2, y2, durationMs), ct, target, catalog);
     }
     public void SetOnline(string serial, bool online)
     {
@@ -1819,8 +1873,19 @@ public sealed class DemoDeviceBackend : IDeviceBackend
         if (!device.Info.Online) throw new DeviceException($"Demo device offline: serial={serial}.", 410, 1003);
         return device;
     }
-    private Task<T> Run<T>(string serial, Func<DeviceState, T> action, CancellationToken ct) => _queue.RunAsync(serial, token => { token.ThrowIfCancellationRequested(); var device = Get(serial); lock (device) return Task.FromResult(action(device)); }, ct);
-    private Task Run(string serial, Action<DeviceState> action, CancellationToken ct) => Run(serial, device => { action(device); return true; }, ct);
+    private Task<T> Run<T>(string serial, Func<DeviceState, T> action, CancellationToken ct, DeviceCommandTarget? target = null, DeviceCatalog? catalog = null)
+    {
+        if (target is not null) DeviceCommandIdentity.Require(catalog!, target, true);
+        return _queue.RunAsync(serial, token =>
+        {
+            token.ThrowIfCancellationRequested();
+            if (target is not null) DeviceCommandIdentity.Require(catalog!, target, true);
+            var device = Get(serial);
+            lock (device) return Task.FromResult(action(device));
+        }, ct);
+    }
+    private Task Run(string serial, Action<DeviceState> action, CancellationToken ct, DeviceCommandTarget? target = null, DeviceCatalog? catalog = null)
+        => Run(serial, device => { action(device); return true; }, ct, target, catalog);
 
     public Task<string> ShellAsync(string serial, string command, bool useRoot = false, CancellationToken ct = default) => Run(serial, device =>
     {
@@ -1877,11 +1942,16 @@ public sealed class DemoDeviceBackend : IDeviceBackend
             new() { Text = "Settings", ResourceId = "com.matrix.demo:id/settings", ClassName = "android.widget.Button", PackageName = device.ActiveApp, Clickable = true, Enabled = true, Instance = 1, Index = 3, Bounds = new(22, 402, device.Info.Width - 22, 450) }
         ]
     }, ct);
-    public Task TapAsync(string serial, int x, int y, CancellationToken ct = default) => Run(serial, device => { CheckPoint(device, x, y); device.Count++; }, ct);
-    public Task SwipeAsync(string serial, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default) => Run(serial, device => { CheckPoint(device, x1, y1); CheckPoint(device, x2, y2); if (durationMs <= 0 || durationMs > 60000) throw new DeviceException("Swipe duration must be in 1..60000ms.", 400, 1007); device.Count++; }, ct);
+    public Task TapAsync(string serial, int x, int y, CancellationToken ct = default) => Run(serial, device => Tap(device, x, y), ct);
+    public Task SwipeAsync(string serial, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default) => Run(serial, device => Swipe(device, x1, y1, x2, y2, durationMs), ct);
+    private static void Tap(DeviceState device, int x, int y) { CheckPoint(device, x, y); device.Count++; }
+    private static void Swipe(DeviceState device, int x1, int y1, int x2, int y2, int durationMs)
+    { CheckPoint(device, x1, y1); CheckPoint(device, x2, y2); if (durationMs <= 0 || durationMs > 60000) throw new DeviceException("Swipe duration must be in 1..60000ms.", 400, 1007); device.Count++; }
     public Task KeyEventAsync(string serial, int code, CancellationToken ct = default) => Run(serial, device => { if (code < 0 || code > 400) throw new DeviceException("Invalid demo key code.", 400, 1007); if (code == 3) device.ActiveApp = "com.matrix.demo"; }, ct);
     public Task TextAsync(string serial, string text, CancellationToken ct = default) => Run(serial, device => device.Text = text, ct);
-    public Task<string> StartAppAsync(string serial, string packageName, string? activity = null, CancellationToken ct = default) => Run(serial, device => { if (!device.Apps.Contains(packageName)) throw new DeviceException($"演示应用未安装：{packageName}", 404, 1002); device.ActiveApp = packageName; return "演示应用已启动：" + packageName; }, ct);
+    public Task<string> StartAppAsync(string serial, string packageName, string? activity = null, CancellationToken ct = default) => Run(serial, device => StartApp(device, packageName), ct);
+    private static string StartApp(DeviceState device, string packageName)
+    { if (!device.Apps.Contains(packageName)) throw new DeviceException($"演示应用未安装：{packageName}", 404, 1002); device.ActiveApp = packageName; return "演示应用已启动：" + packageName; }
     public Task<string> StopAppAsync(string serial, string packageName, CancellationToken ct = default) => Run(serial, device => { device.ActiveApp = "com.matrix.demo"; return "演示应用已停止：" + packageName; }, ct);
     public Task<bool> ClearAppAsync(string serial, string packageName, CancellationToken ct = default) => Run(serial, device => { if (!device.Apps.Contains(packageName)) return false; device.Count = 0; device.Text = "DEMO INPUT"; return true; }, ct);
     public Task<IReadOnlyList<AppInfo>> ListAppsAsync(string serial, bool showSystem = false, bool needVersion = true, CancellationToken ct = default) => Run<IReadOnlyList<AppInfo>>(serial, device => device.Apps.Where(package => showSystem || package != "com.android.settings").Select(package => new AppInfo(package, package, needVersion ? "1.0-demo" : null, package == "com.android.settings")).ToArray(), ct);
@@ -2138,6 +2208,7 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
     private readonly AdbServerEpoch serverEpoch = new();
     private Dictionary<string, uint> transports = new(StringComparer.Ordinal);
     private readonly AsyncLocal<uint?> pinnedTransport = new();
+    private readonly AsyncLocal<(string Serial, Action Require)?> pinnedIdentity = new();
     public void InheritServerEpoch(ExistingAdbTransport source) => serverEpoch.Require(source.serverEpoch.Snapshot);
     public uint? CurrentTransport(string serial) { lock (transportGate) return transports.TryGetValue(serial, out var id) ? id : null; }
     public void ReplaceTransports(Dictionary<string, uint> current) { lock (transportGate) transports = current; }
@@ -2153,6 +2224,15 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
         pinnedTransport.Value = expected;
         try { return await action(ct).ConfigureAwait(false); }
         finally { pinnedTransport.Value = previous; }
+    }
+    public async Task<T> RunIdentityPinnedAsync<T>(string serial, uint expected, Action requireIdentity,
+        Func<CancellationToken, Task<T>> action, CancellationToken ct)
+    {
+        requireIdentity();
+        var previous = pinnedIdentity.Value;
+        pinnedIdentity.Value = (serial, requireIdentity);
+        try { return await RunPinnedAsync(serial, expected, action, ct).ConfigureAwait(false); }
+        finally { pinnedIdentity.Value = previous; }
     }
     public async Task<byte[]> ExecuteAsync(string? serial, string[] args, CancellationToken ct)
     {
@@ -2175,6 +2255,11 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
                 await socket.ReadAdbResponseAsync(token).ConfigureAwait(false);
                 var text = await socket.ReadStringAsync(token).ConfigureAwait(false);
                 return Encoding.UTF8.GetBytes(args[0] == "devices" ? "List of devices attached\n" + text : text);
+            }
+            if (pinnedIdentity.Value is { } identity)
+            {
+                if (identity.Serial != serial) throw new DeviceException($"任务不能跨设备发送：expected={identity.Serial}, actual={serial}。", 409, 1003);
+                identity.Require();
             }
             var transport = pinnedTransport.Value ?? CurrentTransport(serial) ?? throw new DeviceException($"ADB transport has not been discovered: {serial}.", 503, 2000);
             RequireTransport(serial, transport);
@@ -2244,6 +2329,11 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
                 "uninstall" => "pm uninstall " + AdbDeviceBackend.Quote(args[1]),
                 _ => throw new DeviceException($"Unsupported ADB operation: {args[0]}.", 400, 1007)
             };
+            if (pinnedIdentity.Value is { } sending)
+            {
+                sending.Require();
+                RequireTransport(serial, transport);
+            }
             await socket.SendAdbRequestAsync("shell,v2,raw:" + command, token).ConfigureAwait(false);
             await socket.ReadAdbResponseAsync(token).ConfigureAwait(false);
             await socket.SendAsync(new byte[] { 4, 0, 0, 0, 0 }, token).ConfigureAwait(false);
@@ -2559,6 +2649,43 @@ internal sealed class ExistingAdbTransport(AppSettings settings, IPEndPoint endp
             if (target.Length + payload.Length > limit) throw new DeviceException($"ADB shell output too large: {command}.", 413, 1007);
             await target.WriteAsync(payload, ct).ConfigureAwait(false);
         }
+    }
+}
+
+```
+
+## src/MatrixDevice.Core/Devices/IdentityPinnedDeviceCommands.cs
+
+```csharp
+namespace MatrixDevice.Core;
+
+public sealed record DeviceCommandTarget(string Serial, long Generation, uint? TransportId, bool IsDemo);
+
+public interface IIdentityPinnedDeviceBackend
+{
+    IIdentityPinnedDeviceCommands BindIdentity(DeviceCatalog catalog);
+}
+
+public interface IIdentityPinnedDeviceCommands
+{
+    bool IsDemo { get; }
+    Task<string> StartAppAsync(DeviceCommandTarget target, string packageName, CancellationToken ct = default);
+    Task TapAsync(DeviceCommandTarget target, int x, int y, CancellationToken ct = default);
+    Task SwipeAsync(DeviceCommandTarget target, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default);
+}
+
+internal static class DeviceCommandIdentity
+{
+    internal static void Require(DeviceCatalog catalog, DeviceCommandTarget target, bool isDemo)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(target);
+        if (string.IsNullOrWhiteSpace(target.Serial) || target.Generation <= 0 || target.IsDemo != isDemo
+            || (isDemo ? target.TransportId is not null : target.TransportId is null or 0))
+            throw new DeviceException($"任务目标身份无效：serial={target.Serial}, generation={target.Generation}, transport={target.TransportId}, demo={target.IsDemo}。", 400, 1007);
+        var current = catalog.GetRequired(target.Serial);
+        if (current.Generation != target.Generation || current.TransportId != target.TransportId)
+            throw new DeviceException($"任务目标身份已变化：serial={target.Serial}, expected generation={target.Generation}/transport={target.TransportId}, actual generation={current.Generation}/transport={current.TransportId}。", 409, 1003);
     }
 }
 
@@ -4247,6 +4374,7 @@ public partial class App : Application
                 if (Directory.Exists(scriptDirectory) || File.Exists(scriptDirectory)) throw new ArgumentException("脚本参数 VM 验收必须使用尚不存在的独立 artifacts 目录。");
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
                 await ScriptParameterEditingSmoke.RunAsync(scriptDirectory, Dispatcher);
+                await ScriptJobEditingSmoke.RunAsync(scriptDirectory, Dispatcher);
                 Shutdown(0);
                 return;
             }
@@ -6075,6 +6203,141 @@ internal static class ResponsiveLayout
     [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(IntPtr window, out NativeRect bounds);
+}
+
+```
+
+## src/MatrixDevice.Desktop/ScriptJobWorkspace.cs
+
+```csharp
+using System.Collections.ObjectModel;
+using System.Windows;
+using MatrixDevice.Features;
+
+namespace MatrixDevice.Desktop;
+
+public sealed partial class WorkspaceViewModel
+{
+    private IReadOnlyList<DeviceRow> RequireScriptTargets()
+    {
+        if (Busy || Transferring) throw new InvalidOperationException("请等待当前操作结束再运行脚本");
+        if (pendingLaunchSelection > 0) throw new InvalidOperationException("所选目标包含未连接设备，请先接入全部目标");
+        var targets = Targets();
+        if (targets.Count == 0) throw new InvalidOperationException("请先选择目标设备");
+        if (targets.Any(row => !row.Info.Online)) throw new InvalidOperationException("所选目标包含未连接设备，请先接入全部目标");
+        return targets;
+    }
+    private ScriptJobRow? selectedScriptJob;
+    private Action<ScriptJobStatus>? scriptJobChanged;
+    private Action<Guid, ScriptLogEntry>? scriptJobLogAdded;
+    private readonly HashSet<Task> scriptJobObservers = [];
+    public ObservableCollection<ScriptJobRow> ScriptJobs { get; } = [];
+    public ActionCommand CancelScriptJobCommand { get; }
+    public ScriptJobRow? SelectedScriptJob
+    {
+        get => selectedScriptJob;
+        set { if (Set(ref selectedScriptJob, value)) { LoadScriptLogs(); RefreshCommands(); } }
+    }
+    public string ScriptLogContext => SelectedScriptJob is { } job ? $"任务日志 · {job.JobId} · {job.Serial}" : "设备日志 · 最近 500 条";
+
+    private void AttachScriptJobs()
+    {
+        var source = runtime.Scripts;
+        scriptJobChanged = _ => Application.Current.Dispatcher.BeginInvoke(() =>
+        {
+            if (!ReferenceEquals(source, runtime.Scripts)) return;
+            RefreshScriptJobs();
+        });
+        scriptJobLogAdded = (id, _) => Application.Current.Dispatcher.BeginInvoke(() =>
+        {
+            if (ReferenceEquals(source, runtime.Scripts) && SelectedScriptJob?.JobId == id) LoadScriptLogs();
+        });
+        source.JobChanged += scriptJobChanged;
+        source.JobLogAdded += scriptJobLogAdded;
+        RefreshScriptJobs();
+    }
+
+    private void DetachScriptJobs(ScriptScheduler source)
+    {
+        if (scriptJobChanged is not null) source.JobChanged -= scriptJobChanged;
+        if (scriptJobLogAdded is not null) source.JobLogAdded -= scriptJobLogAdded;
+    }
+
+    private void RefreshScriptJobs()
+    {
+        var jobs = runtime.Scripts.GetJobs();
+        var retained = jobs.Select(job => job.JobId).ToHashSet();
+        foreach (var row in ScriptJobs.Where(row => !retained.Contains(row.JobId)).ToArray()) ScriptJobs.Remove(row);
+        for (var index = 0; index < jobs.Count; index++)
+        {
+            var job = jobs[index];
+            var row = ScriptJobs.FirstOrDefault(item => item.JobId == job.JobId);
+            if (row is null) { row = new ScriptJobRow(job); ScriptJobs.Add(row); }
+            else row.Update(job);
+            var previousIndex = ScriptJobs.IndexOf(row);
+            if (previousIndex != index) ScriptJobs.Move(previousIndex, index);
+        }
+        if (SelectedScriptJob is { } selected && !retained.Contains(selected.JobId)) SelectedScriptJob = null;
+        RefreshCommands();
+    }
+
+    public void CancelSelectedScriptJob()
+    {
+        if (SelectedScriptJob is not { } job) return;
+        var accepted = runtime.Scripts.CancelJob(job.JobId);
+        Status = accepted ? $"已请求取消任务 {job.JobId}" : "该任务已结束或不在当前会话中";
+        RefreshScriptJobs();
+    }
+
+    private async Task ObserveScriptJobAsync(ScriptScheduler source, ScriptJobHandle handle, string serial)
+    {
+        try { await handle.Completion; }
+        catch (Exception ex)
+        {
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                if (!ReferenceEquals(source, runtime.Scripts)) return;
+                Error = $"脚本任务 {handle.JobId} · {serial}：{PresentError(ex)}";
+                AddActivity(Error);
+            });
+        }
+    }
+
+    private void TrackScriptJob(ScriptScheduler source, ScriptJobHandle handle, string serial)
+    {
+        scriptJobObservers.RemoveWhere(task => task.IsCompletedSuccessfully);
+        scriptJobObservers.Add(ObserveScriptJobAsync(source, handle, serial));
+    }
+
+    private async Task DrainScriptJobObserversAsync()
+    {
+        await Task.WhenAll(scriptJobObservers.ToArray());
+        scriptJobObservers.Clear();
+    }
+}
+
+public sealed class ScriptJobRow(ScriptJobStatus status) : ObservableObject
+{
+    public ScriptJobStatus Status { get; private set; } = status;
+    public Guid JobId => Status.JobId;
+    public string Serial => Status.Target.Serial;
+    public string Identity => $"{Serial} · 代次 {Status.Target.Generation} · {(Status.Target.IsDemo ? "演示" : "传输 " + Status.Target.TransportId)}";
+    public string Package => $"{Status.PackageId} · {Status.PackageVersion}";
+    public string State => Status.State switch
+    {
+        ScriptRunState.Running => "运行中", ScriptRunState.Cancelling => "取消中", ScriptRunState.Completed => "已完成",
+        ScriptRunState.Cancelled => "已取消", ScriptRunState.Failed => "失败", _ => "未运行"
+    };
+    public string Progress => $"{Math.Max(0, Status.StepIndex + 1)}/{Status.StepCount}";
+    public string Started => Status.StartedUtc.ToLocalTime().ToString("MM-dd HH:mm:ss");
+    public string Ended => Status.EndedUtc?.ToLocalTime().ToString("MM-dd HH:mm:ss") ?? "";
+    public string Result => Status.Error ?? Status.Result ?? "";
+    public bool CanCancel => Status.State == ScriptRunState.Running;
+    public void Update(ScriptJobStatus value)
+    {
+        Status = value;
+        foreach (var property in new[] { nameof(Status), nameof(State), nameof(Progress), nameof(Ended), nameof(Result), nameof(CanCancel) }) Changed(property);
+    }
 }
 
 ```
@@ -16853,6 +17116,238 @@ public partial class MainWindow
 
 ```
 
+## src/MatrixDevice.Desktop/Views/ScriptJobEditingSmoke.cs
+
+```csharp
+using System.Collections.Concurrent;
+using System.IO;
+using System.IO.Compression;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Threading;
+using MatrixDevice.Core;
+using MatrixDevice.Features;
+using MatrixDevice.Host;
+
+namespace MatrixDevice.Desktop;
+
+internal static class ScriptJobEditingSmoke
+{
+    internal static async Task RunAsync(string dataDirectory, Dispatcher dispatcher)
+    {
+        if (!dispatcher.CheckAccess() || Thread.CurrentThread.GetApartmentState() != ApartmentState.STA
+            || Application.Current.Windows.Count != 0 || Application.Current.MainWindow is not null)
+            throw new InvalidOperationException("脚本任务 VM 验收仅限无窗口的自有 Demo/STA。");
+        var directory = Path.Combine(dataDirectory, "script-job-editing");
+        if (Directory.Exists(directory)) throw new InvalidOperationException("任务验收目录已存在。");
+        Directory.CreateDirectory(directory);
+        var reports = new List<object>(); var failures = new List<Exception>(); var failureClasses = new HashSet<string>(); var stopRemaining = false;
+        await Case("selection-and-package-edit-do-not-retarget", async state =>
+        {
+            await state.Import("com.android.settings", 0);
+            state.Select(true, false); await state.Vm.StartScriptAsync();
+            var job = state.Runtime.Scripts.GetJobs().Single();
+            await state.Backend.Entered("DEMO-001");
+            state.Select(false, true); state.Vm.CurrentDevice = state.B;
+            await state.Import("com.matrix.demo", 0);
+            state.Backend.Release("DEMO-001");
+            await state.Terminal(job.JobId); await state.Fence();
+            Require((await state.Backend.DumpAsync("DEMO-001")).PackageName == "com.android.settings", "编辑包或目标选择改变了已接纳任务的实际 A 效果。");
+            Require((await state.Backend.DumpAsync("DEMO-002")).PackageName == "com.matrix.demo", "未接纳的 B 被执行。");
+            Require(state.Vm.ScriptJobs.Single().JobId == job.JobId && state.Vm.SelectedScriptJob?.JobId == job.JobId, "任务记录身份漂移。");
+            Require(state.Vm.ScriptLogs.Count == state.Runtime.Scripts.GetJobLogs(job.JobId).Count, "切换当前设备覆盖了选中任务日志。");
+        });
+        await Case("cancel-job-not-current-device-selection", async state =>
+        {
+            await state.Import("com.android.settings", 0);
+            state.Select(true, true); await state.Vm.StartScriptAsync();
+            var jobs = state.Runtime.Scripts.GetJobs();
+            var a = jobs.Single(job => job.Target.Serial == "DEMO-001"); var b = jobs.Single(job => job.Target.Serial == "DEMO-002");
+            await Task.WhenAll(state.Backend.Entered("DEMO-001"), state.Backend.Entered("DEMO-002"));
+            state.Vm.SelectedScriptJob = state.Vm.ScriptJobs.Single(row => row.JobId == a.JobId);
+            state.Select(false, true); state.Vm.CurrentDevice = state.B;
+            Require(state.Vm.CancelScriptJobCommand.CanExecute(null), "活动任务取消命令不可用。");
+            state.Vm.CancelScriptJobCommand.Execute(null);
+            state.Backend.Release("DEMO-002");
+            await Task.WhenAll(state.Terminal(a.JobId), state.Terminal(b.JobId)); await state.Fence();
+            Require(state.Runtime.Scripts.GetJob(a.JobId)!.State == ScriptRunState.Cancelled && state.Runtime.Scripts.GetJob(b.JobId)!.State == ScriptRunState.Completed, "按任务取消停错设备或影响并行任务。");
+            Require((await state.Backend.DumpAsync("DEMO-001")).PackageName == "com.matrix.demo" && (await state.Backend.DumpAsync("DEMO-002")).PackageName == "com.android.settings", "取消后的实际双目标效果不符合预期。");
+        });
+        await Case("old-selected-job-cannot-cancel-new-same-device-run", async state =>
+        {
+            await state.Import("com.matrix.demo", 0); state.Select(true, false); await state.Vm.StartScriptAsync();
+            var old = state.Runtime.Scripts.GetJobs().Single(); await state.Backend.Entered("DEMO-001"); state.Backend.Release("DEMO-001"); await state.Terminal(old.JobId); await state.Fence();
+            var oldRow = state.Vm.ScriptJobs.Single(); var oldLogs = state.Runtime.Scripts.GetJobLogs(old.JobId).ToArray();
+            state.Backend.Block("DEMO-001"); await state.Import("com.android.settings", 0); await state.Vm.StartScriptAsync();
+            var next = state.Runtime.Scripts.GetJobs().Single(job => job.JobId != old.JobId);
+            await state.Backend.Entered("DEMO-001");
+            state.Vm.SelectedScriptJob = oldRow;
+            Require(!state.Vm.CancelScriptJobCommand.CanExecute(null), "终态任务仍显示可取消。");
+            state.Vm.CancelSelectedScriptJob();
+            Require(state.Runtime.Scripts.GetJob(next.JobId)!.State == ScriptRunState.Running, "取消旧记录改变了在途新任务状态。");
+            state.Backend.Release("DEMO-001");
+            await state.Terminal(next.JobId); await state.Fence();
+            Require(state.Runtime.Scripts.GetJob(next.JobId)!.State == ScriptRunState.Completed && (await state.Backend.DumpAsync("DEMO-001")).PackageName == "com.android.settings", "旧任务取消影响同串号新任务。");
+            Require(oldLogs.SequenceEqual(state.Runtime.Scripts.GetJobLogs(old.JobId)) && state.Vm.ScriptJobs.Count == 2, "后一次运行覆盖了旧任务日志或记录。");
+        });
+        await Case("stale-row-rejected-without-metadata-or-effect", async state =>
+        {
+            await state.Import("com.android.settings", 0); state.Select(true, false);
+            state.A.Info = state.A.Info with { Generation = state.A.Info.Generation + 1 };
+            await state.Vm.StartScriptAsync(); await state.Fence();
+            Require(state.Vm.Error.Length > 0 && state.Runtime.Scripts.GetJobs().Count == 0 && state.Vm.ScriptJobs.Count == 0, "失效身份被接纳或未显示拒绝。");
+            Require(state.Runtime.Metadata.GetAll<ScriptDeviceParameters>("ScriptDeviceConfiguration").Count == 0, "未接纳的身份写入参数记录。");
+            Require((await state.Backend.DumpAsync("DEMO-001")).PackageName == "com.matrix.demo", "身份拒绝仍触发应用启动。");
+        });
+        await Case("busy-target-rejected-idle-target-admitted", async state =>
+        {
+            await state.Import("com.android.settings", 0); state.Select(true, true);
+            state.OwnedRuns.Add(state.Runtime.Scripts.RunAsync("DEMO-001", new ScriptPackage
+            {
+                Manifest = new() { Id = "owned-legacy", Name = "自有占用", Version = "1.0" }, Steps = [new() { Action = "wait", DurationMs = 60000 }]
+            }));
+            Require(state.Vm.StartScriptCommand.CanExecute(null), "一个忙目标阻止了空闲目标的明确提交。");
+            await state.Vm.StartScriptAsync();
+            var job = state.Runtime.Scripts.GetJobs().Single();
+            Require(job.Target.Serial == "DEMO-002" && state.Vm.Error.Contains("DEMO-001", StringComparison.Ordinal), "未正确汇总 A 拒绝与 B 接纳。");
+            var saved = state.Runtime.Metadata.GetAll<ScriptDeviceParameters>("ScriptDeviceConfiguration");
+            Require(saved.Count == 1 && saved.Single().Serial == "DEMO-002", "为未接纳的忙目标保存了参数。");
+            await state.Backend.Entered("DEMO-002"); state.Backend.Release("DEMO-002"); await state.Terminal(job.JobId); await state.Fence();
+            Require((await state.Backend.DumpAsync("DEMO-002")).PackageName == "com.android.settings" && state.Runtime.Scripts.GetStatus("DEMO-001").State == ScriptRunState.Running, "空闲目标无实际效果，或改变了原忙目标。");
+        });
+        File.WriteAllText(Path.Combine(directory, "summary.json"), JsonSerializer.Serialize(new
+        {
+            status = failures.Count == 0 ? "PASS-SCRIPT-JOB-EDITING" : failureClasses.Count == 1 ? failureClasses.Single() : "MIXED-FAIL", reports, failureClasses,
+            scope = "Owned Demo backend and real WorkspaceViewModel import/start/select/cancel/log paths. No Window, physical input, GUI, ADB, APK, API or real-instance acceptance.",
+            windows = Application.Current.Windows.Count, errors = failures.Select(error => error.ToString()).ToArray()
+        }, JsonDefaults.Options));
+        if (failures.Count > 0) throw new AggregateException("脚本任务 VM 验收失败", failures);
+
+        async Task Case(string name, Func<State, Task> action)
+        {
+            if (stopRemaining) { reports.Add(new { name, status = "NOT-RUN", reason = "前一案例清理失败" }); return; }
+            var state = new State(Path.Combine(directory, name), dispatcher); Exception? failure = null; bool cleaned = false, initialized = false; var classes = new HashSet<string>();
+            try { await state.Initialize(); initialized = true; await action(state); }
+            catch (Exception error) { failure = error; classes.Add(!initialized ? "PRECONDITION-FAIL" : error is ProductFailure ? "PRODUCT-FAIL" : "FIXTURE-FAIL"); }
+            finally
+            {
+                try { await state.Cleanup(); cleaned = true; }
+                catch (Exception error) { failure = failure is null ? error : new AggregateException(failure, error); classes.Add("CLEANUP-FAIL"); }
+            }
+            foreach (var classification in classes) failureClasses.Add(classification);
+            reports.Add(new { name, status = failure is null ? "PASS" : classes.Count == 1 ? classes.Single() : "MIXED-FAIL", failureClasses = classes, initialized, cleaned, jobs = state.Jobs, error = failure?.ToString() });
+            if (failure is not null) failures.Add(failure);
+            if (!cleaned) stopRemaining = true;
+        }
+    }
+
+    private sealed class ProductFailure(string message) : Exception(message);
+    private static void Require(bool condition, string message) { if (!condition) throw new ProductFailure(message); }
+    private sealed class State(string directory, Dispatcher dispatcher)
+    {
+        internal MatrixRuntime Runtime = null!;
+        internal WorkspaceViewModel Vm = null!;
+        internal readonly JobBackend Backend = new();
+        internal DeviceRow A => Vm.Devices.Single(row => row.Serial == "DEMO-001");
+        internal DeviceRow B => Vm.Devices.Single(row => row.Serial == "DEMO-002");
+        internal ScriptJobStatus[] Jobs = [];
+        internal readonly List<Task> OwnedRuns = [];
+        private readonly ConcurrentDictionary<Guid, TaskCompletionSource> terminals = new();
+        internal async Task Initialize()
+        {
+            Directory.CreateDirectory(directory);
+            var settings = new AppSettings { Language = "zh-CN" };
+            var catalog = new DeviceCatalog(Backend); var scheduler = new ScriptScheduler(Backend, catalog, true);
+            var automation = new AutomationService(Backend, catalog); var log = new RollingLog(Path.Combine(directory, "logs"));
+            Runtime = new MatrixRuntime
+            {
+                Backend = Backend, Devices = catalog, Scripts = scheduler, Automation = automation,
+                Input = new InputCoordinator(catalog, Backend), Log = log,
+                Metadata = new CatalogRepository(Path.Combine(directory, "db.sqlite3")), Settings = settings, FrozenConnectionSettings = settings,
+                SettingsStore = new SettingsStore(Path.Combine(directory, "AppConfig.json")), IsDemo = true,
+                Api = new ApiServiceManager(catalog, Backend, automation, log)
+            };
+            Runtime.Scripts.JobChanged += OnJob;
+            Vm = new WorkspaceViewModel(Runtime, directory, true); await Vm.RefreshDevicesAsync();
+            Require(Runtime.IsDemo && Vm.Demo && Vm.Devices.Count == 2 && !Runtime.Api.BasicRunning && !Runtime.Api.AutomatorRunning, "自有无接口 Demo 前置不成立。");
+            Vm.CurrentDevice = A;
+        }
+        private void OnJob(ScriptJobStatus status)
+        {
+            if (status.State is ScriptRunState.Completed or ScriptRunState.Cancelled or ScriptRunState.Failed)
+                terminals.GetOrAdd(status.JobId, _ => new(TaskCreationOptions.RunContinuationsAsynchronously)).TrySetResult();
+        }
+        internal Task Terminal(Guid id) => terminals.GetOrAdd(id, _ => new(TaskCreationOptions.RunContinuationsAsynchronously)).Task.WaitAsync(TimeSpan.FromSeconds(10));
+        internal Task Fence() => dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle).Task;
+        internal void Select(bool a, bool b) { A.IsSelected = a; B.IsSelected = b; Vm.UpdateSelection(); }
+        internal async Task Import(string app, int wait)
+        {
+            var package = new ScriptPackage { Manifest = new() { Id = "owned-job", Name = "自有任务验收", Version = "1.0" }, Steps = [new() { Action = "wait", DurationMs = wait }, new() { Action = "launchapp", Value = app }] };
+            var path = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".jxscript");
+            ScriptPackageService.Save(path, package); await Vm.ImportScriptAsync(path);
+            Require(Vm.Error.Length == 0, "真实脚本导入失败：" + Vm.Error);
+        }
+        internal async Task Cleanup()
+        {
+            if (Runtime is null) { await Backend.DisposeAsync(); return; }
+            if (Vm is null) { await Runtime.DisposeAsync(); return; }
+            await Vm.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await Task.WhenAll(OwnedRuns).WaitAsync(TimeSpan.FromSeconds(10));
+            Runtime.Scripts.JobChanged -= OnJob;
+            await Fence(); Jobs = Runtime.Scripts.GetJobs().ToArray();
+            Require(Jobs.All(job => job.State is ScriptRunState.Completed or ScriptRunState.Cancelled or ScriptRunState.Failed), "清理后仍有活动任务。");
+            Require(Application.Current.Windows.Count == 0 && Application.Current.MainWindow is null, "无窗验收创建了窗口。");
+        }
+    }
+
+    private sealed class JobBackend : IDeviceBackend, IIdentityPinnedDeviceBackend
+    {
+        private sealed class Gate
+        {
+            internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            internal readonly TaskCompletionSource Released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        private readonly DemoDeviceBackend inner = new();
+        private readonly ConcurrentDictionary<string, Gate> gates = new();
+        internal void Block(string serial) => gates[serial] = new();
+        internal Task Entered(string serial) => gates.GetOrAdd(serial, _ => new()).Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        internal void Release(string serial) => gates.GetOrAdd(serial, _ => new()).Released.TrySetResult();
+        public IIdentityPinnedDeviceCommands BindIdentity(DeviceCatalog catalog) => new Pinned(this, inner.BindIdentity(catalog));
+        private sealed class Pinned(JobBackend owner, IIdentityPinnedDeviceCommands commands) : IIdentityPinnedDeviceCommands
+        {
+            public bool IsDemo => commands.IsDemo;
+            public async Task<string> StartAppAsync(DeviceCommandTarget target, string packageName, CancellationToken ct = default)
+            {
+                var gate = owner.gates.GetOrAdd(target.Serial, _ => new()); gate.Entered.TrySetResult();
+                await gate.Released.Task.WaitAsync(ct);
+                return await commands.StartAppAsync(target, packageName, ct);
+            }
+            public Task TapAsync(DeviceCommandTarget target, int x, int y, CancellationToken ct = default) => commands.TapAsync(target, x, y, ct);
+            public Task SwipeAsync(DeviceCommandTarget target, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default) => commands.SwipeAsync(target, x1, y1, x2, y2, durationMs, ct);
+        }
+        public Task<IReadOnlyList<DeviceInfo>> DiscoverAsync(CancellationToken ct = default) => inner.DiscoverAsync(ct);
+        public Task<string> ShellAsync(string serial, string command, bool useRoot = false, CancellationToken ct = default) => inner.ShellAsync(serial, command, useRoot, ct);
+        public Task<byte[]> ScreenshotAsync(string serial, CancellationToken ct = default) => inner.ScreenshotAsync(serial, ct);
+        public Task<AndroidNode> DumpAsync(string serial, CancellationToken ct = default) => inner.DumpAsync(serial, ct);
+        public Task TapAsync(string serial, int x, int y, CancellationToken ct = default) => inner.TapAsync(serial, x, y, ct);
+        public Task SwipeAsync(string serial, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default) => inner.SwipeAsync(serial, x1, y1, x2, y2, durationMs, ct);
+        public Task KeyEventAsync(string serial, int code, CancellationToken ct = default) => inner.KeyEventAsync(serial, code, ct);
+        public Task TextAsync(string serial, string text, CancellationToken ct = default) => inner.TextAsync(serial, text, ct);
+        public Task<string> StartAppAsync(string serial, string packageName, string? activity = null, CancellationToken ct = default) => inner.StartAppAsync(serial, packageName, activity, ct);
+        public Task<string> StopAppAsync(string serial, string packageName, CancellationToken ct = default) => inner.StopAppAsync(serial, packageName, ct);
+        public Task<bool> ClearAppAsync(string serial, string packageName, CancellationToken ct = default) => inner.ClearAppAsync(serial, packageName, ct);
+        public Task<IReadOnlyList<AppInfo>> ListAppsAsync(string serial, bool showSystem = false, bool needVersion = true, CancellationToken ct = default) => inner.ListAppsAsync(serial, showSystem, needVersion, ct);
+        public Task InstallAsync(string serial, string localPath, CancellationToken ct = default) => inner.InstallAsync(serial, localPath, ct);
+        public Task UninstallAsync(string serial, string packageName, CancellationToken ct = default) => inner.UninstallAsync(serial, packageName, ct);
+        public Task PushAsync(string serial, string localPath, string remotePath, IProgress<double>? progress = null, CancellationToken ct = default) => inner.PushAsync(serial, localPath, remotePath, progress, ct);
+        public Task PullAsync(string serial, string remotePath, string localPath, IProgress<double>? progress = null, CancellationToken ct = default) => inner.PullAsync(serial, remotePath, localPath, progress, ct);
+        public Task SetNodeTextAsync(string serial, NodeSelector selector, string text, CancellationToken ct = default) => inner.SetNodeTextAsync(serial, selector, text, ct);
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+}
+
+```
+
 ## src/MatrixDevice.Desktop/Views/ScriptParameterEditingSmoke.cs
 
 ```csharp
@@ -16991,7 +17486,7 @@ internal static class ScriptParameterEditingSmoke
             Directory.CreateDirectory(directory);
             var ownLog = new RollingLog(Path.Combine(directory, "logs")); log = ownLog;
             var ownMetadata = new CatalogRepository(Path.Combine(directory, "db.sqlite3")); metadata = ownMetadata;
-            var catalog = new DeviceCatalog(Backend); var automation = new AutomationService(Backend, catalog); var scheduler = new ScriptScheduler(Backend); scripts = scheduler;
+            var catalog = new DeviceCatalog(Backend); var automation = new AutomationService(Backend, catalog); var scheduler = new ScriptScheduler(Backend, catalog, true); scripts = scheduler;
             var coordinator = new InputCoordinator(catalog, Backend); input = coordinator; var services = new ApiServiceManager(catalog, Backend, automation, ownLog); api = services;
             var settings = new AppSettings { Language = "zh-CN", AutoStartApi = false, AutoConnect = false, SyncMouse = false, SyncKeyboard = false };
             Runtime = new MatrixRuntime { Backend = Backend, Devices = catalog, Automation = automation, Scripts = scheduler, Input = coordinator, Api = services,
@@ -17111,7 +17606,7 @@ internal static class ScriptParameterEditingSmoke
     }
 
     private sealed record ScriptParameterEditingCall(string Phase, string Operation, string? Serial, string? Subject, string Status, bool Completed, string? Error);
-    private sealed class ScriptParameterEditingBackend : IDeviceBackend
+    private sealed class ScriptParameterEditingBackend : IDeviceBackend, IIdentityPinnedDeviceBackend
     {
         private sealed class Call(string phase, string operation, string? serial, string? subject)
         { internal readonly string Phase = phase, Operation = operation; internal readonly string? Serial = serial, Subject = subject; internal Task? Task; internal string? Error; }
@@ -17120,6 +17615,14 @@ internal static class ScriptParameterEditingSmoke
         internal ScriptParameterEditingCall[] Calls(string? phase = null) { lock (sync) return calls.Where(call => phase is null || call.Phase == phase).Select(call => new ScriptParameterEditingCall(call.Phase, call.Operation, call.Serial, call.Subject, call.Task?.Status.ToString() ?? "SynchronousThrow", call.Task?.IsCompleted ?? call.Error is not null, call.Error ?? call.Task?.Exception?.ToString())).ToArray(); }
         internal bool Drained { get { lock (sync) return calls.All(call => call.Task?.IsCompleted ?? call.Error is not null); } }
         internal bool Disposed { get { lock (sync) return calls.Any(call => call.Operation == "Dispose" && call.Task?.IsCompletedSuccessfully == true); } }
+        public IIdentityPinnedDeviceCommands BindIdentity(DeviceCatalog catalog) => new Pinned(this, Inner.BindIdentity(catalog));
+        private sealed class Pinned(ScriptParameterEditingBackend owner, IIdentityPinnedDeviceCommands inner) : IIdentityPinnedDeviceCommands
+        {
+            public bool IsDemo => inner.IsDemo;
+            public Task<string> StartAppAsync(DeviceCommandTarget target, string packageName, CancellationToken ct = default) => owner.Forward("StartApp", target.Serial, packageName, () => inner.StartAppAsync(target, packageName, ct));
+            public Task TapAsync(DeviceCommandTarget target, int x, int y, CancellationToken ct = default) => owner.Forward("Tap", target.Serial, $"{x},{y}", () => inner.TapAsync(target, x, y, ct));
+            public Task SwipeAsync(DeviceCommandTarget target, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default) => owner.Forward("Swipe", target.Serial, $"{x1},{y1},{x2},{y2},{durationMs}", () => inner.SwipeAsync(target, x1, y1, x2, y2, durationMs, ct));
+        }
         private Task Forward(string operation, string? serial, string? subject, Func<Task> action)
         {
             var call = new Call(Phase, operation, serial, subject); lock (sync) calls.Add(call);
@@ -17179,12 +17682,26 @@ public partial class MainWindow
 {
     private FrameworkElement BuildScriptPage()
     {
-        var page = Page(); var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE8E5", "导入脚本包", async () => { var dialog = new OpenFileDialog { Filter = "脚本包|*.jxscript;*.zip|所有文件|*.*" }; if (dialog.ShowDialog(this) == true) await ViewModel.ImportScriptAsync(dialog.FileName); })); toolbar.Children.Add(Button("\uE768", "运行所选", ViewModel.StartScriptCommand)); toolbar.Children.Add(Button("\uE71A", "停止所选", ViewModel.StopScriptCommand)); DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
+        var page = Page(); var toolbar = Toolbar(); toolbar.Children.Add(Button("\uE8E5", "导入脚本包", async () => { var dialog = new OpenFileDialog { Filter = "脚本包|*.jxscript;*.zip|所有文件|*.*" }; if (dialog.ShowDialog(this) == true) await ViewModel.ImportScriptAsync(dialog.FileName); })); toolbar.Children.Add(Button("\uE768", "运行所选", ViewModel.StartScriptCommand));
+        var stopSelected = Button("\uE71A", "停止所选设备", ViewModel.StopScriptCommand); stopSelected.ToolTip = "停止当前勾选设备的运行任务"; toolbar.Children.Add(stopSelected); DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
         var summary = BoundText(nameof(WorkspaceViewModel.PackageSummary), true); summary.FontWeight = FontWeights.SemiBold; summary.Margin = new Thickness(0, 10, 0, 8); DockPanel.SetDock(summary, Dock.Top); page.Children.Add(summary);
         var targets = BoundText(nameof(WorkspaceViewModel.TargetContext), true); DockPanel.SetDock(targets, Dock.Top); page.Children.Add(targets);
-        var grid = new Grid { Margin = new Thickness(0, 10, 0, 0) }; grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(230) }); grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); grid.RowDefinitions.Add(new RowDefinition());
-        var parameters = new DataGrid { ItemsSource = ViewModel.Parameters }; TextColumn(parameters, "参数", nameof(ParameterEditor.Key), 170, true); TextColumn(parameters, "名称", nameof(ParameterEditor.Label), 180, true); TextColumn(parameters, "类型", nameof(ParameterEditor.Type), 100, true); TextColumn(parameters, "范围/单位", nameof(ParameterEditor.Range), 150, true); TextColumn(parameters, "值（JSON）", nameof(ParameterEditor.Value), 230, false); grid.Children.Add(parameters);
-        var label = Label("脚本日志 · 最近 500 条"); label.Margin = new Thickness(0, 10, 0, 8); Grid.SetRow(label, 1); grid.Children.Add(label);
+        var grid = new Grid { Margin = new Thickness(0, 10, 0, 0) }; grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3, GridUnitType.Star), MinHeight = 140 }); grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(2, GridUnitType.Star), MinHeight = 60 });
+        var sections = new TabControl();
+        var parameters = new DataGrid { ItemsSource = ViewModel.Parameters }; TextColumn(parameters, "参数", nameof(ParameterEditor.Key), 170, true); TextColumn(parameters, "名称", nameof(ParameterEditor.Label), 180, true); TextColumn(parameters, "类型", nameof(ParameterEditor.Type), 100, true); TextColumn(parameters, "范围/单位", nameof(ParameterEditor.Range), 150, true); TextColumn(parameters, "值（JSON）", nameof(ParameterEditor.Value), 230, false);
+        sections.Items.Add(new TabItem { Header = "参数", Content = parameters });
+        var records = new DockPanel(); var recordActions = Toolbar();
+        var cancelJob = Button("\uE711", "取消此任务", ViewModel.CancelScriptJobCommand); cancelJob.ToolTip = "仅取消下方选中的任务，不跟随设备勾选变化"; recordActions.Children.Add(cancelJob); DockPanel.SetDock(recordActions, Dock.Top); records.Children.Add(recordActions);
+        var result = BoundText("SelectedScriptJob.Result", true);
+        var resultPanel = new Expander { Header = "结果", Content = new ScrollViewer { Content = result, MaxHeight = 100, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }, Margin = new Thickness(0, 6, 0, 6) };
+        DockPanel.SetDock(resultPanel, Dock.Bottom); records.Children.Add(resultPanel);
+        var jobs = new DataGrid { ItemsSource = ViewModel.ScriptJobs, IsReadOnly = true, CanUserAddRows = false, SelectionMode = DataGridSelectionMode.Single };
+        jobs.SetBinding(DataGrid.SelectedItemProperty, TwoWay(nameof(WorkspaceViewModel.SelectedScriptJob)));
+        System.Windows.Automation.AutomationProperties.SetName(jobs, "脚本运行记录");
+        TextColumn(jobs, "目标", nameof(ScriptJobRow.Identity), 290); TextColumn(jobs, "状态", nameof(ScriptJobRow.State), 90); TextColumn(jobs, "进度", nameof(ScriptJobRow.Progress), 70);
+        TextColumn(jobs, "脚本", nameof(ScriptJobRow.Package), 180); TextColumn(jobs, "任务编号", nameof(ScriptJobRow.JobId), 300); TextColumn(jobs, "开始", nameof(ScriptJobRow.Started), 130); TextColumn(jobs, "结束", nameof(ScriptJobRow.Ended), 130); TextColumn(jobs, "结果", nameof(ScriptJobRow.Result), 240);
+        records.Children.Add(jobs); sections.Items.Add(new TabItem { Header = "运行记录", Content = records }); grid.Children.Add(sections);
+        var label = BoundText(nameof(WorkspaceViewModel.ScriptLogContext), true); label.FontWeight = FontWeights.SemiBold; label.Margin = new Thickness(0, 10, 0, 8); Grid.SetRow(label, 1); grid.Children.Add(label);
         var logs = new ListBox { ItemsSource = ViewModel.ScriptLogs, FontFamily = new FontFamily("Consolas"), FontSize = 12, BorderBrush = ThemeBrush("BorderBrush") }; Grid.SetRow(logs, 2); grid.Children.Add(logs); page.Children.Add(grid); return page;
     }
 
@@ -19847,7 +20364,7 @@ using MatrixDevice.Host;
 
 namespace MatrixDevice.Desktop;
 
-public sealed class WorkspaceViewModel : ObservableObject
+public sealed partial class WorkspaceViewModel : ObservableObject
 {
     private MatrixRuntime runtime;
     private readonly string dataDirectory;
@@ -19908,8 +20425,9 @@ public sealed class WorkspaceViewModel : ObservableObject
         TextCommand = Async(SendTextAsync, () => CanWriteTargets() && !string.IsNullOrWhiteSpace(TextInput));
         StartTransfersCommand = Async(StartTransfersAsync, () => !Busy && !Transferring && Transfers.Any(PendingTransfer));
         CancelTransfersCommand = Action(() => transferCancellation?.Cancel(), () => Transferring);
-        StartScriptCommand = Async(StartScriptAsync, () => !Busy && !Transferring && package is not null && Targets().Any() && Targets().All(row => row.Info.Online && !ScriptBusy(row.Serial)));
+        StartScriptCommand = Async(StartScriptAsync, () => !Busy && !Transferring && package is not null && Targets().Any() && Targets().All(row => row.Info.Online) && Targets().Any(row => !ScriptBusy(row.Serial)));
         StopScriptCommand = Action(StopScripts, () => Targets().Any(row => ScriptBusy(row.Serial)));
+        CancelScriptJobCommand = Action(CancelSelectedScriptJob, () => SelectedScriptJob?.CanCancel == true);
         StartApiCommand = Async(StartApisAsync, () => !Busy && (!runtime.Api.BasicRunning || !runtime.Api.AutomatorRunning));
         StopApiCommand = Async(StopApisAsync, () => !Busy && (runtime.Api.BasicRunning || runtime.Api.AutomatorRunning));
         StartDeviceApiCommand = Async(StartDeviceApisAsync, () => !Busy && Targets().Any() && Targets().All(row => row.Info.Online && !ScriptBusy(row.Serial)));
@@ -19918,6 +20436,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         SaveSettingsCommand = Async(SaveSettingsAsync, () => !Busy);
         runtime.Scripts.EntryAdded += OnScriptLog;
         runtime.Scripts.StatusChanged += OnScriptStatus;
+        AttachScriptJobs();
         LocalizationService.Current.LanguageChanged += OnLanguageChanged;
     }
 
@@ -20142,15 +20661,18 @@ public sealed class WorkspaceViewModel : ObservableObject
         }
         catch { if (replacement is not null) await replacement.DisposeAsync(); throw; }
         old.Scripts.EntryAdded -= OnScriptLog; old.Scripts.StatusChanged -= OnScriptStatus;
+        DetachScriptJobs(old.Scripts);
         runtime = replacement;
         ReconcileCompletedDebugCaches();
         runtime.Scripts.EntryAdded += OnScriptLog; runtime.Scripts.StatusChanged += OnScriptStatus;
+        SelectedScriptJob = null; ScriptJobs.Clear(); AttachScriptJobs();
         SyncApiWriteGuard();
         Settings.AdbSerialsJson = JsonSerializer.Serialize(runtime.Settings.AdbAllowedSerials, JsonDefaults.Options);
         Settings.LdBindingsJson = JsonSerializer.Serialize(runtime.Settings.LdSerialBindings, JsonDefaults.Options);
         Settings.Changed(nameof(SettingsEditor.AdbSerialsJson)); Settings.Changed(nameof(SettingsEditor.LdBindingsJson));
         MainDevice = null; ClearNodes(); Apps.Clear();
         try { await old.DisposeAsync(); } catch (Exception ex) { runtime.Log.Write("previous-runtime-cleanup-error", ex.ToString()); }
+        await DrainScriptJobObserversAsync();
         await ApplyCachedDeviceSnapshotAsync();
         Changed(nameof(ApiSummary)); AddActivity($"已接入{proofs.Count}台雷电设备");
     }
@@ -20673,30 +21195,41 @@ public sealed class WorkspaceViewModel : ObservableObject
     {
         try
         {
-            var targets = RequireTargets().ToList();
+            var targets = RequireScriptTargets().Select(row => new ScriptJobTarget(row.Serial, row.Info.Generation, row.Info.TransportId, demo)).ToArray();
             var selectedPackage = ScriptExecutionCompiler.Compile(ParameterizedPackage());
             var values = selectedPackage.Parameters.ToDictionary(parameter => parameter.Key, parameter => parameter.Value ?? parameter.DefaultValue ?? JsonSerializer.SerializeToElement<object?>(null));
-            foreach (var row in targets) runtime.Metadata.Put("ScriptDeviceConfiguration", row.Serial + "\u001f" + selectedPackage.Manifest.Id, new ScriptDeviceParameters(row.Serial, selectedPackage.Manifest.Id, selectedPackage.Manifest.Version, values));
             Error = "";
-            foreach (var row in targets) row.ScriptState = "准备执行";
-            RefreshCommands();
-            foreach (var row in targets) _ = ObserveScriptAsync(row.Serial, selectedPackage);
+            var failures = new List<string>(); var accepted = 0;
+            foreach (var target in targets)
+            {
+                ScriptJobHandle handle;
+                try { handle = runtime.Scripts.SubmitJob(target, selectedPackage); }
+                catch (Exception ex) { failures.Add($"{target.Serial} 未接纳：{PresentError(ex)}"); continue; }
+                accepted++;
+                RefreshScriptJobs();
+                if (accepted == 1) SelectedScriptJob = ScriptJobs.First(row => row.JobId == handle.JobId);
+                TrackScriptJob(runtime.Scripts, handle, target.Serial);
+                try { runtime.Metadata.Put("ScriptDeviceConfiguration", target.Serial + "\u001f" + selectedPackage.Manifest.Id, new ScriptDeviceParameters(target.Serial, selectedPackage.Manifest.Id, selectedPackage.Manifest.Version, values)); }
+                catch (Exception ex) { failures.Add($"{target.Serial} 任务已接纳，但参数保存失败：{PresentError(ex)}"); }
+            }
+            Status = $"已接纳 {accepted}/{targets.Length} 个脚本任务";
+            if (failures.Count > 0) Error = "脚本提交结果：" + string.Join("；", failures);
         }
         catch (Exception ex) { Error = $"脚本未启动：{PresentError(ex)}"; }
         finally { RefreshCommands(); }
         return Task.CompletedTask;
     }
 
-    private async Task ObserveScriptAsync(string serial, ScriptPackage selectedPackage)
-    {
-        try { await runtime.Scripts.RunAsync(serial, selectedPackage); }
-        catch (Exception ex) { await Application.Current.Dispatcher.InvokeAsync(() => { Error = $"脚本 {serial}：{PresentError(ex)}"; AddActivity(Error); }); }
-    }
-
     private void StopScripts() { foreach (var row in Targets()) runtime.Scripts.Stop(row.Serial); RefreshCommands(); }
-    private void OnScriptLog(string serial, ScriptLogEntry entry) => Application.Current.Dispatcher.BeginInvoke(() => { if (CurrentDevice?.Serial == serial) { ScriptLogs.Add(FormatScriptLog(entry)); while (ScriptLogs.Count > 500) ScriptLogs.RemoveAt(0); } });
+    private void OnScriptLog(string serial, ScriptLogEntry entry) => Application.Current.Dispatcher.BeginInvoke(() => { if (SelectedScriptJob is null && CurrentDevice?.Serial == serial) { ScriptLogs.Add(FormatScriptLog(entry)); while (ScriptLogs.Count > 500) ScriptLogs.RemoveAt(0); } });
     private void OnScriptStatus(ScriptRunStatus state) => Application.Current.Dispatcher.BeginInvoke(() => { var row = Devices.FirstOrDefault(row => row.Serial == state.Serial); if (row is not null) row.ScriptState = LocalizationService.Current.Get(state.State.ToString()); RefreshCommands(); Changed(nameof(HasActiveOperations)); });
-    private void LoadScriptLogs() { ScriptLogs.Clear(); if (CurrentDevice is not null) foreach (var entry in runtime.Scripts.GetLogs(CurrentDevice.Serial)) ScriptLogs.Add(FormatScriptLog(entry)); }
+    private void LoadScriptLogs()
+    {
+        ScriptLogs.Clear();
+        var entries = SelectedScriptJob is { } job ? runtime.Scripts.GetJobLogs(job.JobId) : CurrentDevice is { } device ? runtime.Scripts.GetLogs(device.Serial) : [];
+        foreach (var entry in entries) ScriptLogs.Add(FormatScriptLog(entry));
+        Changed(nameof(ScriptLogContext));
+    }
     private static string FormatScriptLog(ScriptLogEntry entry)
     {
         var message = entry.Message;
@@ -20732,8 +21265,10 @@ public sealed class WorkspaceViewModel : ObservableObject
         await runtime.Input.ReleaseAsync(CancellationToken.None);
         runtime.Scripts.EntryAdded -= OnScriptLog;
         runtime.Scripts.StatusChanged -= OnScriptStatus;
+        DetachScriptJobs(runtime.Scripts);
         LocalizationService.Current.LanguageChanged -= OnLanguageChanged;
         await runtime.DisposeAsync();
+        await DrainScriptJobObserversAsync();
     }
     private void OnLanguageChanged(object? sender, EventArgs args)
     {
@@ -22114,6 +22649,21 @@ public static class ScriptExecutionCompiler
 
 ```
 
+## src/MatrixDevice.Features/Scripts/ScriptJobs.cs
+
+```csharp
+namespace MatrixDevice.Features;
+
+public sealed record ScriptJobTarget(string Serial, long Generation, uint? TransportId, bool IsDemo);
+
+public sealed record ScriptJobStatus(Guid JobId, ScriptJobTarget Target, string PackageId, string PackageVersion,
+    ScriptRunState State, int StepIndex, int StepCount, DateTimeOffset StartedUtc,
+    DateTimeOffset? EndedUtc = null, string? Error = null, string? Result = null);
+
+public sealed record ScriptJobHandle(Guid JobId, Task Completion);
+
+```
+
 ## src/MatrixDevice.Features/Scripts/ScriptPackageService.cs
 
 ```csharp
@@ -22444,6 +22994,7 @@ public static class ScriptPackageService
 ## src/MatrixDevice.Features/Scripts/ScriptScheduler.cs
 
 ```csharp
+using System.Text;
 using System.Text.Json;
 using MatrixDevice.Core;
 
@@ -22454,23 +23005,130 @@ public sealed record ScriptLogEntry(DateTimeOffset Timestamp, string Message);
 public sealed record ScriptRunStatus(string Serial, ScriptRunState State, string? PackageId = null,
     string? Error = null, DateTimeOffset? StartedUtc = null, DateTimeOffset? EndedUtc = null);
 
-public sealed class ScriptScheduler(IDeviceBackend backend) : IAsyncDisposable
+public sealed class ScriptScheduler : IAsyncDisposable
 {
-    private sealed class Run(CancellationTokenSource cancellation)
+    public const int MaximumTerminalJobs = 100;
+    public const int MaximumJobLogEntries = 500;
+    public const int MaximumResultBytes = 16 * 1024;
+    private readonly IDeviceBackend backend;
+    private readonly DeviceCatalog? catalog;
+    private readonly IIdentityPinnedDeviceCommands? identityCommands;
+    private readonly bool isDemo;
+    private sealed class Run(CancellationTokenSource cancellation, Guid? jobId = null, ScriptJobTarget? target = null)
     {
         public CancellationTokenSource Cancellation { get; } = cancellation;
         public Task Task { get; set; } = Task.CompletedTask;
         public TaskCompletionSource Activation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Guid? JobId { get; } = jobId;
+        public ScriptJobTarget? Target { get; } = target;
+        public bool Finishing { get; set; }
     }
     private readonly object gate = new();
-    private readonly Queue<ScriptRunStatus> notifications = new();
+    private readonly Queue<(ScriptRunStatus? Status, ScriptJobStatus? Job)> notifications = new();
     private int publishing;
     private readonly Dictionary<string, Run> runs = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ScriptRunStatus> statuses = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<ScriptLogEntry>> logs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Guid?> latestJobProjection = new(StringComparer.Ordinal);
+    private readonly Dictionary<Guid, ScriptJobStatus> jobs = new();
+    private readonly Dictionary<Guid, List<ScriptLogEntry>> jobLogs = new();
+    private readonly Queue<Guid> completedJobs = new();
     private bool disposed;
     public event Action<ScriptRunStatus>? StatusChanged;
     public event Action<string, ScriptLogEntry>? EntryAdded;
+    public event Action<ScriptJobStatus>? JobChanged;
+    public event Action<Guid, ScriptLogEntry>? JobLogAdded;
+
+    public ScriptScheduler(IDeviceBackend backend)
+    {
+        ArgumentNullException.ThrowIfNull(backend);
+        this.backend = backend;
+    }
+
+    public ScriptScheduler(IDeviceBackend backend, DeviceCatalog catalog, bool isDemo) : this(backend)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        this.catalog = catalog;
+        this.isDemo = isDemo;
+        identityCommands = (backend as IIdentityPinnedDeviceBackend)?.BindIdentity(catalog)
+            ?? throw new DeviceException("后端未提供绑定目录身份的任务执行能力。", 501, 2001);
+        if (identityCommands.IsDemo != isDemo) throw new DeviceException("任务模式与后端身份能力不一致。", 400, 1007);
+    }
+
+    public ScriptJobHandle SubmitJob(ScriptJobTarget target, ScriptPackage package, CancellationToken ct = default,
+        IReadOnlyDictionary<string, JsonElement>? parameterOverrides = null)
+    {
+        ct.ThrowIfCancellationRequested();
+        var snapshot = ScriptExecutionCompiler.Compile(package, parameterOverrides);
+        ArgumentNullException.ThrowIfNull(target);
+        var frozen = target with { };
+        RequireJobTarget(frozen);
+        ScriptJobStatus accepted;
+        Run run;
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            ct.ThrowIfCancellationRequested();
+            RequireJobTarget(frozen);
+            if (runs.ContainsKey(frozen.Serial)) throw new DeviceException($"设备 {frozen.Serial} 已有脚本运行，任务未接纳。", 409, 1003);
+            var id = Guid.NewGuid();
+            var started = DateTimeOffset.UtcNow;
+            accepted = new(id, frozen, snapshot.Manifest.Id, snapshot.Manifest.Version, ScriptRunState.Running, -1, snapshot.Steps.Count, started);
+            run = new(CancellationTokenSource.CreateLinkedTokenSource(ct), id, frozen);
+            jobs.Add(id, accepted); jobLogs.Add(id, []);
+            logs[frozen.Serial] = [];
+            latestJobProjection[frozen.Serial] = id;
+            var projected = new ScriptRunStatus(frozen.Serial, ScriptRunState.Running, snapshot.Manifest.Id, StartedUtc: started);
+            statuses[frozen.Serial] = projected;
+            runs.Add(frozen.Serial, run);
+            notifications.Enqueue((projected, accepted));
+            run.Task = Task.Run(() => ExecuteAsync(frozen.Serial, snapshot, run));
+        }
+        PublishStatuses();
+        Append(frozen.Serial, $"开始运行：{snapshot.Manifest.Name} ({snapshot.Manifest.Id})。", accepted.JobId);
+        run.Activation.TrySetResult();
+        return new(accepted.JobId, run.Task);
+    }
+
+    public IReadOnlyList<ScriptJobStatus> GetJobs()
+    {
+        lock (gate) return jobs.Values.OrderByDescending(job => job.StartedUtc).ThenBy(job => job.JobId).ToArray();
+    }
+
+    public ScriptJobStatus? GetJob(Guid jobId) { lock (gate) return jobs.GetValueOrDefault(jobId); }
+    public IReadOnlyList<ScriptLogEntry> GetJobLogs(Guid jobId)
+    { lock (gate) return jobLogs.TryGetValue(jobId, out var entries) ? entries.ToArray() : []; }
+
+    public bool CancelJob(Guid jobId)
+    {
+        string serial;
+        lock (gate)
+        {
+            if (!jobs.TryGetValue(jobId, out var job) || !runs.TryGetValue(job.Target.Serial, out var run) || run.JobId != jobId || run.Finishing) return false;
+            serial = job.Target.Serial;
+            if (job.State == ScriptRunState.Cancelling) return true;
+            var projected = statuses[serial] with { State = ScriptRunState.Cancelling };
+            statuses[serial] = projected;
+            var updated = job with { State = ScriptRunState.Cancelling };
+            jobs[jobId] = updated;
+            notifications.Enqueue((projected, updated));
+            run.Cancellation.Cancel();
+        }
+        PublishStatuses();
+        Append(serial, "已请求取消脚本。", jobId);
+        return true;
+    }
+
+    private void RequireJobTarget(ScriptJobTarget target)
+    {
+        if (catalog is null || identityCommands is null) throw new DeviceException("当前调度器未配置任务身份执行能力。", 501, 2001);
+        if (string.IsNullOrWhiteSpace(target.Serial) || target.Generation <= 0 || target.IsDemo != isDemo
+            || (isDemo ? target.TransportId is not null : target.TransportId is null or 0))
+            throw new DeviceException($"任务目标身份无效：serial={target.Serial}, generation={target.Generation}, transport={target.TransportId}, demo={target.IsDemo}。", 400, 1007);
+        var current = catalog.GetRequired(target.Serial);
+        if (current.Generation != target.Generation || current.TransportId != target.TransportId)
+            throw new DeviceException($"任务目标身份已变化：serial={target.Serial}, expected generation={target.Generation}/transport={target.TransportId}, actual generation={current.Generation}/transport={current.TransportId}。", 409, 1003);
+    }
 
     public Task RunAsync(string serial, ScriptPackage package, CancellationToken ct = default)
         => RunAsync(serial, package, ct, null);
@@ -22490,9 +23148,10 @@ public sealed class ScriptScheduler(IDeviceBackend backend) : IAsyncDisposable
             {
                 var run = new Run(CancellationTokenSource.CreateLinkedTokenSource(ct));
                 logs[serial] = [];
+                latestJobProjection[serial] = null;
                 started = new ScriptRunStatus(serial, ScriptRunState.Running, snapshot.Manifest.Id, StartedUtc: DateTimeOffset.UtcNow);
                 statuses[serial] = started;
-                notifications.Enqueue(started);
+                notifications.Enqueue((started, null));
                 runs[serial] = run;
                 launched = run;
                 task = run.Task = Task.Run(() => ExecuteAsync(serial, snapshot, run));
@@ -22511,16 +23170,24 @@ public sealed class ScriptScheduler(IDeviceBackend backend) : IAsyncDisposable
     public bool Stop(string serial)
     {
         ScriptRunStatus? status;
+        Guid? jobId;
         lock (gate)
         {
             if (!runs.TryGetValue(serial, out var run)) return false;
+            jobId = run.JobId;
             status = statuses[serial] with { State = ScriptRunState.Cancelling };
             statuses[serial] = status;
-            notifications.Enqueue(status);
+            ScriptJobStatus? updated = null;
+            if (run.JobId is { } id)
+            {
+                updated = jobs[id] with { State = ScriptRunState.Cancelling };
+                jobs[id] = updated;
+            }
+            notifications.Enqueue((status, updated));
             run.Cancellation.Cancel();
         }
         PublishStatuses();
-        Append(serial, "已请求取消脚本。");
+        Append(serial, "已请求取消脚本。", jobId);
         return true;
     }
 
@@ -22539,52 +23206,80 @@ public sealed class ScriptScheduler(IDeviceBackend backend) : IAsyncDisposable
         await run.Activation.Task.ConfigureAwait(false);
         var state = ScriptRunState.Completed;
         string? failure = null;
+        var result = run.JobId is null ? null : new JobResultBuffer();
         try
         {
             for (var index = 0; index < package.Steps.Count; index++)
             {
                 var ct = run.Cancellation.Token;
                 ct.ThrowIfCancellationRequested();
+                if (run.Target is { } target) RequireJobTarget(target);
                 var step = package.Steps[index];
+                if (run.JobId is { } id)
+                {
+                    lock (gate)
+                    {
+                        var job = jobs[id] with { StepIndex = index };
+                        jobs[id] = job;
+                        notifications.Enqueue((null, job));
+                    }
+                    PublishStatuses();
+                }
                 var actionName = step.Action.Trim().ToLowerInvariant() switch { "launch" or "launchapp" => "启动应用", "wait" or "sleep" => "等待", "click" => "点击", "swipe" => "滑动", _ => step.Action };
-                Append(serial, $"步骤 {index + 1}/{package.Steps.Count}：{actionName} {step.Value}");
+                Append(serial, $"步骤 {index + 1}/{package.Steps.Count}：{actionName} {step.Value}", run.JobId);
                 switch (step.Action.Trim().ToLowerInvariant())
                 {
                     case "launch": case "launchapp":
-                        await backend.StartAppAsync(serial, step.Value!, ct: ct).ConfigureAwait(false);
+                        if (run.Target is { } launchTarget)
+                        {
+                            var output = await identityCommands!.StartAppAsync(CommandTarget(launchTarget), step.Value!, ct).ConfigureAwait(false);
+                            result!.Add(index, output);
+                        }
+                        else await backend.StartAppAsync(serial, step.Value!, ct: ct).ConfigureAwait(false);
                         break;
                     case "wait": case "sleep":
                         await Task.Delay(step.DurationMs, ct).ConfigureAwait(false);
                         break;
                     case "click":
                         var point = ScriptPackageService.ParseIntegers(step.Value, 2, index);
-                        await backend.TapAsync(serial, point[0], point[1], ct).ConfigureAwait(false);
+                        if (run.Target is { } tapTarget) await identityCommands!.TapAsync(CommandTarget(tapTarget), point[0], point[1], ct).ConfigureAwait(false);
+                        else await backend.TapAsync(serial, point[0], point[1], ct).ConfigureAwait(false);
                         break;
                     case "swipe":
                         var swipe = ScriptPackageService.ParseIntegers(step.Value, 5, index);
-                        await backend.SwipeAsync(serial, swipe[0], swipe[1], swipe[2], swipe[3], swipe[4], ct).ConfigureAwait(false);
+                        if (run.Target is { } swipeTarget) await identityCommands!.SwipeAsync(CommandTarget(swipeTarget), swipe[0], swipe[1], swipe[2], swipe[3], swipe[4], ct).ConfigureAwait(false);
+                        else await backend.SwipeAsync(serial, swipe[0], swipe[1], swipe[2], swipe[3], swipe[4], ct).ConfigureAwait(false);
                         break;
                 }
             }
             run.Cancellation.Token.ThrowIfCancellationRequested();
+            if (run.Target is { } completedTarget) RequireJobTarget(completedTarget);
         }
         catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested)
         {
             state = ScriptRunState.Cancelled;
-            Append(serial, "脚本已取消。");
+            Append(serial, "脚本已取消。", run.JobId);
         }
         catch (Exception error)
         {
             state = ScriptRunState.Failed;
             failure = error.Message;
-            Append(serial, $"执行失败：{error.Message}");
+            Append(serial, $"执行失败：{error.Message}", run.JobId);
             throw;
         }
         finally
         {
             ScriptRunStatus ended;
+            if (run.JobId is not null)
+            {
+                lock (gate)
+                {
+                    run.Finishing = true;
+                    if (state == ScriptRunState.Completed && run.Cancellation.IsCancellationRequested) state = ScriptRunState.Cancelled;
+                }
+            }
             var stateName = state switch { ScriptRunState.Completed => "已完成", ScriptRunState.Cancelled => "已取消", ScriptRunState.Failed => "失败", _ => "已结束" };
-            Append(serial, $"运行结束：{stateName}。");
+            Append(serial, $"运行结束：{stateName}。", run.JobId);
             lock (gate)
             {
                 ended = statuses[serial] with { State = state, Error = failure, EndedUtc = DateTimeOffset.UtcNow };
@@ -22592,7 +23287,20 @@ public sealed class ScriptScheduler(IDeviceBackend backend) : IAsyncDisposable
                 {
                     runs.Remove(serial);
                     statuses[serial] = ended;
-                    notifications.Enqueue(ended);
+                    ScriptJobStatus? completed = null;
+                    if (run.JobId is { } id)
+                    {
+                        completed = jobs[id] with { State = state, Error = failure, EndedUtc = ended.EndedUtc,
+                            Result = result!.Text ?? (state == ScriptRunState.Completed ? "已完成" : null) };
+                        jobs[id] = completed;
+                        completedJobs.Enqueue(id);
+                        while (completedJobs.Count > MaximumTerminalJobs)
+                        {
+                            var expired = completedJobs.Dequeue();
+                            jobs.Remove(expired); jobLogs.Remove(expired);
+                        }
+                    }
+                    notifications.Enqueue((ended, completed));
                 }
                 run.Cancellation.Dispose();
             }
@@ -22600,19 +23308,68 @@ public sealed class ScriptScheduler(IDeviceBackend backend) : IAsyncDisposable
         }
     }
 
-    private void Append(string serial, string message)
+    private static DeviceCommandTarget CommandTarget(ScriptJobTarget target)
+        => new(target.Serial, target.Generation, target.TransportId, target.IsDemo);
+
+    private sealed class JobResultBuffer
+    {
+        private const string Truncation = "\n[输出已截断]";
+        private readonly StringBuilder text = new();
+        private int bytes;
+        private bool truncated;
+        internal string? Text => text.Length == 0 ? null : text.ToString();
+        internal void Add(int stepIndex, string output)
+        {
+            if (truncated) return;
+            var value = $"步骤 {stepIndex + 1}：{output}\n";
+            if (bytes + Encoding.UTF8.GetByteCount(value) <= MaximumResultBytes)
+            {
+                text.Append(value); bytes += Encoding.UTF8.GetByteCount(value); return;
+            }
+            // Keep valid Unicode and reserve space for the explicit truncation marker.
+            var budget = MaximumResultBytes - Encoding.UTF8.GetByteCount(Truncation);
+            if (bytes > budget)
+            {
+                value = text.ToString() + value; text.Clear(); bytes = 0;
+            }
+            foreach (var rune in value.EnumerateRunes())
+            {
+                if (bytes + rune.Utf8SequenceLength > budget) break;
+                text.Append(rune.ToString()); bytes += rune.Utf8SequenceLength;
+            }
+            text.Append(Truncation); truncated = true;
+        }
+    }
+
+    private void Append(string serial, string message, Guid? jobId = null)
     {
         var entry = new ScriptLogEntry(DateTimeOffset.UtcNow, message);
+        bool project;
         lock (gate)
         {
-            if (!logs.TryGetValue(serial, out var entries)) logs[serial] = entries = [];
-            entries.Add(entry);
-            if (entries.Count > 500) entries.RemoveRange(0, entries.Count - 500);
+            project = ProjectsToSerial(serial, jobId);
+            if (project)
+            {
+                if (!logs.TryGetValue(serial, out var entries)) logs[serial] = entries = [];
+                entries.Add(entry);
+                if (entries.Count > 500) entries.RemoveRange(0, entries.Count - 500);
+            }
+            if (jobId is { } id && jobLogs.TryGetValue(id, out var owned))
+            {
+                owned.Add(entry);
+                if (owned.Count > MaximumJobLogEntries) owned.RemoveRange(0, owned.Count - MaximumJobLogEntries);
+            }
         }
-        if (EntryAdded is { } added)
+        if (project && EntryAdded is { } added)
             foreach (Action<string, ScriptLogEntry> handler in added.GetInvocationList())
-                try { handler(serial, entry); } catch (Exception error) { RecordObserverFailure(serial, error); }
+                try { handler(serial, entry); } catch (Exception error) { RecordObserverFailure(serial, error, jobId); }
+        if (jobId is { } owner && JobLogAdded is { } jobAdded)
+            foreach (Action<Guid, ScriptLogEntry> handler in jobAdded.GetInvocationList())
+                try { handler(owner, entry); } catch (Exception error) { RecordObserverFailure(serial, error, jobId); }
     }
+
+    private bool ProjectsToSerial(string serial, Guid? jobId)
+        => jobId is null || latestJobProjection.TryGetValue(serial, out var current) && current == jobId;
 
     private void PublishStatuses()
     {
@@ -22623,15 +23380,18 @@ public sealed class ScriptScheduler(IDeviceBackend backend) : IAsyncDisposable
             {
                 while (true)
                 {
-                    ScriptRunStatus status;
+                    (ScriptRunStatus? Status, ScriptJobStatus? Job) notification;
                     lock (gate)
                     {
                         if (notifications.Count == 0) break;
-                        status = notifications.Dequeue();
+                        notification = notifications.Dequeue();
                     }
-                    if (StatusChanged is { } changed)
+                    if (notification.Status is { } status && StatusChanged is { } changed)
                         foreach (Action<ScriptRunStatus> handler in changed.GetInvocationList())
-                            try { handler(status); } catch (Exception error) { RecordObserverFailure(status.Serial, error); }
+                            try { handler(status); } catch (Exception error) { RecordObserverFailure(status.Serial, error, notification.Job?.JobId); }
+                    if (notification.Job is { } job && JobChanged is { } jobChanged)
+                        foreach (Action<ScriptJobStatus> handler in jobChanged.GetInvocationList())
+                            try { handler(job); } catch (Exception error) { RecordObserverFailure(job.Target.Serial, error, job.JobId); }
                 }
             }
             finally { Volatile.Write(ref publishing, 0); }
@@ -22639,13 +23399,22 @@ public sealed class ScriptScheduler(IDeviceBackend backend) : IAsyncDisposable
         }
     }
 
-    private void RecordObserverFailure(string serial, Exception error)
+    private void RecordObserverFailure(string serial, Exception error, Guid? jobId = null)
     {
         lock (gate)
         {
-            if (!logs.TryGetValue(serial, out var entries)) logs[serial] = entries = [];
-            entries.Add(new(DateTimeOffset.UtcNow, $"状态监听失败：{error.Message}"));
-            if (entries.Count > 500) entries.RemoveAt(0);
+            var entry = new ScriptLogEntry(DateTimeOffset.UtcNow, $"状态监听失败：{error.Message}");
+            if (ProjectsToSerial(serial, jobId))
+            {
+                if (!logs.TryGetValue(serial, out var entries)) logs[serial] = entries = [];
+                entries.Add(entry);
+                if (entries.Count > 500) entries.RemoveAt(0);
+            }
+            if (jobId is { } id && jobLogs.TryGetValue(id, out var owned))
+            {
+                owned.Add(entry);
+                if (owned.Count > MaximumJobLogEntries) owned.RemoveAt(0);
+            }
         }
     }
 
@@ -23452,7 +24221,7 @@ public sealed class MatrixRuntime : IAsyncDisposable
             var top = y ?? 0;
             return PngImage.Crop(png, left, top, width ?? size.Width - left, height ?? size.Height - top);
         };
-        scripts = new ScriptScheduler(backend);
+        scripts = new ScriptScheduler(backend, catalog, demo);
         input = new InputCoordinator(catalog, backend);
         if (demo) ldPlayer = new LdPlayerService(new DemoLdConsoleRunner(), true);
         else if (!string.IsNullOrWhiteSpace(settings.LdConsolePath))
@@ -28904,6 +29673,7 @@ if (liveIndex >= 0)
 }
 
 ScriptParameterTests.Register(Test);
+ScriptJobTests.Register(Test);
 
 var failures = 0; var totalTimer = Stopwatch.StartNew();
 foreach (var (name, run) in tests)
@@ -29546,6 +30316,526 @@ internal sealed class FakeScreenVideoServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _stop.Cancel(); _listener.Stop(); await _accepting; await Task.WhenAll(_clients); _stop.Dispose();
+    }
+}
+
+```
+
+## tests/MatrixDevice.Tests/ScriptJobTests.cs
+
+```csharp
+using System.Collections.Concurrent;
+using System.Buffers.Binary;
+using System.Diagnostics;
+using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
+using System.Runtime.ExceptionServices;
+using System.Text;
+using System.Text.Json;
+using MatrixDevice.Core;
+using MatrixDevice.Features;
+
+internal static class ScriptJobTests
+{
+    private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(3);
+
+    public static void Register(Action<string, Func<Task>> test)
+    {
+        test("Script jobs freeze differentiated target parameters and retain actual Demo results", () => Demo(async probe =>
+        {
+            probe.Backend.HoldBeforeFirstTap = true;
+            var source = BoundPackage();
+            var firstValues = new Dictionary<string, JsonElement> { ["point"] = Element("\"80,90\"") };
+            var secondValues = new Dictionary<string, JsonElement> { ["point"] = Element("\"100,110\"") };
+            var a = probe.Submit("DEMO-001", source, overrides: firstValues);
+            await probe.Backend.Entered.Task.WaitAsync(Deadline);
+            var b = probe.Submit("DEMO-002", source, overrides: secondValues);
+            source.Steps.Clear(); source.Parameters.Clear(); firstValues["point"] = Element("null"); secondValues.Clear();
+            probe.Backend.Release.TrySetResult();
+            await Task.WhenAll(a.Completion, b.Completion).WaitAsync(Deadline);
+            var jobs = probe.Scheduler.GetJobs();
+            Check(a.JobId != Guid.Empty && b.JobId != Guid.Empty && a.JobId != b.JobId && jobs.Count == 2, "Accepted targets did not receive distinct jobs.");
+            foreach (var handle in new[] { a, b })
+            {
+                var status = probe.Job(handle);
+                Check(status.JobId == handle.JobId && status.State == ScriptRunState.Completed && status.EndedUtc is { } ended && ended >= status.StartedUtc &&
+                    status.PackageId == "job-package" && status.PackageVersion == "author-7" && status.StepCount == 2 && status.StepIndex == 1,
+                    "A job lost its frozen package, progress or terminal metadata.");
+                Check(!string.IsNullOrWhiteSpace(status.Result) && probe.Scheduler.GetJobLogs(handle.JobId).Count > 0, "Terminal result or task logs are missing.");
+            }
+            Check(probe.Backend.Calls.Count == 4 && probe.Backend.Calls.Where(call => call.Target.Serial == "DEMO-001").All(call => call.Value == "80,90") &&
+                probe.Backend.Calls.Where(call => call.Target.Serial == "DEMO-002").All(call => call.Value == "100,110"), "Compiled values or targets drifted after admission.");
+            Check(await probe.Backend.Taps("DEMO-001") == "Tap 2" && await probe.Backend.Taps("DEMO-002") == "Tap 2" &&
+                await probe.Backend.Taps("DEMO-003") == "Tap 0", "Actual Demo effects were lost or crossed to the unselected third target.");
+            Check(probe.Backend.LegacyWrites == 0, "A pinned job fell back to the serial-only backend interface.");
+        }));
+
+        test("Script jobs reject invalid parameters identities and pre-cancellation without admission", () => Demo(async probe =>
+        {
+            var target = probe.Target("DEMO-001");
+            foreach (var invalid in new[] { target with { Generation = 0 }, target with { Generation = target.Generation + 1 },
+                target with { Serial = "missing" }, target with { IsDemo = false } })
+                Reject(() => probe.Scheduler.SubmitJob(invalid, Package(Click())));
+            var invalidPackage = BoundPackage();
+            Reject(() => probe.Scheduler.SubmitJob(target, invalidPackage, parameterOverrides: new Dictionary<string, JsonElement> { ["point"] = Element("null") }));
+            using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+            Exception? cancellation = null;
+            try { probe.Scheduler.SubmitJob(target, Package(Click()), cancelled.Token); } catch (Exception error) { cancellation = error; }
+            Check(cancellation is OperationCanceledException, "Pre-cancelled submission was admitted or relabelled.");
+            Check(probe.Scheduler.GetJobs().Count == 0 && probe.Scheduler.GetStatus(target.Serial).State == ScriptRunState.Idle &&
+                probe.Scheduler.GetLogs(target.Serial).Count == 0 && probe.Backend.Calls.IsEmpty && probe.Backend.LegacyWrites == 0,
+                "A rejected submission created jobs, state, logs or backend work.");
+            Check(await probe.Backend.Taps("DEMO-001") == "Tap 0" && await probe.Backend.Taps("DEMO-002") == "Tap 0", "Rejected work changed Demo state.");
+        }));
+
+        test("Script jobs busy rejection preserves the accepted job and its existing logs", () => Demo(async probe =>
+        {
+            probe.Backend.HoldBeforeFirstTap = true;
+            var accepted = probe.Submit("DEMO-001", Package(Click()));
+            await probe.Backend.Entered.Task.WaitAsync(Deadline);
+            var before = probe.Scheduler.GetJobLogs(accepted.JobId).ToArray();
+            var serialBefore = probe.Scheduler.GetLogs("DEMO-001").ToArray();
+            Reject(() => probe.Scheduler.SubmitJob(probe.Target("DEMO-001"), Package(Click())));
+            Check(probe.Scheduler.GetJobs().Count == 1 && probe.Job(accepted).State == ScriptRunState.Running &&
+                before.SequenceEqual(probe.Scheduler.GetJobLogs(accepted.JobId)) && serialBefore.SequenceEqual(probe.Scheduler.GetLogs("DEMO-001")),
+                "Busy rejection replaced the accepted job or cleared its logs.");
+            probe.Backend.Release.TrySetResult(); await accepted.Completion.WaitAsync(Deadline);
+            Check(await probe.Backend.Taps("DEMO-001") == "Tap 1", "Busy rejection duplicated or lost the accepted action.");
+        }));
+
+        test("Script jobs old JobId cancellation cannot stop a new job on the same serial", () => Demo(async probe =>
+        {
+            var old = probe.Submit("DEMO-001", Package(Click())); await old.Completion.WaitAsync(Deadline);
+            var oldStatus = probe.Job(old); var oldLogs = probe.Scheduler.GetJobLogs(old.JobId).ToArray();
+            var current = probe.Submit("DEMO-001", Package(new ScriptStep { Action = "wait", DurationMs = 10000 }, Click()));
+            Check(!probe.Scheduler.CancelJob(old.JobId) && !probe.Scheduler.CancelJob(Guid.NewGuid()), "An old or unknown job was reported cancellable.");
+            Check(probe.Job(current).State == ScriptRunState.Running && !current.Completion.IsCompleted &&
+                probe.Job(old) == oldStatus && oldLogs.SequenceEqual(probe.Scheduler.GetJobLogs(old.JobId)), "Cancelling an old JobId mutated a newer run or historical record.");
+            Check(probe.Scheduler.CancelJob(current.JobId), "Current job did not accept cancellation.");
+            await current.Completion.WaitAsync(Deadline);
+            Check(probe.Job(current).State == ScriptRunState.Cancelled && await probe.Backend.Taps("DEMO-001") == "Tap 1", "Cancelled successor executed its next action.");
+        }));
+
+        test("Script jobs cancellation waits for in-flight work and does not affect another target", () => Demo(async probe =>
+        {
+            probe.Backend.HoldBeforeFirstTap = true; probe.Backend.IgnoreHeldCancellation = true;
+            var a = probe.Submit("DEMO-001", Package(Click(), Click()));
+            await probe.Backend.Entered.Task.WaitAsync(Deadline);
+            var b = probe.Submit("DEMO-002", Package(Click()));
+            Check(probe.Scheduler.CancelJob(a.JobId), "In-flight job rejected cancellation.");
+            Check(probe.Job(a).State == ScriptRunState.Cancelling && probe.Job(a).EndedUtc is null && !a.Completion.IsCompleted &&
+                probe.Backend.CommandTasks.Any(task => !task.IsCompleted), "Job became terminal before its non-cooperative backend task drained.");
+            await b.Completion.WaitAsync(Deadline);
+            Check(probe.Job(b).State == ScriptRunState.Completed && await probe.Backend.Taps("DEMO-002") == "Tap 1", "Cancelling A affected B.");
+            probe.Backend.Release.TrySetResult(); await a.Completion.WaitAsync(Deadline);
+            Check(probe.Job(a).State == ScriptRunState.Cancelled && probe.Job(a).EndedUtc is not null &&
+                await probe.Backend.Taps("DEMO-001") == "Tap 1" && probe.Backend.CommandTasks.All(task => task.IsCompleted),
+                "Cancellation failed to drain an already accepted action or ran a later action.");
+        }));
+
+        test("Script jobs reject changed generation between real Demo steps", () => Demo(async probe =>
+        {
+            probe.Backend.HoldAfterFirstTap = true;
+            var handle = probe.Submit("DEMO-001", Package(Click(), Click()));
+            await probe.Backend.Entered.Task.WaitAsync(Deadline);
+            var generation = probe.Target("DEMO-001").Generation;
+            ((DemoDeviceBackend)probe.Backend.Inner).SetRotation("DEMO-001", 180);
+            await probe.Catalog.RefreshAsync();
+            Check(probe.Target("DEMO-001").Generation > generation, "Fixture did not produce a new generation.");
+            probe.Backend.Release.TrySetResult(); var error = await Observe(handle.Completion);
+            Check(error is DeviceException { Status: 409 } && probe.Job(handle).State == ScriptRunState.Failed && !string.IsNullOrWhiteSpace(probe.Job(handle).Error) &&
+                await probe.Backend.Taps("DEMO-001") == "Tap 1" && await probe.Backend.Taps("DEMO-002") == "Tap 0",
+                "A frozen job continued on the new generation or reported success.");
+        }));
+
+        test("Script jobs cancellation while queued cannot finish before the actual ADB predecessor", () => Adb(async (probe, server, backend) =>
+        {
+            var blocked = probe.Track(backend.ShellAsync("allowed", "gated"));
+            await server.GateEntered.Task.WaitAsync(Deadline);
+            var handle = probe.Submit("allowed", Package(Click()));
+            await probe.Backend.Submitted.Task.WaitAsync(Deadline);
+            Check(probe.Scheduler.CancelJob(handle.JobId), "Queued job rejected cancellation.");
+            Check(!blocked.IsCompleted && !handle.Completion.IsCompleted && probe.Job(handle).State == ScriptRunState.Cancelling &&
+                probe.Job(handle).EndedUtc is null, "Queued cancellation bypassed the actual lane predecessor.");
+            server.GateRelease.TrySetResult(); await blocked.WaitAsync(Deadline); await handle.Completion.WaitAsync(Deadline);
+            Check(probe.Job(handle).State == ScriptRunState.Cancelled && !server.Requests.Any(IsInput), "Cancelled queued job emitted an input operation.");
+            var successor = probe.Submit("allowed", Package(Click())); await successor.Completion.WaitAsync(Deadline);
+            Check(server.Requests.Count(IsInput) == 1 && probe.Job(successor).State == ScriptRunState.Completed, "Queue did not recover after the cancelled task drained.");
+        }));
+
+        test("Script jobs stale submitted transport rejects before any new ADB request", () => Adb(async (probe, server, backend) =>
+        {
+            var old = probe.Target("allowed");
+            server.TransportId = 2; await probe.Catalog.RefreshAsync();
+            Check(backend.ObservedTransportId("allowed") == 2 && probe.Target("allowed").Generation > old.Generation, "Fixture did not discover transport2.");
+            var count = server.Requests.Count;
+            Reject(() => probe.Scheduler.SubmitJob(old, Package(Click())));
+            var commands = ((IIdentityPinnedDeviceBackend)backend).BindIdentity(probe.Catalog);
+            var error = await Observe(() => commands.TapAsync(new DeviceCommandTarget(old.Serial, old.Generation, old.TransportId, old.IsDemo), 1, 1));
+            Check(error is DeviceException { Status: 409 } && server.Requests.Count == count && probe.Scheduler.GetJobs().Count == 0 && probe.Backend.Calls.IsEmpty,
+                "Old transport submission or command reached the new transport, serial fallback, or admission.");
+        }));
+
+        test("Script jobs queued transport replacement rejects actual input without serial fallback", () => Adb(async (probe, server, backend) =>
+        {
+            var blocked = probe.Track(backend.ShellAsync("allowed", "gated"));
+            await server.GateEntered.Task.WaitAsync(Deadline);
+            var old = probe.Target("allowed"); var handle = probe.Submit("allowed", Package(Click()));
+            await probe.Backend.Submitted.Task.WaitAsync(Deadline);
+            Check(!handle.Completion.IsCompleted && probe.Backend.Calls.Single().Target.TransportId == old.TransportId, "Fixture did not enqueue the frozen job behind the predecessor.");
+            server.TransportId = 2; var refresh = probe.Track(probe.Catalog.RefreshAsync());
+            var timer = Stopwatch.StartNew();
+            while (backend.ObservedTransportId("allowed") != 2)
+            {
+                if (timer.Elapsed > Deadline) throw new TimeoutException("Fixture did not observe transport2 before releasing its lane gate.");
+                await Task.Delay(5);
+            }
+            server.GateRelease.TrySetResult(); await blocked.WaitAsync(Deadline);
+            var failure = await Observe(handle.Completion); await refresh.WaitAsync(Deadline);
+            Check(failure is DeviceException { Status: 409 } && probe.Job(handle).State == ScriptRunState.Failed &&
+                !server.Requests.Any(IsInput) && !server.Requests.Any(request => request.StartsWith("host:transport:", StringComparison.Ordinal)),
+                "Queued job emitted input on the new transport or fell back to a serial selector.");
+            Check(server.Requests.Contains("host:transport-id:2"), "Refresh's legitimate transport2 metadata was not exercised; do not mistake it for job input.");
+        }));
+
+        test("Script jobs cannot forge Demo mode on the real identity-pinned backend", () => Adb(async (probe, server, backend) =>
+        {
+            var count = server.Requests.Count;
+            Reject(() => probe.Scheduler.SubmitJob(probe.Target("allowed") with { IsDemo = true, TransportId = null }, Package(Click())));
+            Exception? mismatch = null; ScriptScheduler? invalid = null;
+            try { invalid = new ScriptScheduler(probe.Backend, probe.Catalog, true); } catch (Exception error) { mismatch = error; }
+            finally { if (invalid is not null) await invalid.DisposeAsync().AsTask().WaitAsync(Deadline); }
+            Check(mismatch is not null && probe.Scheduler.GetJobs().Count == 0 && server.Requests.Count == count && probe.Backend.Calls.IsEmpty,
+                "Caller-controlled Demo flag bypassed the backend mode or caused I/O.");
+        }));
+
+        test("Script jobs observer failures cannot break completion or erase bounded task logs", () => Demo(async probe =>
+        {
+            var changed = 0; var logged = 0;
+            probe.Scheduler.JobChanged += _ => { Interlocked.Increment(ref changed); throw new InvalidOperationException("Owned status observer failure"); };
+            probe.Scheduler.JobLogAdded += (_, _) => { Interlocked.Increment(ref logged); throw new InvalidOperationException("Owned log observer failure"); };
+            var handle = probe.Submit("DEMO-001", Package(Enumerable.Range(0, 550).Select(_ => new ScriptStep { Action = "wait" }).Append(Click()).ToArray()));
+            await handle.Completion.WaitAsync(Deadline);
+            Check(probe.Job(handle).State == ScriptRunState.Completed && await probe.Backend.Taps("DEMO-001") == "Tap 1" &&
+                probe.Scheduler.GetJobLogs(handle.JobId).Count == 500 && probe.Scheduler.GetLogs("DEMO-001").Count == 500 && changed > 0 && logged > 0,
+                "An observer broke execution or task/legacy log bounds.");
+        }));
+
+        test("Script jobs history retains active work and evicts terminal jobs by completion order", () => Demo(async probe =>
+        {
+            probe.Backend.HoldBeforeFirstTap = true;
+            var active = probe.Submit("DEMO-001", Package(Click())); await probe.Backend.Entered.Task.WaitAsync(Deadline);
+            var completed = new List<ScriptJobHandle>();
+            for (var i = 0; i < 100; i++)
+            {
+                var handle = probe.Submit("DEMO-002", Package(new ScriptStep { Action = "wait" }));
+                completed.Add(handle); await handle.Completion.WaitAsync(Deadline);
+            }
+            Check(probe.Scheduler.GetJobs().Count == 101 && probe.Scheduler.GetJob(active.JobId) is not null &&
+                completed.All(handle => probe.Scheduler.GetJob(handle.JobId) is not null), "History limit evicted an active task or fewer than 100 terminal tasks.");
+            probe.Backend.Release.TrySetResult(); await active.Completion.WaitAsync(Deadline);
+            Check(probe.Scheduler.GetJobs().Count == 100 && probe.Scheduler.GetJob(active.JobId)?.State == ScriptRunState.Completed &&
+                probe.Scheduler.GetJob(completed[0].JobId) is null && completed.Skip(1).All(handle => probe.Scheduler.GetJob(handle.JobId) is not null),
+                "History eviction followed start order rather than terminal completion order.");
+        }));
+
+        test("Script jobs retain actual outputs from multiple launch actions", () => Demo(async probe =>
+        {
+            probe.Backend.LaunchOutputs.Enqueue("first owned launch output");
+            probe.Backend.LaunchOutputs.Enqueue("second owned launch output");
+            var handle = probe.Submit("DEMO-001", Package(new ScriptStep { Action = "launch", Value = "com.android.settings" },
+                new ScriptStep { Action = "launchapp", Value = "com.matrix.demo" }));
+            await handle.Completion.WaitAsync(Deadline);
+            var result = probe.Job(handle).Result ?? "";
+            Check(result.Contains("first owned launch output", StringComparison.Ordinal) && result.Contains("second owned launch output", StringComparison.Ordinal) &&
+                (await probe.Backend.DumpAsync("DEMO-001")).PackageName == "com.matrix.demo" &&
+                (await probe.Backend.DumpAsync("DEMO-002")).PackageName == "com.matrix.demo" && probe.Backend.Calls.Count == 2,
+                "A launch output was replaced by a generic completion string, lost, or dispatched to another target.");
+        }));
+
+        test("Script jobs bound Unicode result bytes without corrupting surrogate boundaries", () => Demo(async probe =>
+        {
+            var output = string.Concat(Enumerable.Repeat("\uD83D\uDE80\u6D4B\u8BD5", 3000));
+            probe.Backend.LaunchOutputs.Enqueue(output);
+            var handle = probe.Submit("DEMO-001", Package(new ScriptStep { Action = "launch", Value = "com.android.settings" }));
+            await handle.Completion.WaitAsync(Deadline);
+            var result = probe.Job(handle).Result ?? "";
+            Check(new UTF8Encoding(false, true).GetByteCount(result) <= 16 * 1024 && result.Contains("\u622A\u65AD", StringComparison.Ordinal) &&
+                result.Contains("\uD83D\uDE80", StringComparison.Ordinal) && !result.Contains('\uFFFD') && result != output &&
+                (await probe.Backend.DumpAsync("DEMO-001")).PackageName == "com.android.settings",
+                "Long result exceeded its UTF8 bound, lost its truncation marker, corrupted Unicode, or skipped the real launch.");
+        }));
+
+        test("Script jobs and legacy runs share occupancy without changing legacy duplicate semantics", () => Demo(async probe =>
+        {
+            var waiting = Package(new ScriptStep { Action = "wait", DurationMs = 10000 }, Click());
+            var legacy = probe.Track(probe.Scheduler.RunAsync("DEMO-001", waiting));
+            Reject(() => probe.Scheduler.SubmitJob(probe.Target("DEMO-001"), Package(Click())));
+            Check(probe.Scheduler.GetJobs().Count == 0 && !legacy.IsCompleted, "New job admission ignored a legacy run occupying the serial.");
+            Check(probe.Scheduler.Stop("DEMO-001"), "Legacy Stop no longer finds its accepted run.");
+            await legacy.WaitAsync(Deadline);
+            var job = probe.Submit("DEMO-001", waiting);
+            await probe.Scheduler.RunAsync("DEMO-001", Package(Click())).WaitAsync(Deadline);
+            Check(probe.Scheduler.GetJobs().Count == 1 && probe.Job(job).State == ScriptRunState.Running && !job.Completion.IsCompleted,
+                "Legacy duplicate admission replaced a pinned job or manufactured a second job record.");
+            Check(probe.Scheduler.CancelJob(job.JobId), "Pinned job cancellation failed after a legacy duplicate.");
+            await job.Completion.WaitAsync(Deadline);
+            Check(probe.Job(job).State == ScriptRunState.Cancelled && await probe.Backend.Taps("DEMO-001") == "Tap 0" && probe.Backend.LegacyWrites == 0,
+                "Shared occupancy executed a duplicate action or changed cancellation semantics.");
+        }));
+
+        test("Script jobs recheck generation after SetDevice acknowledgement before sending the command", async () =>
+        {
+            foreach (var step in new[] { Click(), new ScriptStep { Action = "launch", Value = "com.android.settings" } })
+            {
+                var server = new SetDeviceBarrierServer(); Exception? primary = null; Exception? cleanup = null;
+                try
+                {
+                    var backend = new AdbDeviceBackend(new AppSettings { AdbAllowedSerials = ["allowed"], CommandTimeoutSeconds = 5 }, server.Endpoint);
+                    await Run(backend, null, false, async probe =>
+                    {
+                        var old = probe.Target("allowed");
+                        Check(old.TransportId == 1 && backend.ObservedTransportId("allowed") == 1, "Initial identity was not discovered through the owned wire server.");
+                        var transportOrdinal = step.Action == "launch" ? 2 : 1;
+                        var baseline = server.Requests.Count;
+                        server.ArmNextTransport(transportOrdinal); var handle = probe.Submit("allowed", Package(step));
+                        try
+                        {
+                            await server.Entered.Task.WaitAsync(Deadline);
+                            var beforeCommand = server.Requests.ToArray().Skip(baseline).ToArray();
+                            Check(beforeCommand.Count(request => request == "host:transport-id:1") == transportOrdinal &&
+                                (transportOrdinal == 1 || beforeCommand.Any(request => request.StartsWith("shell,v2,raw:cmd package resolve-activity ", StringComparison.Ordinal))) &&
+                                !beforeCommand.Any(IsInput), "Fixture did not reach the intended tap/am-start SetDevice boundary after a valid launcher resolution.");
+                            probe.Backend.InventoryOverride = probe.Catalog.Snapshot.Select(info => info with { Width = info.Width + 1 }).ToArray();
+                            await probe.Catalog.RefreshAsync();
+                            var changed = probe.Target("allowed");
+                            Check(changed.Generation > old.Generation && changed.TransportId == old.TransportId && backend.ObservedTransportId("allowed") == 1,
+                                "Fixture did not change generation while retaining the same actual transport.");
+                        }
+                        finally { server.Release.TrySetResult(); }
+                        var error = await Observe(handle.Completion);
+                        Check(error is DeviceException { Status: 409 } && probe.Job(handle).State == ScriptRunState.Failed &&
+                            !server.Requests.Any(IsInput) && !server.Requests.Any(request => request.StartsWith("host:transport:", StringComparison.Ordinal)) &&
+                            server.Errors.IsEmpty, "Generation changed during SetDevice but a command was sent, the job succeeded, or the owned wire fixture failed.");
+                    });
+                }
+                catch (Exception error) { primary = error; }
+                finally { server.Release.TrySetResult(); try { await server.DisposeAsync().AsTask().WaitAsync(Deadline); } catch (Exception error) { cleanup = error; } }
+                if (primary is not null && cleanup is not null) throw new AggregateException(primary, cleanup);
+                if (cleanup is not null) throw cleanup;
+                if (primary is not null) ExceptionDispatchInfo.Capture(primary).Throw();
+            }
+        });
+    }
+
+    private static bool IsInput(string request) => request.Contains("input tap", StringComparison.Ordinal) || request.Contains("input swipe", StringComparison.Ordinal) || request.Contains("am start", StringComparison.Ordinal);
+    private static ScriptStep Click() => new() { Action = "click", Value = "1,1" };
+    private static ScriptPackage Package(params ScriptStep[] steps) => new() { Manifest = new() { Id = "job-package", Name = "Owned job package", Version = "author-7" }, Steps = [.. steps] };
+    private static ScriptPackage BoundPackage() => Package(Click(), Click()) with
+    {
+        Parameters = [new() { Key = "point", Type = "string", Value = Element("\"40,50\"") }],
+        ExecutionContract = new() { Version = 1, Bindings = [new() { StepIndex = 0, Field = "value", ParameterKey = "point" }, new() { StepIndex = 1, Field = "value", ParameterKey = "point" }] }
+    };
+    private static JsonElement Element(string json) { using var document = JsonDocument.Parse(json); return document.RootElement.Clone(); }
+    private static void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
+    private static void Reject(Action action)
+    {
+        try { action(); } catch (DeviceException) { return; }
+        throw new InvalidOperationException("Rejected submission did not throw DeviceException before admission.");
+    }
+    private static async Task<Exception?> Observe(Task task)
+    {
+        try { await task.WaitAsync(Deadline); return null; } catch (TimeoutException) { throw; } catch (Exception error) { return error; }
+    }
+    private static async Task<Exception?> Observe(Func<Task> action)
+    { try { return await Observe(action()); } catch (TimeoutException) { throw; } catch (Exception error) { return error; } }
+    private static Task Demo(Func<Probe, Task> run) => Run(new DemoDeviceBackend(), null, true, run);
+    private static async Task Adb(Func<Probe, FakeAdbServer, AdbDeviceBackend, Task> run)
+    {
+        var server = new FakeAdbServer();
+        var backend = new AdbDeviceBackend(new AppSettings { AdbAllowedSerials = ["allowed"], CommandTimeoutSeconds = 5 }, server.Endpoint);
+        await Run(backend, server, false, probe => run(probe, server, backend));
+    }
+    private static async Task Run(IDeviceBackend inner, FakeAdbServer? server, bool demo, Func<Probe, Task> run)
+    {
+        var backend = new RecordingBackend(inner, demo); var probe = new Probe(backend, demo);
+        Exception? failure = null; var cleanup = new List<Exception>();
+        try { await probe.Catalog.RefreshAsync(); probe.Scheduler = new ScriptScheduler(backend, probe.Catalog, demo); await run(probe); }
+        catch (Exception error) { failure = error; }
+        finally
+        {
+            backend.Release.TrySetResult(); server?.GateRelease.TrySetResult();
+            if (probe.Scheduler is not null)
+            {
+                try { foreach (var job in probe.Scheduler.GetJobs()) if (job.State is ScriptRunState.Running or ScriptRunState.Cancelling) probe.Scheduler.CancelJob(job.JobId); }
+                catch (Exception error) { cleanup.Add(error); }
+                try { await probe.Scheduler.DisposeAsync().AsTask().WaitAsync(Deadline); } catch (Exception error) { cleanup.Add(error); }
+            }
+            foreach (var task in probe.Tasks.Concat(backend.CommandTasks).Distinct())
+            {
+                try { await task.WaitAsync(Deadline); } catch (Exception error) when (task.IsCompleted && error is not TimeoutException)
+                { Console.WriteLine($"OBSERVED script-job-task {task.Status}: {error.GetType().Name}: {error.Message}"); }
+                catch (Exception error) { cleanup.Add(error); }
+            }
+            try { await backend.DisposeAsync().AsTask().WaitAsync(Deadline); } catch (Exception error) { cleanup.Add(error); }
+            if (server is not null) try { await server.DisposeAsync().AsTask().WaitAsync(Deadline); } catch (Exception error) { cleanup.Add(error); }
+        }
+        if (cleanup.Count > 0) throw new AggregateException("Owned script job fixture cleanup failed.", failure is null ? cleanup : new[] { failure }.Concat(cleanup));
+        if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    private sealed class Probe(RecordingBackend backend, bool demo)
+    {
+        public RecordingBackend Backend { get; } = backend;
+        public DeviceCatalog Catalog { get; } = new(backend);
+        public ScriptScheduler Scheduler { get; set; } = null!;
+        public List<Task> Tasks { get; } = [];
+        public ScriptJobTarget Target(string serial) { var info = Catalog.GetRequired(serial); return new(info.Serial, info.Generation, info.TransportId, demo); }
+        public ScriptJobHandle Submit(string serial, ScriptPackage package, CancellationToken ct = default, IReadOnlyDictionary<string, JsonElement>? overrides = null)
+        { var handle = Scheduler.SubmitJob(Target(serial), package, ct, overrides); Track(handle.Completion); return handle; }
+        public ScriptJobStatus Job(ScriptJobHandle handle) => Scheduler.GetJob(handle.JobId) ?? throw new InvalidOperationException("Accepted job disappeared.");
+        public Task<T> Track<T>(Task<T> task) { Tasks.Add(task); return task; }
+        public Task Track(Task task) { Tasks.Add(task); return task; }
+    }
+
+    private sealed record Call(DeviceCommandTarget Target, string Action, string Value);
+    private sealed class RecordingBackend(IDeviceBackend inner, bool third) : IDeviceBackend, IIdentityPinnedDeviceBackend
+    {
+        private readonly DemoDeviceBackend? other = third ? new() : null;
+        private int firstTap;
+        public IDeviceBackend Inner { get; } = inner;
+        public ConcurrentQueue<Call> Calls { get; } = new();
+        public ConcurrentBag<Task> CommandTasks { get; } = [];
+        public ConcurrentQueue<string> LaunchOutputs { get; } = new();
+        public bool HoldBeforeFirstTap { get; set; }
+        public bool HoldAfterFirstTap { get; set; }
+        public bool IgnoreHeldCancellation { get; set; }
+        public IReadOnlyList<DeviceInfo>? InventoryOverride { get; set; }
+        public int LegacyWrites { get; private set; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Submitted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public IIdentityPinnedDeviceCommands BindIdentity(DeviceCatalog catalog) => new Commands(this, ((IIdentityPinnedDeviceBackend)inner).BindIdentity(catalog));
+        public async Task<IReadOnlyList<DeviceInfo>> DiscoverAsync(CancellationToken ct = default)
+        { if (InventoryOverride is { } inventory) { ct.ThrowIfCancellationRequested(); return inventory; } var result = await inner.DiscoverAsync(ct); return other is null ? result : result.Concat((await other.DiscoverAsync(ct)).Take(1).Select(info => info with { Serial = "DEMO-003" })).ToArray(); }
+        public Task<AndroidNode> DumpAsync(string serial, CancellationToken ct = default) => serial == "DEMO-003" && other is not null ? other.DumpAsync("DEMO-001", ct) : inner.DumpAsync(serial, ct);
+        public async Task<string> Taps(string serial) => (await DumpAsync(serial)).ChildNodeList[1].Text!;
+        private Task Forbidden() { LegacyWrites++; throw new InvalidOperationException("Pinned script used the legacy serial-only command interface."); }
+        public Task TapAsync(string serial, int x, int y, CancellationToken ct = default) => Forbidden();
+        public Task SwipeAsync(string serial, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default) => Forbidden();
+        public Task<string> StartAppAsync(string serial, string packageName, string? activity = null, CancellationToken ct = default) { Forbidden(); return Task.FromResult(""); }
+        public Task<string> ShellAsync(string serial, string command, bool useRoot = false, CancellationToken ct = default) => inner.ShellAsync(serial, command, useRoot, ct);
+        public Task<byte[]> ScreenshotAsync(string serial, CancellationToken ct = default) => inner.ScreenshotAsync(serial, ct);
+        public Task KeyEventAsync(string serial, int code, CancellationToken ct = default) => inner.KeyEventAsync(serial, code, ct);
+        public Task TextAsync(string serial, string text, CancellationToken ct = default) => inner.TextAsync(serial, text, ct);
+        public Task<string> StopAppAsync(string serial, string packageName, CancellationToken ct = default) => inner.StopAppAsync(serial, packageName, ct);
+        public Task<bool> ClearAppAsync(string serial, string packageName, CancellationToken ct = default) => inner.ClearAppAsync(serial, packageName, ct);
+        public Task<IReadOnlyList<AppInfo>> ListAppsAsync(string serial, bool showSystem = false, bool needVersion = true, CancellationToken ct = default) => inner.ListAppsAsync(serial, showSystem, needVersion, ct);
+        public Task InstallAsync(string serial, string localPath, CancellationToken ct = default) => inner.InstallAsync(serial, localPath, ct);
+        public Task UninstallAsync(string serial, string packageName, CancellationToken ct = default) => inner.UninstallAsync(serial, packageName, ct);
+        public Task PushAsync(string serial, string localPath, string remotePath, IProgress<double>? progress = null, CancellationToken ct = default) => inner.PushAsync(serial, localPath, remotePath, progress, ct);
+        public Task PullAsync(string serial, string remotePath, string localPath, IProgress<double>? progress = null, CancellationToken ct = default) => inner.PullAsync(serial, remotePath, localPath, progress, ct);
+        public Task SetNodeTextAsync(string serial, NodeSelector selector, string text, CancellationToken ct = default) => inner.SetNodeTextAsync(serial, selector, text, ct);
+        public async ValueTask DisposeAsync() { Release.TrySetResult(); await inner.DisposeAsync(); if (other is not null) await other.DisposeAsync(); }
+
+        private sealed class Commands(RecordingBackend owner, IIdentityPinnedDeviceCommands innerCommands) : IIdentityPinnedDeviceCommands
+        {
+            public bool IsDemo => innerCommands.IsDemo;
+            public Task TapAsync(DeviceCommandTarget target, int x, int y, CancellationToken ct = default)
+            {
+                var task = TapCore(target, x, y, ct); owner.CommandTasks.Add(task); return task;
+            }
+            private async Task TapCore(DeviceCommandTarget target, int x, int y, CancellationToken ct)
+            {
+                owner.Calls.Enqueue(new(target, "click", $"{x},{y}"));
+                var held = target.Serial == "DEMO-001" && Interlocked.Increment(ref owner.firstTap) == 1;
+                if (held && owner.HoldBeforeFirstTap)
+                { owner.Entered.TrySetResult(); if (owner.IgnoreHeldCancellation) await owner.Release.Task; else await owner.Release.Task.WaitAsync(ct); }
+                var actual = innerCommands.TapAsync(target, x, y, held && owner.IgnoreHeldCancellation ? CancellationToken.None : ct);
+                owner.Submitted.TrySetResult(); await actual;
+                if (held && owner.HoldAfterFirstTap) { owner.Entered.TrySetResult(); await owner.Release.Task; }
+            }
+            public Task SwipeAsync(DeviceCommandTarget target, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default)
+            { owner.Calls.Enqueue(new(target, "swipe", $"{x1},{y1},{x2},{y2},{durationMs}")); var task = innerCommands.SwipeAsync(target, x1, y1, x2, y2, durationMs, ct); owner.CommandTasks.Add(task); return task; }
+            public Task<string> StartAppAsync(DeviceCommandTarget target, string packageName, CancellationToken ct = default)
+            { owner.Calls.Enqueue(new(target, "launch", packageName)); var task = LaunchCore(target, packageName, ct); owner.CommandTasks.Add(task); return task; }
+            private async Task<string> LaunchCore(DeviceCommandTarget target, string packageName, CancellationToken ct)
+            { var actual = await innerCommands.StartAppAsync(target, packageName, ct); return owner.LaunchOutputs.TryDequeue(out var output) ? output : actual; }
+        }
+    }
+
+    private sealed class SetDeviceBarrierServer : IAsyncDisposable
+    {
+        private readonly TcpListener listener = new(IPAddress.Loopback, 0);
+        private readonly CancellationTokenSource stop = new();
+        private readonly ConcurrentBag<Task> clients = [];
+        private readonly Task accepting;
+        private int armed;
+        public ConcurrentQueue<string> Requests { get; } = new();
+        public ConcurrentQueue<string> Errors { get; } = new();
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public IPEndPoint Endpoint => (IPEndPoint)listener.LocalEndpoint;
+        public SetDeviceBarrierServer() { listener.Start(); accepting = Accept(); }
+        public void ArmNextTransport(int nth = 1)
+        { if (nth is not (1 or 2)) throw new ArgumentOutOfRangeException(nameof(nth)); Interlocked.Exchange(ref armed, nth); }
+        private async Task Accept()
+        {
+            try { while (!stop.IsCancellationRequested) { var client = await listener.AcceptTcpClientAsync(stop.Token); clients.Add(Handle(client)); } }
+            catch (Exception error) when (stop.IsCancellationRequested && error is OperationCanceledException or ObjectDisposedException or SocketException) { }
+        }
+        private async Task Handle(TcpClient client)
+        {
+            using (client)
+            {
+                try
+                {
+                    var stream = client.GetStream();
+                    while (!stop.IsCancellationRequested)
+                    {
+                        var prefix = new byte[4]; await stream.ReadExactlyAsync(prefix, stop.Token);
+                        var length = int.Parse(Encoding.ASCII.GetString(prefix), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                        if (length is < 1 or > 8192) throw new InvalidDataException("Unexpected owned ADB request length.");
+                        var bytes = new byte[length]; await stream.ReadExactlyAsync(bytes, stop.Token);
+                        var request = Encoding.UTF8.GetString(bytes); Requests.Enqueue(request);
+                        if (request is "host:version" or "host:devices-l")
+                        {
+                            var payload = Encoding.UTF8.GetBytes(request == "host:version" ? "0029" : "allowed\tdevice model:Test transport_id:1\n");
+                            await stream.WriteAsync(Encoding.ASCII.GetBytes("OKAY" + payload.Length.ToString("X4", CultureInfo.InvariantCulture)), stop.Token);
+                            await stream.WriteAsync(payload, stop.Token); return;
+                        }
+                        if (request == "host:transport-id:1")
+                        {
+                            if (Volatile.Read(ref armed) > 0 && Interlocked.Decrement(ref armed) == 0) { Entered.TrySetResult(); await Release.Task.WaitAsync(stop.Token); }
+                            await stream.WriteAsync("OKAY"u8.ToArray(), stop.Token); continue;
+                        }
+                        if (!request.StartsWith("shell,v2,raw:", StringComparison.Ordinal)) throw new InvalidDataException("Unexpected owned ADB request: " + request);
+                        await stream.WriteAsync("OKAY"u8.ToArray(), stop.Token);
+                        var stdin = new byte[5]; await stream.ReadExactlyAsync(stdin, stop.Token);
+                        var command = request[13..];
+                        var output = command.StartsWith("cmd package resolve-activity ", StringComparison.Ordinal) ? "com.android.settings/.Settings\n" :
+                            command.StartsWith("am start -W ", StringComparison.Ordinal) ? "Starting: Intent\nStatus: ok\n" : command switch
+                        {
+                            "getprop" => "[ro.product.brand]: [Fixture]\n[ro.product.model]: [Test]\n[ro.build.version.release]: [14]\n",
+                            "wm size" => "Physical size: 4x3\n",
+                            "dumpsys input" => "SurfaceOrientation: 0\n",
+                            _ => "fixture\n"
+                        };
+                        await Packet(stream, 1, Encoding.UTF8.GetBytes(output)); await Packet(stream, 3, [0]); return;
+                    }
+                }
+                catch (EndOfStreamException) { }
+                catch (Exception error) when (stop.IsCancellationRequested && error is OperationCanceledException or ObjectDisposedException or IOException or SocketException) { }
+                catch (Exception error) { Errors.Enqueue(error.ToString()); }
+            }
+        }
+        private async Task Packet(Stream stream, byte channel, byte[] payload)
+        {
+            var header = new byte[5]; header[0] = channel; BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(1), payload.Length);
+            await stream.WriteAsync(header, stop.Token); await stream.WriteAsync(payload, stop.Token);
+        }
+        public async ValueTask DisposeAsync() { Release.TrySetResult(); stop.Cancel(); listener.Stop(); await accepting; await Task.WhenAll(clients); stop.Dispose(); }
     }
 }
 

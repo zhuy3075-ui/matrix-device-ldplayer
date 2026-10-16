@@ -1,5 +1,13 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / A14a2逐目标脚本任务
+
+- Goal/Decision：不另建执行引擎，补齐JobId、目录代次/transport冻结、状态/日志/结果与按任务取消；旧RunAsync/Stop(serial)兼容，共用设备占用。实施规格与边界见[A14a2](codex/apple-experience/A14_SCRIPT_JOBS.md)。
+- Files：Core窄身份能力及原Adb/Demo队列、原Scheduler/Host接线，VM和自动化页任务记录；新Core16/VM5，旧参数fixture只改依赖构造与记录能力适配，原四项断言保留。新增任务Result采集真实启动返回、UTF8限16KiB，不冒称业务成功。
+- Verification：首隔离193/VM9通过；最终源独立Build8004 exit0/74.997秒、209/209/51.77秒，1条测试CS9124警告/0错误，VM22776 exit0/537ms、旧4新5全PASS/cleanup。第16用自有随机loopback精确卡tap及第二次am-start的SetDevice窗口，非真实5037；原工具/协议与193精确保持。
+- Evidence：candidate9D6A0A8B...6D22E，独立execution79BD1618...56015，四raw终态/owned0。wrapper首次函数遮蔽递归仅在preflight，精确owned终态且产品子进程未启动，F215...8C388保留，不当产品红。主仓15源精确导入后session16687 outer0、Build17752 exit0/74.518秒、209/51.75秒，VM12508 exit0/606ms、旧4/新5均PASS/cleanup；同162输入/49项PDB源文档守卫及四raw排空，execution D630E854...E2AF4。
+- Next/Risks：主仓终态独审后更新清单单功能push，原私有feature、不合并发布，以Git实际为准。此阶段不关闭GUI、真实双实例同步、应用GUI安装卸载、最终30分钟、DPI与完整RPA/MCP/抓包；取消不回滚已发送动作，历史不跨运行时。
+
 ## 2026-10-16 / AP042官方纯文本受控对照
 
 - Goal/Decision：用最早strict Demo测试入口和ready/release单门区分整个官方观察流程条件；App原链与25Smoke保持，只新增测试类。规范、源与原件见[两臂记录](codex/apple-experience/AP042_CLIENT_OBSERVATION.md)，无Reset/Invalidate、激活/输入/截图或guest/ADB。

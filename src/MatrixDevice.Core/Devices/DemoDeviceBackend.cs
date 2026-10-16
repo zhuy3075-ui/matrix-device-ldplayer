@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 
 namespace MatrixDevice.Core;
 
-public sealed class DemoDeviceBackend : IDeviceBackend
+public sealed class DemoDeviceBackend : IDeviceBackend, IIdentityPinnedDeviceBackend
 {
     private sealed class DeviceState
     {
@@ -24,6 +24,23 @@ public sealed class DemoDeviceBackend : IDeviceBackend
     {
         foreach (var (serial, width, height, model) in new[] { ("DEMO-001", 360, 640, "演示设备 A"), ("DEMO-002", 412, 720, "演示设备 B") })
             _devices[serial] = new DeviceState { Info = new DeviceInfo { Serial = serial, Name = model + "（模拟）", Brand = "演示", Model = model, AndroidVersion = "模拟", State = "Ready", ConnectionType = "Simulation", Width = width, Height = height, Rotation = 0 } };
+    }
+
+    public IIdentityPinnedDeviceCommands BindIdentity(DeviceCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        return new IdentityCommands(this, catalog);
+    }
+
+    private sealed class IdentityCommands(DemoDeviceBackend owner, DeviceCatalog catalog) : IIdentityPinnedDeviceCommands
+    {
+        public bool IsDemo => true;
+        public Task<string> StartAppAsync(DeviceCommandTarget target, string packageName, CancellationToken ct = default)
+            => owner.Run(target.Serial, device => StartApp(device, packageName), ct, target, catalog);
+        public Task TapAsync(DeviceCommandTarget target, int x, int y, CancellationToken ct = default)
+            => owner.Run(target.Serial, device => Tap(device, x, y), ct, target, catalog);
+        public Task SwipeAsync(DeviceCommandTarget target, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default)
+            => owner.Run(target.Serial, device => Swipe(device, x1, y1, x2, y2, durationMs), ct, target, catalog);
     }
     public void SetOnline(string serial, bool online)
     {
@@ -60,8 +77,19 @@ public sealed class DemoDeviceBackend : IDeviceBackend
         if (!device.Info.Online) throw new DeviceException($"Demo device offline: serial={serial}.", 410, 1003);
         return device;
     }
-    private Task<T> Run<T>(string serial, Func<DeviceState, T> action, CancellationToken ct) => _queue.RunAsync(serial, token => { token.ThrowIfCancellationRequested(); var device = Get(serial); lock (device) return Task.FromResult(action(device)); }, ct);
-    private Task Run(string serial, Action<DeviceState> action, CancellationToken ct) => Run(serial, device => { action(device); return true; }, ct);
+    private Task<T> Run<T>(string serial, Func<DeviceState, T> action, CancellationToken ct, DeviceCommandTarget? target = null, DeviceCatalog? catalog = null)
+    {
+        if (target is not null) DeviceCommandIdentity.Require(catalog!, target, true);
+        return _queue.RunAsync(serial, token =>
+        {
+            token.ThrowIfCancellationRequested();
+            if (target is not null) DeviceCommandIdentity.Require(catalog!, target, true);
+            var device = Get(serial);
+            lock (device) return Task.FromResult(action(device));
+        }, ct);
+    }
+    private Task Run(string serial, Action<DeviceState> action, CancellationToken ct, DeviceCommandTarget? target = null, DeviceCatalog? catalog = null)
+        => Run(serial, device => { action(device); return true; }, ct, target, catalog);
 
     public Task<string> ShellAsync(string serial, string command, bool useRoot = false, CancellationToken ct = default) => Run(serial, device =>
     {
@@ -118,11 +146,16 @@ public sealed class DemoDeviceBackend : IDeviceBackend
             new() { Text = "Settings", ResourceId = "com.matrix.demo:id/settings", ClassName = "android.widget.Button", PackageName = device.ActiveApp, Clickable = true, Enabled = true, Instance = 1, Index = 3, Bounds = new(22, 402, device.Info.Width - 22, 450) }
         ]
     }, ct);
-    public Task TapAsync(string serial, int x, int y, CancellationToken ct = default) => Run(serial, device => { CheckPoint(device, x, y); device.Count++; }, ct);
-    public Task SwipeAsync(string serial, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default) => Run(serial, device => { CheckPoint(device, x1, y1); CheckPoint(device, x2, y2); if (durationMs <= 0 || durationMs > 60000) throw new DeviceException("Swipe duration must be in 1..60000ms.", 400, 1007); device.Count++; }, ct);
+    public Task TapAsync(string serial, int x, int y, CancellationToken ct = default) => Run(serial, device => Tap(device, x, y), ct);
+    public Task SwipeAsync(string serial, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default) => Run(serial, device => Swipe(device, x1, y1, x2, y2, durationMs), ct);
+    private static void Tap(DeviceState device, int x, int y) { CheckPoint(device, x, y); device.Count++; }
+    private static void Swipe(DeviceState device, int x1, int y1, int x2, int y2, int durationMs)
+    { CheckPoint(device, x1, y1); CheckPoint(device, x2, y2); if (durationMs <= 0 || durationMs > 60000) throw new DeviceException("Swipe duration must be in 1..60000ms.", 400, 1007); device.Count++; }
     public Task KeyEventAsync(string serial, int code, CancellationToken ct = default) => Run(serial, device => { if (code < 0 || code > 400) throw new DeviceException("Invalid demo key code.", 400, 1007); if (code == 3) device.ActiveApp = "com.matrix.demo"; }, ct);
     public Task TextAsync(string serial, string text, CancellationToken ct = default) => Run(serial, device => device.Text = text, ct);
-    public Task<string> StartAppAsync(string serial, string packageName, string? activity = null, CancellationToken ct = default) => Run(serial, device => { if (!device.Apps.Contains(packageName)) throw new DeviceException($"演示应用未安装：{packageName}", 404, 1002); device.ActiveApp = packageName; return "演示应用已启动：" + packageName; }, ct);
+    public Task<string> StartAppAsync(string serial, string packageName, string? activity = null, CancellationToken ct = default) => Run(serial, device => StartApp(device, packageName), ct);
+    private static string StartApp(DeviceState device, string packageName)
+    { if (!device.Apps.Contains(packageName)) throw new DeviceException($"演示应用未安装：{packageName}", 404, 1002); device.ActiveApp = packageName; return "演示应用已启动：" + packageName; }
     public Task<string> StopAppAsync(string serial, string packageName, CancellationToken ct = default) => Run(serial, device => { device.ActiveApp = "com.matrix.demo"; return "演示应用已停止：" + packageName; }, ct);
     public Task<bool> ClearAppAsync(string serial, string packageName, CancellationToken ct = default) => Run(serial, device => { if (!device.Apps.Contains(packageName)) return false; device.Count = 0; device.Text = "DEMO INPUT"; return true; }, ct);
     public Task<IReadOnlyList<AppInfo>> ListAppsAsync(string serial, bool showSystem = false, bool needVersion = true, CancellationToken ct = default) => Run<IReadOnlyList<AppInfo>>(serial, device => device.Apps.Where(package => showSystem || package != "com.android.settings").Select(package => new AppInfo(package, package, needVersion ? "1.0-demo" : null, package == "com.android.settings")).ToArray(), ct);

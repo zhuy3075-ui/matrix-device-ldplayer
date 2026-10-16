@@ -133,7 +133,7 @@ internal static class ScriptParameterEditingSmoke
             Directory.CreateDirectory(directory);
             var ownLog = new RollingLog(Path.Combine(directory, "logs")); log = ownLog;
             var ownMetadata = new CatalogRepository(Path.Combine(directory, "db.sqlite3")); metadata = ownMetadata;
-            var catalog = new DeviceCatalog(Backend); var automation = new AutomationService(Backend, catalog); var scheduler = new ScriptScheduler(Backend); scripts = scheduler;
+            var catalog = new DeviceCatalog(Backend); var automation = new AutomationService(Backend, catalog); var scheduler = new ScriptScheduler(Backend, catalog, true); scripts = scheduler;
             var coordinator = new InputCoordinator(catalog, Backend); input = coordinator; var services = new ApiServiceManager(catalog, Backend, automation, ownLog); api = services;
             var settings = new AppSettings { Language = "zh-CN", AutoStartApi = false, AutoConnect = false, SyncMouse = false, SyncKeyboard = false };
             Runtime = new MatrixRuntime { Backend = Backend, Devices = catalog, Automation = automation, Scripts = scheduler, Input = coordinator, Api = services,
@@ -253,7 +253,7 @@ internal static class ScriptParameterEditingSmoke
     }
 
     private sealed record ScriptParameterEditingCall(string Phase, string Operation, string? Serial, string? Subject, string Status, bool Completed, string? Error);
-    private sealed class ScriptParameterEditingBackend : IDeviceBackend
+    private sealed class ScriptParameterEditingBackend : IDeviceBackend, IIdentityPinnedDeviceBackend
     {
         private sealed class Call(string phase, string operation, string? serial, string? subject)
         { internal readonly string Phase = phase, Operation = operation; internal readonly string? Serial = serial, Subject = subject; internal Task? Task; internal string? Error; }
@@ -262,6 +262,14 @@ internal static class ScriptParameterEditingSmoke
         internal ScriptParameterEditingCall[] Calls(string? phase = null) { lock (sync) return calls.Where(call => phase is null || call.Phase == phase).Select(call => new ScriptParameterEditingCall(call.Phase, call.Operation, call.Serial, call.Subject, call.Task?.Status.ToString() ?? "SynchronousThrow", call.Task?.IsCompleted ?? call.Error is not null, call.Error ?? call.Task?.Exception?.ToString())).ToArray(); }
         internal bool Drained { get { lock (sync) return calls.All(call => call.Task?.IsCompleted ?? call.Error is not null); } }
         internal bool Disposed { get { lock (sync) return calls.Any(call => call.Operation == "Dispose" && call.Task?.IsCompletedSuccessfully == true); } }
+        public IIdentityPinnedDeviceCommands BindIdentity(DeviceCatalog catalog) => new Pinned(this, Inner.BindIdentity(catalog));
+        private sealed class Pinned(ScriptParameterEditingBackend owner, IIdentityPinnedDeviceCommands inner) : IIdentityPinnedDeviceCommands
+        {
+            public bool IsDemo => inner.IsDemo;
+            public Task<string> StartAppAsync(DeviceCommandTarget target, string packageName, CancellationToken ct = default) => owner.Forward("StartApp", target.Serial, packageName, () => inner.StartAppAsync(target, packageName, ct));
+            public Task TapAsync(DeviceCommandTarget target, int x, int y, CancellationToken ct = default) => owner.Forward("Tap", target.Serial, $"{x},{y}", () => inner.TapAsync(target, x, y, ct));
+            public Task SwipeAsync(DeviceCommandTarget target, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default) => owner.Forward("Swipe", target.Serial, $"{x1},{y1},{x2},{y2},{durationMs}", () => inner.SwipeAsync(target, x1, y1, x2, y2, durationMs, ct));
+        }
         private Task Forward(string operation, string? serial, string? subject, Func<Task> action)
         {
             var call = new Call(Phase, operation, serial, subject); lock (sync) calls.Add(call);

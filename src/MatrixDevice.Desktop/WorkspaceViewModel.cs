@@ -12,7 +12,7 @@ using MatrixDevice.Host;
 
 namespace MatrixDevice.Desktop;
 
-public sealed class WorkspaceViewModel : ObservableObject
+public sealed partial class WorkspaceViewModel : ObservableObject
 {
     private MatrixRuntime runtime;
     private readonly string dataDirectory;
@@ -73,8 +73,9 @@ public sealed class WorkspaceViewModel : ObservableObject
         TextCommand = Async(SendTextAsync, () => CanWriteTargets() && !string.IsNullOrWhiteSpace(TextInput));
         StartTransfersCommand = Async(StartTransfersAsync, () => !Busy && !Transferring && Transfers.Any(PendingTransfer));
         CancelTransfersCommand = Action(() => transferCancellation?.Cancel(), () => Transferring);
-        StartScriptCommand = Async(StartScriptAsync, () => !Busy && !Transferring && package is not null && Targets().Any() && Targets().All(row => row.Info.Online && !ScriptBusy(row.Serial)));
+        StartScriptCommand = Async(StartScriptAsync, () => !Busy && !Transferring && package is not null && Targets().Any() && Targets().All(row => row.Info.Online) && Targets().Any(row => !ScriptBusy(row.Serial)));
         StopScriptCommand = Action(StopScripts, () => Targets().Any(row => ScriptBusy(row.Serial)));
+        CancelScriptJobCommand = Action(CancelSelectedScriptJob, () => SelectedScriptJob?.CanCancel == true);
         StartApiCommand = Async(StartApisAsync, () => !Busy && (!runtime.Api.BasicRunning || !runtime.Api.AutomatorRunning));
         StopApiCommand = Async(StopApisAsync, () => !Busy && (runtime.Api.BasicRunning || runtime.Api.AutomatorRunning));
         StartDeviceApiCommand = Async(StartDeviceApisAsync, () => !Busy && Targets().Any() && Targets().All(row => row.Info.Online && !ScriptBusy(row.Serial)));
@@ -83,6 +84,7 @@ public sealed class WorkspaceViewModel : ObservableObject
         SaveSettingsCommand = Async(SaveSettingsAsync, () => !Busy);
         runtime.Scripts.EntryAdded += OnScriptLog;
         runtime.Scripts.StatusChanged += OnScriptStatus;
+        AttachScriptJobs();
         LocalizationService.Current.LanguageChanged += OnLanguageChanged;
     }
 
@@ -307,15 +309,18 @@ public sealed class WorkspaceViewModel : ObservableObject
         }
         catch { if (replacement is not null) await replacement.DisposeAsync(); throw; }
         old.Scripts.EntryAdded -= OnScriptLog; old.Scripts.StatusChanged -= OnScriptStatus;
+        DetachScriptJobs(old.Scripts);
         runtime = replacement;
         ReconcileCompletedDebugCaches();
         runtime.Scripts.EntryAdded += OnScriptLog; runtime.Scripts.StatusChanged += OnScriptStatus;
+        SelectedScriptJob = null; ScriptJobs.Clear(); AttachScriptJobs();
         SyncApiWriteGuard();
         Settings.AdbSerialsJson = JsonSerializer.Serialize(runtime.Settings.AdbAllowedSerials, JsonDefaults.Options);
         Settings.LdBindingsJson = JsonSerializer.Serialize(runtime.Settings.LdSerialBindings, JsonDefaults.Options);
         Settings.Changed(nameof(SettingsEditor.AdbSerialsJson)); Settings.Changed(nameof(SettingsEditor.LdBindingsJson));
         MainDevice = null; ClearNodes(); Apps.Clear();
         try { await old.DisposeAsync(); } catch (Exception ex) { runtime.Log.Write("previous-runtime-cleanup-error", ex.ToString()); }
+        await DrainScriptJobObserversAsync();
         await ApplyCachedDeviceSnapshotAsync();
         Changed(nameof(ApiSummary)); AddActivity($"已接入{proofs.Count}台雷电设备");
     }
@@ -838,30 +843,41 @@ public sealed class WorkspaceViewModel : ObservableObject
     {
         try
         {
-            var targets = RequireTargets().ToList();
+            var targets = RequireScriptTargets().Select(row => new ScriptJobTarget(row.Serial, row.Info.Generation, row.Info.TransportId, demo)).ToArray();
             var selectedPackage = ScriptExecutionCompiler.Compile(ParameterizedPackage());
             var values = selectedPackage.Parameters.ToDictionary(parameter => parameter.Key, parameter => parameter.Value ?? parameter.DefaultValue ?? JsonSerializer.SerializeToElement<object?>(null));
-            foreach (var row in targets) runtime.Metadata.Put("ScriptDeviceConfiguration", row.Serial + "\u001f" + selectedPackage.Manifest.Id, new ScriptDeviceParameters(row.Serial, selectedPackage.Manifest.Id, selectedPackage.Manifest.Version, values));
             Error = "";
-            foreach (var row in targets) row.ScriptState = "准备执行";
-            RefreshCommands();
-            foreach (var row in targets) _ = ObserveScriptAsync(row.Serial, selectedPackage);
+            var failures = new List<string>(); var accepted = 0;
+            foreach (var target in targets)
+            {
+                ScriptJobHandle handle;
+                try { handle = runtime.Scripts.SubmitJob(target, selectedPackage); }
+                catch (Exception ex) { failures.Add($"{target.Serial} 未接纳：{PresentError(ex)}"); continue; }
+                accepted++;
+                RefreshScriptJobs();
+                if (accepted == 1) SelectedScriptJob = ScriptJobs.First(row => row.JobId == handle.JobId);
+                TrackScriptJob(runtime.Scripts, handle, target.Serial);
+                try { runtime.Metadata.Put("ScriptDeviceConfiguration", target.Serial + "\u001f" + selectedPackage.Manifest.Id, new ScriptDeviceParameters(target.Serial, selectedPackage.Manifest.Id, selectedPackage.Manifest.Version, values)); }
+                catch (Exception ex) { failures.Add($"{target.Serial} 任务已接纳，但参数保存失败：{PresentError(ex)}"); }
+            }
+            Status = $"已接纳 {accepted}/{targets.Length} 个脚本任务";
+            if (failures.Count > 0) Error = "脚本提交结果：" + string.Join("；", failures);
         }
         catch (Exception ex) { Error = $"脚本未启动：{PresentError(ex)}"; }
         finally { RefreshCommands(); }
         return Task.CompletedTask;
     }
 
-    private async Task ObserveScriptAsync(string serial, ScriptPackage selectedPackage)
-    {
-        try { await runtime.Scripts.RunAsync(serial, selectedPackage); }
-        catch (Exception ex) { await Application.Current.Dispatcher.InvokeAsync(() => { Error = $"脚本 {serial}：{PresentError(ex)}"; AddActivity(Error); }); }
-    }
-
     private void StopScripts() { foreach (var row in Targets()) runtime.Scripts.Stop(row.Serial); RefreshCommands(); }
-    private void OnScriptLog(string serial, ScriptLogEntry entry) => Application.Current.Dispatcher.BeginInvoke(() => { if (CurrentDevice?.Serial == serial) { ScriptLogs.Add(FormatScriptLog(entry)); while (ScriptLogs.Count > 500) ScriptLogs.RemoveAt(0); } });
+    private void OnScriptLog(string serial, ScriptLogEntry entry) => Application.Current.Dispatcher.BeginInvoke(() => { if (SelectedScriptJob is null && CurrentDevice?.Serial == serial) { ScriptLogs.Add(FormatScriptLog(entry)); while (ScriptLogs.Count > 500) ScriptLogs.RemoveAt(0); } });
     private void OnScriptStatus(ScriptRunStatus state) => Application.Current.Dispatcher.BeginInvoke(() => { var row = Devices.FirstOrDefault(row => row.Serial == state.Serial); if (row is not null) row.ScriptState = LocalizationService.Current.Get(state.State.ToString()); RefreshCommands(); Changed(nameof(HasActiveOperations)); });
-    private void LoadScriptLogs() { ScriptLogs.Clear(); if (CurrentDevice is not null) foreach (var entry in runtime.Scripts.GetLogs(CurrentDevice.Serial)) ScriptLogs.Add(FormatScriptLog(entry)); }
+    private void LoadScriptLogs()
+    {
+        ScriptLogs.Clear();
+        var entries = SelectedScriptJob is { } job ? runtime.Scripts.GetJobLogs(job.JobId) : CurrentDevice is { } device ? runtime.Scripts.GetLogs(device.Serial) : [];
+        foreach (var entry in entries) ScriptLogs.Add(FormatScriptLog(entry));
+        Changed(nameof(ScriptLogContext));
+    }
     private static string FormatScriptLog(ScriptLogEntry entry)
     {
         var message = entry.Message;
@@ -897,8 +913,10 @@ public sealed class WorkspaceViewModel : ObservableObject
         await runtime.Input.ReleaseAsync(CancellationToken.None);
         runtime.Scripts.EntryAdded -= OnScriptLog;
         runtime.Scripts.StatusChanged -= OnScriptStatus;
+        DetachScriptJobs(runtime.Scripts);
         LocalizationService.Current.LanguageChanged -= OnLanguageChanged;
         await runtime.DisposeAsync();
+        await DrainScriptJobObserversAsync();
     }
     private void OnLanguageChanged(object? sender, EventArgs args)
     {
