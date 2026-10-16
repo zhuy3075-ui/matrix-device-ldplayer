@@ -14,6 +14,19 @@ public partial class App : Application
         base.OnStartup(e);
         try
         {
+            if (e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase))
+            {
+                ValidateLayoutArguments(e.Args, "--verify-write-ownership", "设备写入占用");
+                if (e.Args.Any(arg => arg.Equals("--width", StringComparison.OrdinalIgnoreCase) || arg.Equals("--height", StringComparison.OrdinalIgnoreCase) || arg.Equals("--screenshot", StringComparison.OrdinalIgnoreCase)))
+                    throw new ArgumentException("写入占用验收无窗口，不接受尺寸或截图参数。");
+                var index = Array.FindIndex(e.Args, arg => string.Equals(arg, "--data-dir", StringComparison.OrdinalIgnoreCase));
+                var directory = Path.GetFullPath(e.Args[index + 1]);
+                if (Directory.Exists(directory) || File.Exists(directory)) throw new ArgumentException("写入占用验收必须使用尚不存在的独立artifacts目录。");
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                await DeviceWriteWorkspaceSmoke.RunAsync(directory, Dispatcher);
+                Shutdown(0);
+                return;
+            }
             if (e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -182,7 +195,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
+            if (e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(ex);
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;

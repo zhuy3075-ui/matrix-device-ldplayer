@@ -37,6 +37,7 @@ public sealed class InputCoordinator : IAsyncDisposable
     private sealed record Gesture(string Source, long SourceGeneration, long Generation, long Id, long DeviceGeneration, int X, int Y, int LastX, int LastY, long Started);
     private readonly DeviceCatalog _catalog;
     private readonly IDeviceBackend _backend;
+    private readonly DeviceWriteCoordinator? _writes;
     private readonly object _gate = new();
     private readonly LinkedList<Work> _pending = new();
     private readonly SemaphoreSlim _signal = new(0);
@@ -53,9 +54,9 @@ public sealed class InputCoordinator : IAsyncDisposable
     public string InputMode => "ADB completed gestures; not real-time touch";
     public event Action<string, Exception>? TargetFailed;
 
-    public InputCoordinator(DeviceCatalog catalog, IDeviceBackend backend)
+    public InputCoordinator(DeviceCatalog catalog, IDeviceBackend backend, DeviceWriteCoordinator? writes = null)
     {
-        _catalog = catalog; _backend = backend;
+        _catalog = catalog; _backend = backend; _writes = writes;
         _catalog.DeviceDisconnected += OnDisconnected;
         _worker = Task.Run(WorkerAsync);
     }
@@ -123,12 +124,77 @@ public sealed class InputCoordinator : IAsyncDisposable
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(work.Cancellation, _lifetime.Token);
             linked.Token.ThrowIfCancellationRequested();
-            var requests = work.Targets.Select(target => _targets.RunAsync(target.Serial, async token =>
+            var ready = _writes is not null && work.Targets.Length != 0 && work.Snapshot.Kind is
+                (InputKind.Up or InputKind.Tap or InputKind.Swipe or InputKind.Key or InputKind.Text)
+                ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) : null;
+            var finished = ready is null ? null : new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var remaining = work.Targets.Length;
+            var unfinished = work.Targets.Length;
+            IDisposable? lease = null;
+            void FinishTarget()
             {
-                try { await SendTargetAsync(work.Snapshot, target, token).ConfigureAwait(false); }
-                catch (Exception error) { TargetFailed?.Invoke(target.Serial, error); throw; }
-            }, linked.Token));
-            await Task.WhenAll(requests).ConfigureAwait(false);
+                if (finished is null || Interlocked.Decrement(ref unfinished) != 0) return;
+                try { lease?.Dispose(); finished.TrySetResult(); }
+                catch (Exception error) { finished.TrySetException(error); }
+            }
+            async Task QueueTargetAsync(Target target)
+            {
+                var entered = false;
+                try
+                {
+                    await _targets.RunAsync(target.Serial, async token =>
+                    {
+                        entered = true;
+                        try
+                        {
+                            if (ready is not null)
+                            {
+                                // The single worker enqueues a complete group before the next work.
+                                // All FIFO lanes arrive before taking Writes; no lane lock or input lock is held.
+                                if (Interlocked.Decrement(ref remaining) == 0)
+                                {
+                                    try
+                                    {
+                                        Target[] targets = work.Snapshot.Generation != CurrentGeneration ? [] : work.Targets.Where(item =>
+                                            work.Snapshot.Kind != InputKind.Up || _gestures.TryGetValue(item.Serial, out var gesture) && Matches(gesture, work.Snapshot, item)).ToArray();
+                                        if (targets.Length != 0) lease = _writes!.Acquire(targets.Select(item => item.Serial));
+                                        ready.TrySetResult();
+                                    }
+                                    catch (Exception error)
+                                    {
+                                        if (work.Snapshot.Kind == InputKind.Up && error is DeviceException { Status: 409, Code: 1003 })
+                                            foreach (var item in work.Targets)
+                                                if (_gestures.TryGetValue(item.Serial, out var gesture) && Matches(gesture, work.Snapshot, item))
+                                                    _gestures.TryRemove(new KeyValuePair<string, Gesture>(item.Serial, gesture));
+                                        ready.TrySetException(error);
+                                    }
+                                }
+                                await ready.Task.WaitAsync(token).ConfigureAwait(false);
+                            }
+                            await SendTargetAsync(work.Snapshot, target, token).ConfigureAwait(false);
+                        }
+                        catch (Exception error) { TargetFailed?.Invoke(target.Serial, error); throw; }
+                        finally
+                        {
+                            // Keep each FIFO lane occupied until the complete group releases Writes.
+                            FinishTarget();
+                            if (finished is not null) await finished.Task.ConfigureAwait(false);
+                        }
+                    }, linked.Token).ConfigureAwait(false);
+                }
+                catch (Exception error) { ready?.TrySetException(error); throw; }
+                finally
+                {
+                    // A cancelled/failed queue entry never enters its callback, but still owns one arrival.
+                    if (!entered)
+                    {
+                        FinishTarget();
+                        if (finished is not null) await finished.Task.ConfigureAwait(false);
+                    }
+                }
+            }
+            try { await Task.WhenAll(work.Targets.Select(QueueTargetAsync)).ConfigureAwait(false); }
+            finally { ready?.TrySetCanceled(); _ = ready?.Task.Exception; lease?.Dispose(); }
             foreach (var waiter in work.Waiters) waiter.TrySetResult();
         }
         catch (OperationCanceledException) { foreach (var waiter in work.Waiters) waiter.TrySetCanceled(); }

@@ -9,6 +9,8 @@ public sealed class MatrixRuntime : IAsyncDisposable
     public required DeviceCatalog Devices { get; init; }
     public required ScriptScheduler Scripts { get; init; }
     public required InputCoordinator Input { get; init; }
+    // Hand-built runtimes must explicitly inject this same instance into all write entry points.
+    public DeviceWriteCoordinator Writes { get; init; } = new();
     public required ApiServiceManager Api { get; init; }
     public required SettingsStore SettingsStore { get; init; }
     public required CatalogRepository Metadata { get; init; }
@@ -74,8 +76,9 @@ public sealed class MatrixRuntime : IAsyncDisposable
             var top = y ?? 0;
             return PngImage.Crop(png, left, top, width ?? size.Width - left, height ?? size.Height - top);
         };
-        scripts = new ScriptScheduler(backend, catalog, demo);
-        input = new InputCoordinator(catalog, backend);
+        var writes = new DeviceWriteCoordinator();
+        scripts = new ScriptScheduler(backend, catalog, demo, writes);
+        input = new InputCoordinator(catalog, backend, writes);
         if (demo) ldPlayer = new LdPlayerService(new DemoLdConsoleRunner(), true);
         else if (!string.IsNullOrWhiteSpace(settings.LdConsolePath))
         {
@@ -87,7 +90,7 @@ public sealed class MatrixRuntime : IAsyncDisposable
             }
             catch (DeviceException e) { ldPlayerError = e.Message; log.Write("ldplayer-configuration-error", e.Message); }
         }
-        api = new ApiServiceManager(catalog, backend, automation, log) { LdPlayer = ldPlayer };
+        api = new ApiServiceManager(catalog, backend, automation, log, writes) { LdPlayer = ldPlayer };
         if (admissions is { Count: > 0 } && (ldPlayer is null || admissions.Any(proof => !settings.LdSerialBindings.TryGetValue(proof.Index, out var serial) || serial != proof.Serial || !settings.AdbAllowedSerials.Contains(proof.Serial, StringComparer.Ordinal))))
             throw new DeviceException("接入凭据与运行时授权不一致。", 409, 1003);
         bool ScriptBusy(string serial) => scripts.GetStatus(serial).State is ScriptRunState.Running or ScriptRunState.Cancelling;
@@ -96,7 +99,7 @@ public sealed class MatrixRuntime : IAsyncDisposable
         var runtime = new MatrixRuntime
         {
             Backend = backend, Devices = catalog, Automation = automation, Scripts = scripts,
-            Input = input, Api = api,
+            Input = input, Api = api, Writes = writes,
             SettingsStore = store, Settings = settings, FrozenConnectionSettings = settings with { AdbAllowedSerials = settings.AdbAllowedSerials.ToArray(), LdSerialBindings = new(settings.LdSerialBindings) }, Metadata = metadata,
             Log = log, IsDemo = demo, LdPlayer = ldPlayer, LdEditor = ldEditor, LdPlayerError = ldPlayerError
         };
@@ -215,6 +218,13 @@ public sealed class MatrixRuntime : IAsyncDisposable
         var frozen = FrozenConnectionSettings;
         if (Settings.LdConsolePath != frozen.LdConsolePath || Settings.AdbPath != frozen.AdbPath || Settings.CommandTimeoutSeconds != frozen.CommandTimeoutSeconds || Settings.AgentBaseUrl != frozen.AgentBaseUrl || Settings.AgentSerial != frozen.AgentSerial || !Settings.AdbAllowedSerials.SequenceEqual(frozen.AdbAllowedSerials) || !Settings.LdSerialBindings.OrderBy(pair => pair.Key).SequenceEqual(frozen.LdSerialBindings.OrderBy(pair => pair.Key)))
             throw new DeviceException("连接配置已保存但尚未生效，请重新启动矩阵设备后再接入或管理实例。", 409, 1003);
+    }
+    public IDisposable AcquireLdWrite(int index)
+    {
+        RequireFrozenConnectionSettings();
+        if (index <= 0) throw new DeviceException("原实例0受保护，未发送雷电命令。", 403, 1003);
+        var serial = Api.LdSerialForWriteGuard?.Invoke(index);
+        return string.IsNullOrWhiteSpace(serial) ? Writes.AcquireAll() : Writes.Acquire([serial]);
     }
     public async Task RefreshLdPlayerAsync(CancellationToken ct = default)
     {

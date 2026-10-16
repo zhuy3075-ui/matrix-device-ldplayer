@@ -114,6 +114,7 @@ public partial class MainWindow
         ldBusy = true; ViewModel.SetExternalBusy(true); ldFeedback.Text = "正在执行所选实例命令…"; RefreshLdButtons();
         try
         {
+            using var write = ViewModel.Runtime.AcquireLdWrite(selected.Index);
             ViewModel.Runtime.RequireFrozenConnectionSettings();
             if (ViewModel.Runtime.Api.LdCommandIdentityGuard is { } verify) await verify(selected.Index, operation, CancellationToken.None);
             var result = await service.ExecuteAsync(selected.Index, operation, body, CancellationToken.None);

@@ -159,7 +159,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     public string MainContext => MainDevice is { } row ? $"{LocalizationService.Current.Get("主控")}: {row.Name} · {row.Serial}" : $"{LocalizationService.Current.Get("主控")}: {LocalizationService.Current.Get("未指定")}";
     public bool Busy { get => busy || externalBusy; private set { Set(ref busy, value); SyncApiWriteGuard(); RefreshCommands(); Changed(nameof(HasActiveOperations)); } }
     internal void SetExternalBusy(bool value) { externalBusy = value; Changed(nameof(Busy)); SyncApiWriteGuard(); RefreshCommands(); Changed(nameof(HasActiveOperations)); }
-    private void SyncApiWriteGuard() => runtime.Api.UiWriteBusy = externalBusy || (busy && blockApiWhileBusy) || Transferring;
+    private void SyncApiWriteGuard() => runtime.Api.UiWriteBusy = externalBusy || (busy && blockApiWhileBusy);
     public string Status { get => LocalizationService.Current.Get(status); private set => Set(ref status, value); }
     public string Error { get => error; private set => Set(ref error, value); }
     public string Counts => $"{LocalizationService.Current.Get("发现")} {Devices.Count}   {LocalizationService.Current.Get("就绪")} {Devices.Count(row => row.Info.Online)}   {LocalizationService.Current.Get("筛选")} {DeviceView.Cast<object>().Count()}   {LocalizationService.Current.Get("选中")} {Devices.Count(row => row.IsSelected)}";
@@ -430,17 +430,28 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         await ExecuteAsync("切换主控", async () => { await runtime.Input.HandoffAsync(row.Serial); MainDevice = row; CurrentDevice = row; });
     }
 
-    public Task SendInputAsync(InputSnapshot input) => ExecuteAsync("发送输入", async () =>
+    public async Task SendInputAsync(InputSnapshot input)
     {
-        if (pendingLaunchSelection > 0 && (input.Kind is InputKind.Key or InputKind.Text ? SyncKeyboard : SyncMouse)) throw new DeviceException("同步目标中存在未连接设备，请先连接或取消选择。", 409, 1003);
-        if (Transferring) throw new DeviceException("文件传输进行中，完成或停止传输后再控制");
-        var source = Devices.FirstOrDefault(row => row.Serial == input.SourceSerial);
-        if (input.Kind is InputKind.Tap or InputKind.Swipe && source is not null &&
-            (input.SourceWidth != source.Info.Width || input.SourceHeight != source.Info.Height))
-            throw new DeviceException("截图与设备当前尺寸不一致，请刷新截图后重试；未发送手势");
-        if (ScriptBusy(input.SourceSerial) || input.TargetSerials.Any(ScriptBusy)) throw new DeviceException("目标设备正在执行脚本，停止脚本后再控制");
-        await runtime.Input.SendAsync(input);
-    });
+        if (input.Kind == InputKind.Cancel)
+        {
+            await runtime.Input.SendAsync(input);
+            return;
+        }
+        if (input.Kind == InputKind.Up && (Busy || Transferring || pendingLaunchSelection > 0
+            || ScriptBusy(input.SourceSerial) || input.TargetSerials.Any(ScriptBusy)))
+            await runtime.Input.SendAsync(input with { Kind = InputKind.Cancel });
+        await ExecuteAsync("发送输入", async () =>
+        {
+            if (pendingLaunchSelection > 0 && (input.Kind is InputKind.Key or InputKind.Text ? SyncKeyboard : SyncMouse)) throw new DeviceException("同步目标中存在未连接设备，请先连接或取消选择。", 409, 1003);
+            if (Transferring) throw new DeviceException("文件传输进行中，完成或停止传输后再控制");
+            var source = Devices.FirstOrDefault(row => row.Serial == input.SourceSerial);
+            if (input.Kind is InputKind.Tap or InputKind.Swipe && source is not null &&
+                (input.SourceWidth != source.Info.Width || input.SourceHeight != source.Info.Height))
+                throw new DeviceException("截图与设备当前尺寸不一致，请刷新截图后重试；未发送手势");
+            if (ScriptBusy(input.SourceSerial) || input.TargetSerials.Any(ScriptBusy)) throw new DeviceException("目标设备正在执行脚本，停止脚本后再控制");
+            await runtime.Input.SendAsync(input);
+        }, blocksApiWrites: false);
+    }
 
     public IReadOnlyList<string> InputTargets(string source, bool mouse) => (mouse ? SyncMouse : SyncKeyboard) ? Devices.Where(row => row.IsSelected && row.Serial != source).Select(row => row.Serial).ToArray() : [];
     public Task KeyAsync(int code)
@@ -454,8 +465,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     {
         var targets = RequireTargets();
         var text = TextInput;
+        using var write = runtime.Writes.Acquire(targets.Select(row => row.Serial));
         foreach (var row in targets) await runtime.Backend.TextAsync(row.Serial, text);
-    });
+    }, blocksApiWrites: false);
 
     public Task LoadNodesAsync() => ExecuteAsync("刷新截图与节点", async () =>
     {
@@ -668,6 +680,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         var command = ShellInput.Trim();
         if (command.Length == 0) return;
         if (ScriptBusy(row.Serial)) throw new DeviceException("设备正在执行脚本");
+        using var write = runtime.Writes.Acquire([row.Serial]);
         try
         {
             var output = await runtime.Backend.ShellAsync(row.Serial, command);
@@ -679,7 +692,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
             throw;
         }
         finally { ShellInput = ""; }
-    });
+    }, blocksApiWrites: false);
 
     public Task LoadAppsAsync() => ExecuteAsync("读取应用列表", async () =>
     {
@@ -693,6 +706,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     public Task InstallAppAsync(string path) => ExecuteAsync("安装 APK", async () =>
     {
         var targets = RequireTargets();
+        using var write = runtime.Writes.Acquire(targets.Select(row => row.Serial));
         var results = new List<string>();
         foreach (var row in targets)
         {
@@ -701,7 +715,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         }
         AddActivity(string.Join("；", results));
         if (results.Any(result => result.Contains("：失败", StringComparison.Ordinal))) throw new InvalidOperationException(string.Join("；", results));
-    });
+    }, blocksApiWrites: false);
 
     private Task ChangeAppAsync(string operation) => ExecuteAsync("应用操作", async () =>
     {
@@ -713,6 +727,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
             var detail = $"{label}\n包名：{app.PackageName}\n设备数量：{targets.Count}\n{string.Join("\n", targets.Select(row => $"{row.Name} ({row.Serial})"))}\n此操作会删除应用数据。";
             if (!Confirm(label, detail)) return;
         }
+        using var write = runtime.Writes.Acquire(targets.Select(row => row.Serial));
         var failures = new List<string>();
         foreach (var row in targets)
         {
@@ -731,7 +746,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         }
         if (failures.Count > 0) throw new InvalidOperationException(string.Join("；", failures));
         if (operation == "uninstall") Apps.Remove(app);
-    });
+    }, blocksApiWrites: false);
 
     private IReadOnlyList<DeviceRow> RequireTargets()
     {
@@ -760,12 +775,15 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     public async Task StartTransfersAsync()
     {
         if (Busy || Transferring) return;
+        var pending = Transfers.Where(PendingTransfer).ToArray();
+        if (pending.Length == 0) return;
         transferCancellation = new CancellationTokenSource();
         Transferring = true;
         Error = "";
         try
         {
-            foreach (var row in Transfers.Where(PendingTransfer).ToList())
+            using var write = runtime.Writes.Acquire(pending.Select(row => row.Serial));
+            foreach (var row in pending)
             {
                 if (transferCancellation.IsCancellationRequested) break;
                 row.State = "传输中";
@@ -785,6 +803,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
             }
             Changed(nameof(OverallProgress));
         }
+        catch (Exception ex) { Error = "传输未完成：" + PresentError(ex); AddActivity(Error); }
         finally { Transferring = false; transferCancellation.Dispose(); transferCancellation = null; }
     }
 

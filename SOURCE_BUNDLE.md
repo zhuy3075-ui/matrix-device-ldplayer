@@ -2076,6 +2076,80 @@ public sealed class DeviceCatalog(IDeviceBackend backend)
 
 ```
 
+## src/MatrixDevice.Core/Devices/DeviceWriteCoordinator.cs
+
+```csharp
+namespace MatrixDevice.Core;
+
+public sealed class DeviceWriteCoordinator
+{
+    private readonly object gate = new();
+    private readonly Dictionary<string, Lease> owners = new(StringComparer.Ordinal);
+    private Lease? barrier;
+
+    public IDisposable Acquire(IEnumerable<string> serials)
+    {
+        if (serials is null) throw new DeviceException("Write targets must not be null.", 400, 1007);
+        var frozen = serials.ToArray();
+        if (frozen.Length == 0) throw new DeviceException("Write targets must not be empty.", 400, 1007);
+        foreach (var serial in frozen) ValidateSerial(serial);
+        frozen = frozen.Distinct(StringComparer.Ordinal).ToArray();
+        lock (gate)
+        {
+            if (barrier is not null || frozen.Any(owners.ContainsKey))
+                throw new DeviceException("A write target is already reserved.", 409, 1003);
+            var lease = new Lease(this, frozen, all: false);
+            foreach (var serial in frozen) owners.Add(serial, lease);
+            return lease;
+        }
+    }
+
+    public IDisposable AcquireAll()
+    {
+        lock (gate)
+        {
+            if (barrier is not null || owners.Count != 0)
+                throw new DeviceException("Device writes are already reserved.", 409, 1003);
+            return barrier = new Lease(this, [], all: true);
+        }
+    }
+
+    public bool IsBusy(string serial)
+    {
+        ValidateSerial(serial);
+        lock (gate) return barrier is not null || owners.ContainsKey(serial);
+    }
+
+    private static void ValidateSerial(string serial)
+    {
+        if (string.IsNullOrWhiteSpace(serial) || serial.Any(char.IsWhiteSpace) || serial.Any(char.IsControl))
+            throw new DeviceException($"Invalid write target serial: '{serial}'.", 400, 1007);
+    }
+
+    private void Release(Lease lease)
+    {
+        lock (gate)
+        {
+            if (lease.All)
+            {
+                if (ReferenceEquals(barrier, lease)) barrier = null;
+            }
+            else foreach (var serial in lease.Serials)
+                if (owners.TryGetValue(serial, out var owner) && ReferenceEquals(owner, lease)) owners.Remove(serial);
+        }
+    }
+
+    private sealed class Lease(DeviceWriteCoordinator coordinator, string[] serials, bool all) : IDisposable
+    {
+        private DeviceWriteCoordinator? owner = coordinator;
+        internal string[] Serials { get; } = serials;
+        internal bool All { get; } = all;
+        public void Dispose() => Interlocked.Exchange(ref owner, null)?.Release(this);
+    }
+}
+
+```
+
 ## src/MatrixDevice.Core/Devices/ExistingAdbSocket.cs
 
 ```csharp
@@ -2931,6 +3005,7 @@ public sealed class InputCoordinator : IAsyncDisposable
     private sealed record Gesture(string Source, long SourceGeneration, long Generation, long Id, long DeviceGeneration, int X, int Y, int LastX, int LastY, long Started);
     private readonly DeviceCatalog _catalog;
     private readonly IDeviceBackend _backend;
+    private readonly DeviceWriteCoordinator? _writes;
     private readonly object _gate = new();
     private readonly LinkedList<Work> _pending = new();
     private readonly SemaphoreSlim _signal = new(0);
@@ -2947,9 +3022,9 @@ public sealed class InputCoordinator : IAsyncDisposable
     public string InputMode => "ADB completed gestures; not real-time touch";
     public event Action<string, Exception>? TargetFailed;
 
-    public InputCoordinator(DeviceCatalog catalog, IDeviceBackend backend)
+    public InputCoordinator(DeviceCatalog catalog, IDeviceBackend backend, DeviceWriteCoordinator? writes = null)
     {
-        _catalog = catalog; _backend = backend;
+        _catalog = catalog; _backend = backend; _writes = writes;
         _catalog.DeviceDisconnected += OnDisconnected;
         _worker = Task.Run(WorkerAsync);
     }
@@ -3017,12 +3092,77 @@ public sealed class InputCoordinator : IAsyncDisposable
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(work.Cancellation, _lifetime.Token);
             linked.Token.ThrowIfCancellationRequested();
-            var requests = work.Targets.Select(target => _targets.RunAsync(target.Serial, async token =>
+            var ready = _writes is not null && work.Targets.Length != 0 && work.Snapshot.Kind is
+                (InputKind.Up or InputKind.Tap or InputKind.Swipe or InputKind.Key or InputKind.Text)
+                ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) : null;
+            var finished = ready is null ? null : new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var remaining = work.Targets.Length;
+            var unfinished = work.Targets.Length;
+            IDisposable? lease = null;
+            void FinishTarget()
             {
-                try { await SendTargetAsync(work.Snapshot, target, token).ConfigureAwait(false); }
-                catch (Exception error) { TargetFailed?.Invoke(target.Serial, error); throw; }
-            }, linked.Token));
-            await Task.WhenAll(requests).ConfigureAwait(false);
+                if (finished is null || Interlocked.Decrement(ref unfinished) != 0) return;
+                try { lease?.Dispose(); finished.TrySetResult(); }
+                catch (Exception error) { finished.TrySetException(error); }
+            }
+            async Task QueueTargetAsync(Target target)
+            {
+                var entered = false;
+                try
+                {
+                    await _targets.RunAsync(target.Serial, async token =>
+                    {
+                        entered = true;
+                        try
+                        {
+                            if (ready is not null)
+                            {
+                                // The single worker enqueues a complete group before the next work.
+                                // All FIFO lanes arrive before taking Writes; no lane lock or input lock is held.
+                                if (Interlocked.Decrement(ref remaining) == 0)
+                                {
+                                    try
+                                    {
+                                        Target[] targets = work.Snapshot.Generation != CurrentGeneration ? [] : work.Targets.Where(item =>
+                                            work.Snapshot.Kind != InputKind.Up || _gestures.TryGetValue(item.Serial, out var gesture) && Matches(gesture, work.Snapshot, item)).ToArray();
+                                        if (targets.Length != 0) lease = _writes!.Acquire(targets.Select(item => item.Serial));
+                                        ready.TrySetResult();
+                                    }
+                                    catch (Exception error)
+                                    {
+                                        if (work.Snapshot.Kind == InputKind.Up && error is DeviceException { Status: 409, Code: 1003 })
+                                            foreach (var item in work.Targets)
+                                                if (_gestures.TryGetValue(item.Serial, out var gesture) && Matches(gesture, work.Snapshot, item))
+                                                    _gestures.TryRemove(new KeyValuePair<string, Gesture>(item.Serial, gesture));
+                                        ready.TrySetException(error);
+                                    }
+                                }
+                                await ready.Task.WaitAsync(token).ConfigureAwait(false);
+                            }
+                            await SendTargetAsync(work.Snapshot, target, token).ConfigureAwait(false);
+                        }
+                        catch (Exception error) { TargetFailed?.Invoke(target.Serial, error); throw; }
+                        finally
+                        {
+                            // Keep each FIFO lane occupied until the complete group releases Writes.
+                            FinishTarget();
+                            if (finished is not null) await finished.Task.ConfigureAwait(false);
+                        }
+                    }, linked.Token).ConfigureAwait(false);
+                }
+                catch (Exception error) { ready?.TrySetException(error); throw; }
+                finally
+                {
+                    // A cancelled/failed queue entry never enters its callback, but still owns one arrival.
+                    if (!entered)
+                    {
+                        FinishTarget();
+                        if (finished is not null) await finished.Task.ConfigureAwait(false);
+                    }
+                }
+            }
+            try { await Task.WhenAll(work.Targets.Select(QueueTargetAsync)).ConfigureAwait(false); }
+            finally { ready?.TrySetCanceled(); _ = ready?.Task.Exception; lease?.Dispose(); }
             foreach (var waiter in work.Waiters) waiter.TrySetResult();
         }
         catch (OperationCanceledException) { foreach (var waiter in work.Waiters) waiter.TrySetCanceled(); }
@@ -4369,6 +4509,19 @@ public partial class App : Application
         base.OnStartup(e);
         try
         {
+            if (e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase))
+            {
+                ValidateLayoutArguments(e.Args, "--verify-write-ownership", "设备写入占用");
+                if (e.Args.Any(arg => arg.Equals("--width", StringComparison.OrdinalIgnoreCase) || arg.Equals("--height", StringComparison.OrdinalIgnoreCase) || arg.Equals("--screenshot", StringComparison.OrdinalIgnoreCase)))
+                    throw new ArgumentException("写入占用验收无窗口，不接受尺寸或截图参数。");
+                var index = Array.FindIndex(e.Args, arg => string.Equals(arg, "--data-dir", StringComparison.OrdinalIgnoreCase));
+                var directory = Path.GetFullPath(e.Args[index + 1]);
+                if (Directory.Exists(directory) || File.Exists(directory)) throw new ArgumentException("写入占用验收必须使用尚不存在的独立artifacts目录。");
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                await DeviceWriteWorkspaceSmoke.RunAsync(directory, Dispatcher);
+                Shutdown(0);
+                return;
+            }
             if (e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -4537,7 +4690,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
+            if (e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(ex);
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -9619,6 +9772,8 @@ public partial class MainWindow
         if (!confirmed) { applicationResult.Text = "已取消确认，未操作任何模拟器。"; return; }
         if (!CanManageApplicationTargets() || !ReferenceEquals(runtime, ViewModel.Runtime) || !frozenSelection.Select(ApplicationTargetIdentity).ToHashSet().SetEquals(SelectedApplicationTargets().Select(ApplicationTargetIdentity)))
             throw new DeviceException("确认期间工作区或勾选目标已变化，未发送命令。", 409, 1003);
+        var writesDevices = plan.Any(item => item.Operation != ApplicationOperation.List);
+        using var write = writesDevices ? runtime.Writes.Acquire(plan.Select(item => item.Target.Serial)) : null;
         applicationReadTimer?.Stop(); applicationReadPending = false; applicationTasks.Clear(); foreach (var item in plan) applicationTasks.Add(new(item));
         applicationCancellation = new(); applicationRunning = true; applicationCancel.IsEnabled = true; RefreshApplicationControls();
         try
@@ -9627,9 +9782,9 @@ public partial class MainWindow
             {
                 async Task Validate(ApplicationTarget target, CancellationToken token)
                 {
-                    await Dispatcher.InvokeAsync(() => RequireApplicationContext(runtime, target));
+                    await Dispatcher.InvokeAsync(() => RequireApplicationContext(runtime, target, writesDevices));
                     await runtime.Devices.RefreshAsync(token);
-                    await Dispatcher.InvokeAsync(() => RequireApplicationContext(runtime, target));
+                    await Dispatcher.InvokeAsync(() => RequireApplicationContext(runtime, target, writesDevices));
                 }
                 var batch = new ApplicationBatch(runtime.Backend, Validate);
                 var results = await batch.ExecuteAsync(plan, true, result => Dispatcher.Invoke(() =>
@@ -9640,16 +9795,16 @@ public partial class MainWindow
                     runtime.Log.Write("application-batch-item", JsonSerializer.Serialize(new { result.Index, result.Item.Target.Serial, result.Item.Operation, result.Item.PackageName, result.State, result.Message }, JsonDefaults.Options), result.Item.Target.Serial);
                 }), applicationCancellation.Token);
                 if (results.Any(result => result.State == ApplicationTaskState.Failed)) throw new DeviceException(applicationResult.Text + "；请查看逐项结果。", 409, 1003);
-            });
+            }, blocksApiWrites: !writesDevices);
         }
         finally
         {
             applicationCancellation.Dispose(); applicationCancellation = null; applicationRunning = false; applicationCancel.IsEnabled = false; RefreshApplicationControls();
         }
     }
-    private void RequireApplicationContext(MatrixRuntime runtime, ApplicationTarget target)
+    private void RequireApplicationContext(MatrixRuntime runtime, ApplicationTarget target, bool ownsWriteLease = false)
     {
-        if (!ReferenceEquals(runtime, ViewModel.Runtime) || ViewModel.Transferring || runtime.Api.HasActiveRequests || ApplicationTargetProtected(target.Serial) || ApplicationScriptBusy(runtime, target.Serial)
+        if (!ReferenceEquals(runtime, ViewModel.Runtime) || ViewModel.Transferring || (!ownsWriteLease && runtime.Api.HasActiveRequests) || ApplicationTargetProtected(target.Serial) || ApplicationScriptBusy(runtime, target.Serial)
             || !SelectedApplicationTargets().Select(ApplicationTargetIdentity).Contains(ApplicationTargetIdentity(target)))
             throw new DeviceException($"工作区或并行任务已变化，未继续操作：{target.Serial}。", 409, 1003);
         target.RequireSame(ViewModel.Devices.SingleOrDefault(row => row.Serial == target.Serial)?.Info); target.RequireSame(runtime.GetDevices().SingleOrDefault(device => device.Serial == target.Serial));
@@ -11528,6 +11683,253 @@ public partial class MainWindow
 
 ```
 
+## src/MatrixDevice.Desktop/Views/DeviceWriteWorkspaceSmoke.cs
+
+```csharp
+using System.Collections.Concurrent;
+using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Json;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Threading;
+using MatrixDevice.Core;
+using MatrixDevice.Features;
+using MatrixDevice.Host;
+
+namespace MatrixDevice.Desktop;
+
+internal static class DeviceWriteWorkspaceSmoke
+{
+    internal static async Task RunAsync(string directory, Dispatcher dispatcher)
+    {
+        var app = Application.Current;
+        if (app is null || !ReferenceEquals(app.Dispatcher, dispatcher) || !dispatcher.CheckAccess()
+            || Thread.CurrentThread.GetApartmentState() != ApartmentState.STA || app.Windows.Count != 0 || app.MainWindow is not null
+            || !Path.IsPathFullyQualified(directory) || !directory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || Directory.Exists(directory) || File.Exists(directory))
+            throw new InvalidOperationException("Write ownership acceptance requires a fresh artifacts directory and an owned windowless STA application.");
+        Directory.CreateDirectory(directory);
+        var results = new List<CaseResult>();
+        var retained = new List<Fixture>();
+        await Case("text-A-holds-API-A-rejects-B-and-read-continue", async f =>
+        {
+            f.Backend.HoldText = true; f.Vm.TextInput = "owned-A";
+            var writing = f.Track(f.Vm.SendTextAsync()); await f.Observe(f.Backend.Entered.Task);
+            f.Check(f.Writes.IsBusy("DEMO-001") && !f.Runtime.Api.UiWriteBusy, "VM text has a targeted lease, not a global HTTP block.");
+            await f.CheckApi(HttpStatusCode.Conflict, HttpStatusCode.OK);
+            f.Backend.Release.TrySetResult(); await f.Wait(writing);
+            f.Check(f.Vm.Error.Length == 0 && !f.Writes.IsBusy("DEMO-001"), "Completed text releases its original lease.");
+        });
+        await Case("upload-install-keeps-lease-during-cancel", async f =>
+        {
+            f.Backend.HoldPush = true; f.Backend.HoldInstall = true;
+            var apk = Path.Combine(f.Directory, "owned-demo.apk"); await File.WriteAllBytesAsync(apk, [1, 2, 3]);
+            f.Vm.QueuePush(apk, true); var transferring = f.Track(f.Vm.StartTransfersAsync());
+            await f.Observe(f.Backend.Entered.Task); f.Check(f.Writes.IsBusy("DEMO-001") && !f.Runtime.Api.UiWriteBusy, "Upload holds A without blocking B.");
+            await f.CheckApi(HttpStatusCode.Conflict, HttpStatusCode.OK);
+            f.Backend.Release.TrySetResult(); await f.Observe(f.Backend.InstallEntered.Task);
+            f.Check(f.Writes.IsBusy("DEMO-001"), "The lease spans Push through Install.");
+            f.Vm.CancelTransfersCommand.Execute(null);
+            f.Check(!transferring.IsCompleted && f.Writes.IsBusy("DEMO-001"), "Cancellation does not release an ignored in-flight install.");
+            await f.CheckApi(HttpStatusCode.Conflict, HttpStatusCode.OK);
+            f.Backend.InstallRelease.TrySetResult(); await f.Wait(transferring);
+            f.Check(!f.Writes.IsBusy("DEMO-001") && !f.Vm.Transferring, "Original transfer and install drained before release.");
+        });
+        await Case("busy-B-rejects-whole-VM-text-group", async f =>
+        {
+            f.Vm.Devices.Single(row => row.Serial == "DEMO-002").IsSelected = true;
+            using (f.Writes.Acquire(["DEMO-002"]))
+            {
+                f.Vm.TextInput = "must-not-send"; await f.Wait(f.Vm.SendTextAsync());
+                f.Check(f.Vm.Error.Length > 0 && !f.Writes.IsBusy("DEMO-001") && f.Backend.Calls.All(call => call.Operation != "Text"), "Busy B rejects the entire group without writing or retaining A.");
+            }
+        });
+        await Case("shell-failure-releases-VM-lease", async f =>
+        {
+            f.Backend.HoldShell = true; f.Vm.ShellInput = "owned-failure";
+            var writing = f.Track(f.Vm.ExecuteShellAsync()); await f.Observe(f.Backend.Entered.Task);
+            f.Check(f.Writes.IsBusy("DEMO-001"), "Shell holds its complete operation.");
+            f.Backend.Release.TrySetResult(); await f.Wait(writing);
+            f.Check(f.Vm.Error.Length > 0 && f.Vm.ShellInput.Length == 0 && !f.Writes.IsBusy("DEMO-001"), "Original shell failure is visible and its lease is released.");
+        });
+        await Case("VM-busy-Up-clears-cached-Down", async f =>
+        {
+            var a = f.Vm.CurrentDevice!.Info;
+            var input = new InputSnapshot { SourceSerial = a.Serial, SourceGeneration = a.Generation,
+                Generation = f.Runtime.Input.CurrentGeneration, GestureId = 701, SourceWidth = a.Width, SourceHeight = a.Height,
+                X = 10, Y = 10, Kind = InputKind.Down };
+            await f.Wait(f.Vm.SendInputAsync(input));
+            f.Backend.HoldStart = true;
+            var script = new ScriptPackage { Manifest = new ScriptManifest { Id = "owned-write", Name = "Owned write", Version = "1" },
+                Steps = [new ScriptStep { Action = "launchapp", Value = "com.android.settings" }] };
+            var running = f.Track(f.Runtime.Scripts.RunAsync(a.Serial, script));
+            await f.Observe(f.Backend.Entered.Task);
+            await f.Wait(f.Vm.SendInputAsync(input with { Kind = InputKind.Up }));
+            f.Check(f.Vm.Error.Length > 0, "The original UI script-busy refusal remains visible.");
+            f.Backend.Release.TrySetResult(); await f.Wait(running);
+            await f.Wait(f.Vm.SendInputAsync(input with { Kind = InputKind.Up }));
+            f.Check(f.Backend.Calls.All(call => call.Operation != "Tap" && call.Operation != "Swipe"), "A repeated UI Up cannot send the abandoned gesture after the script completes.");
+        });
+        var windowsUnchanged = app.Windows.Count == 0 && app.MainWindow is null;
+        var pass = windowsUnchanged && retained.Count == 0 && results.Count == 5 && results.All(row => row.Passed);
+        File.WriteAllText(Path.Combine(directory, "summary.json"), JsonSerializer.Serialize(new
+        {
+            status = pass ? "PASS-WRITE-OWNERSHIP-VM-NOT-GUI" : "FAIL-WRITE-OWNERSHIP-VM", results, windowsUnchanged, retainedOwners = retained.Count,
+            scope = "Owned Demo backend, actual WorkspaceViewModel text/transfer/auto-install/Shell/Input and loopback HTTP. No Window, physical input, real emulator or ADB. The APK is inert bytes accepted only by Demo.",
+            untested = new[] { "physical GUI", "ApplicationsView actual picker/confirmation", "real simulator", "cross-process ownership", "Runtime swap", "final dual 30 minutes" }
+        }, JsonDefaults.Options));
+        if (!pass) throw new InvalidOperationException("Write ownership VM cases did not all pass; preserve the report.");
+
+        async Task Case(string name, Func<Fixture, Task> body)
+        {
+            if (retained.Count != 0)
+            {
+                results.Add(new(name, "NOT-RUN", false, "A previous fixture did not prove cleanup; no later owner was created.", null, [], [], []));
+                return;
+            }
+            var f = new Fixture(Path.Combine(directory, "case-" + (results.Count + 1)));
+            Exception? error = null; Exception? cleanup = null;
+            try { await f.Initialize(); await body(f); }
+            catch (Exception failure) { error = failure; }
+            finally { try { await f.Cleanup(); } catch (Exception failure) { cleanup = failure; } }
+            results.Add(new CaseResult(name, error is null && cleanup is null ? "PASS" : "FAIL", error is null && cleanup is null, error?.ToString(), cleanup?.ToString(), f.Checks.ToArray(), f.Backend.Calls.ToArray(), f.Tasks.Select(task => task.Status.ToString()).ToArray()));
+            if (cleanup is not null) retained.Add(f);
+        }
+    }
+
+    private sealed record CaseResult(string Name, string Status, bool Passed, string? Error, string? CleanupError, string[] Checks, Call[] Calls, string[] Tasks);
+    private sealed record Call(string Operation, string Serial);
+
+    private sealed class Fixture(string directory)
+    {
+        internal string Directory => directory;
+        internal readonly DeviceWriteCoordinator Writes = new();
+        internal readonly HeldDemoBackend Backend = new();
+        internal readonly List<Task> Tasks = [];
+        internal readonly List<string> Checks = [];
+        internal MatrixRuntime Runtime = null!;
+        internal WorkspaceViewModel Vm = null!;
+        private RollingLog? log;
+        private CatalogRepository? metadata;
+        private ScriptScheduler? scripts;
+        private InputCoordinator? input;
+        private ApiServiceManager? api;
+        private readonly HttpClient client = new() { Timeout = TimeSpan.FromSeconds(8) };
+        private int portA, portB;
+        internal Task Track(Task task) { Tasks.Add(task); return task; }
+        internal Task<T> Track<T>(Task<T> task) { Tasks.Add(task); return task; }
+        internal async Task Wait(Task task) { if (!Tasks.Contains(task)) Tasks.Add(task); await task.WaitAsync(TimeSpan.FromSeconds(10)); }
+        internal Task Observe(Task signal) => signal.WaitAsync(TimeSpan.FromSeconds(10));
+        internal void Check(bool value, string message) { Checks.Add(message); if (!value) throw new InvalidOperationException(message); }
+        internal async Task Initialize()
+        {
+            System.IO.Directory.CreateDirectory(directory);
+            var settings = new AppSettings { AutoStartApi = false, AutoConnect = false, SyncKeyboard = false, SyncMouse = false, AdbAllowedSerials = [], LdSerialBindings = [], AdbPath = "", LdConsolePath = "" };
+            var catalog = new DeviceCatalog(Backend); var ownLog = new RollingLog(Path.Combine(directory, "logs")); log = ownLog;
+            var automation = new AutomationService(Backend, catalog);
+            var ownScripts = new ScriptScheduler(Backend, Writes); scripts = ownScripts;
+            var ownInput = new InputCoordinator(catalog, Backend, Writes); input = ownInput;
+            var ownApi = new ApiServiceManager(catalog, Backend, automation, ownLog, Writes); api = ownApi;
+            var ownMetadata = new CatalogRepository(Path.Combine(directory, "db.sqlite3")); metadata = ownMetadata;
+            Runtime = new MatrixRuntime { Writes = Writes, Backend = Backend, Devices = catalog, Scripts = ownScripts, Input = ownInput, Api = ownApi, Automation = automation,
+                Log = ownLog, Settings = settings, FrozenConnectionSettings = settings, SettingsStore = new SettingsStore(Path.Combine(directory, "AppConfig.json")),
+                Metadata = ownMetadata, IsDemo = true };
+            Vm = new WorkspaceViewModel(Runtime, directory, true);
+            await Wait(Vm.RefreshDevicesAsync());
+            Vm.CurrentDevice = Vm.Devices.Single(row => row.Serial == "DEMO-001");
+            foreach (var row in Vm.Devices) row.IsSelected = row.Serial == "DEMO-001";
+            portA = await ownApi.StartDeviceAsync("DEMO-001"); portB = await ownApi.StartDeviceAsync("DEMO-002");
+        }
+        internal async Task CheckApi(HttpStatusCode a, HttpStatusCode b)
+        {
+            var beforeA = Backend.Calls.Count(call => call.Serial == "DEMO-001" && call.Operation == "Text");
+            var beforeB = Backend.Calls.Count(call => call.Serial == "DEMO-002" && call.Operation == "Text");
+            using var responseA = await Track(client.PostAsJsonAsync($"http://127.0.0.1:{portA}/text", new { Text = "peer-A" }));
+            using var responseB = await Track(client.PostAsJsonAsync($"http://127.0.0.1:{portB}/text", new { Text = "peer-B" }));
+            using var read = await Track(client.GetAsync($"http://127.0.0.1:{portA}/device"));
+            Check(responseA.StatusCode == a && responseB.StatusCode == b && read.StatusCode == HttpStatusCode.OK, "HTTP A/B admission and read status match the held VM operation.");
+            Check(Backend.Calls.Count(call => call.Serial == "DEMO-001" && call.Operation == "Text") == beforeA, "This rejected HTTP request did not write A before returning conflict.");
+            Check(Backend.Calls.Count(call => call.Serial == "DEMO-002" && call.Operation == "Text") == beforeB + 1, "This HTTP request reached B exactly once while A remained held.");
+        }
+        internal async Task Cleanup()
+        {
+            Backend.Release.TrySetResult(); Backend.InstallRelease.TrySetResult();
+            foreach (var task in Tasks.ToArray()) { try { await task.WaitAsync(TimeSpan.FromSeconds(12)); } catch when (task.IsCompleted) { } }
+            foreach (var task in Backend.Tasks.ToArray()) { if (!Tasks.Contains(task)) Tasks.Add(task); try { await task.WaitAsync(TimeSpan.FromSeconds(12)); } catch when (task.IsCompleted) { } }
+            if (Vm is not null) await ObserveCleanup(Vm.ShutdownAsync());
+            else if (Runtime is not null) await ObserveCleanup(Runtime.DisposeAsync().AsTask());
+            else
+            {
+                if (api is not null) await ObserveCleanup(api.DisposeAsync().AsTask());
+                if (input is not null) await ObserveCleanup(input.DisposeAsync().AsTask());
+                if (scripts is not null) await ObserveCleanup(scripts.DisposeAsync().AsTask());
+                await ObserveCleanup(Backend.DisposeAsync().AsTask());
+                metadata?.Dispose();
+                if (log is not null) await ObserveCleanup(log.DisposeAsync().AsTask());
+            }
+            client.Dispose();
+            Check(Tasks.All(task => task.IsCompleted) && Backend.Tasks.All(task => task.IsCompleted), "Original tasks and forwarding operations are terminal.");
+            using var noOutstandingLeases = Writes.AcquireAll();
+        }
+        private async Task ObserveCleanup(Task task) { Tasks.Add(task); await task.WaitAsync(TimeSpan.FromSeconds(12)); }
+    }
+
+    private sealed class HeldDemoBackend : IDeviceBackend
+    {
+        private readonly DemoDeviceBackend inner = new();
+        internal readonly ConcurrentQueue<Call> Calls = new();
+        internal readonly ConcurrentQueue<Task> Tasks = new();
+        internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource InstallEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource InstallRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal bool HoldText, HoldPush, HoldInstall, HoldShell, HoldStart;
+        private Task Forward(string operation, string serial, Func<Task> action)
+        {
+            Calls.Enqueue(new(operation, serial)); var task = Execute(); Tasks.Enqueue(task); return task;
+            async Task Execute()
+            {
+                if (serial == "DEMO-001" && (operation == "Text" && HoldText || operation == "Push" && HoldPush || operation == "Shell" && HoldShell || operation == "StartApp" && HoldStart))
+                { Entered.TrySetResult(); await Release.Task; }
+                if (serial == "DEMO-001" && operation == "Install" && HoldInstall) { InstallEntered.TrySetResult(); await InstallRelease.Task; }
+                await action();
+            }
+        }
+        public Task<IReadOnlyList<DeviceInfo>> DiscoverAsync(CancellationToken ct = default) => inner.DiscoverAsync(ct);
+        public async Task<string> ShellAsync(string serial, string command, bool useRoot = false, CancellationToken ct = default)
+        {
+            string output = "";
+            await Forward("Shell", serial, async () => { if (HoldShell && serial == "DEMO-001") throw new InvalidOperationException("Owned shell failure."); output = await inner.ShellAsync(serial, command, useRoot, ct); });
+            return output;
+        }
+        public Task<byte[]> ScreenshotAsync(string serial, CancellationToken ct = default) => inner.ScreenshotAsync(serial, ct);
+        public Task<AndroidNode> DumpAsync(string serial, CancellationToken ct = default) => inner.DumpAsync(serial, ct);
+        public Task TapAsync(string serial, int x, int y, CancellationToken ct = default) => Forward("Tap", serial, () => inner.TapAsync(serial, x, y, ct));
+        public Task SwipeAsync(string serial, int x1, int y1, int x2, int y2, int durationMs, CancellationToken ct = default) => Forward("Swipe", serial, () => inner.SwipeAsync(serial, x1, y1, x2, y2, durationMs, ct));
+        public Task KeyEventAsync(string serial, int code, CancellationToken ct = default) => inner.KeyEventAsync(serial, code, ct);
+        public Task TextAsync(string serial, string text, CancellationToken ct = default) => Forward("Text", serial, () => inner.TextAsync(serial, text, ct));
+        public async Task<string> StartAppAsync(string serial, string packageName, string? activity = null, CancellationToken ct = default)
+        {
+            string output = "";
+            await Forward("StartApp", serial, async () => output = await inner.StartAppAsync(serial, packageName, activity, ct));
+            return output;
+        }
+        public Task<string> StopAppAsync(string serial, string packageName, CancellationToken ct = default) => inner.StopAppAsync(serial, packageName, ct);
+        public Task<bool> ClearAppAsync(string serial, string packageName, CancellationToken ct = default) => inner.ClearAppAsync(serial, packageName, ct);
+        public Task<IReadOnlyList<AppInfo>> ListAppsAsync(string serial, bool showSystem = false, bool needVersion = true, CancellationToken ct = default) => inner.ListAppsAsync(serial, showSystem, needVersion, ct);
+        public Task InstallAsync(string serial, string localPath, CancellationToken ct = default) => Forward("Install", serial, () => inner.InstallAsync(serial, localPath, CancellationToken.None));
+        public Task UninstallAsync(string serial, string packageName, CancellationToken ct = default) => inner.UninstallAsync(serial, packageName, ct);
+        public Task PushAsync(string serial, string localPath, string remotePath, IProgress<double>? progress = null, CancellationToken ct = default) => Forward("Push", serial, () => inner.PushAsync(serial, localPath, remotePath, progress, ct));
+        public Task PullAsync(string serial, string remotePath, string localPath, IProgress<double>? progress = null, CancellationToken ct = default) => inner.PullAsync(serial, remotePath, localPath, progress, ct);
+        public Task SetNodeTextAsync(string serial, NodeSelector selector, string text, CancellationToken ct = default) => inner.SetNodeTextAsync(serial, selector, text, ct);
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+}
+
+```
+
 ## src/MatrixDevice.Desktop/Views/DirectoryView.cs
 
 ```csharp
@@ -11644,7 +12046,11 @@ public partial class MainWindow
         {
             var row = ViewModel.CurrentDevice ?? throw new InvalidOperationException("未选择设备");
             if (!ViewModel.Confirm("修改设备时区", $"设备：{row.Name} ({row.Serial})\n时区：{timezone.Text}\n操作需要 root。")) return;
-            await ViewModel.ExecuteAsync("修改时区", async () => await new EnvironmentConfigurationService(ViewModel.Runtime.Backend).ApplyAsync(row.Serial, new EnvironmentConfiguration { Timezone = timezone.Text.Trim() }));
+            await ViewModel.ExecuteAsync("修改时区", async () =>
+            {
+                using var write = ViewModel.Runtime.Writes.Acquire([row.Serial]);
+                await new EnvironmentConfigurationService(ViewModel.Runtime.Backend).ApplyAsync(row.Serial, new EnvironmentConfiguration { Timezone = timezone.Text.Trim() });
+            }, blocksApiWrites: false);
         }, write: true));
         grid.Children.Add(new ScrollViewer { Name = "ExtensionSettingsScroll", Content = proxyPanel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
 
@@ -11855,6 +12261,7 @@ public partial class MainWindow
         ldBusy = true; ViewModel.SetExternalBusy(true); ldFeedback.Text = "正在执行所选实例命令…"; RefreshLdButtons();
         try
         {
+            using var write = ViewModel.Runtime.AcquireLdWrite(selected.Index);
             ViewModel.Runtime.RequireFrozenConnectionSettings();
             if (ViewModel.Runtime.Api.LdCommandIdentityGuard is { } verify) await verify(selected.Index, operation, CancellationToken.None);
             var result = await service.ExecuteAsync(selected.Index, operation, body, CancellationToken.None);
@@ -20276,6 +20683,7 @@ public partial class MainWindow
         if (!ViewModel.ConnectionReloadAvailable) throw new DeviceException("请先停止接口服务、脚本和文件传输。", 409, 1003);
         if (ViewModel.Demo) throw new DeviceException("演示模式不会操作真实模拟器。", 409, 1003);
         ViewModel.Runtime.RequireFrozenConnectionSettings();
+        using var write = ViewModel.Runtime.Writes.AcquireAll();
         ldBusy = true; ViewModel.SetExternalBusy(true); RefreshLdButtons();
         await StopMonitorAsync();
         using var cancellation = new CancellationTokenSource(); ldOperationCancellation = cancellation;
@@ -21867,7 +22275,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     public string MainContext => MainDevice is { } row ? $"{LocalizationService.Current.Get("主控")}: {row.Name} · {row.Serial}" : $"{LocalizationService.Current.Get("主控")}: {LocalizationService.Current.Get("未指定")}";
     public bool Busy { get => busy || externalBusy; private set { Set(ref busy, value); SyncApiWriteGuard(); RefreshCommands(); Changed(nameof(HasActiveOperations)); } }
     internal void SetExternalBusy(bool value) { externalBusy = value; Changed(nameof(Busy)); SyncApiWriteGuard(); RefreshCommands(); Changed(nameof(HasActiveOperations)); }
-    private void SyncApiWriteGuard() => runtime.Api.UiWriteBusy = externalBusy || (busy && blockApiWhileBusy) || Transferring;
+    private void SyncApiWriteGuard() => runtime.Api.UiWriteBusy = externalBusy || (busy && blockApiWhileBusy);
     public string Status { get => LocalizationService.Current.Get(status); private set => Set(ref status, value); }
     public string Error { get => error; private set => Set(ref error, value); }
     public string Counts => $"{LocalizationService.Current.Get("发现")} {Devices.Count}   {LocalizationService.Current.Get("就绪")} {Devices.Count(row => row.Info.Online)}   {LocalizationService.Current.Get("筛选")} {DeviceView.Cast<object>().Count()}   {LocalizationService.Current.Get("选中")} {Devices.Count(row => row.IsSelected)}";
@@ -22138,17 +22546,28 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         await ExecuteAsync("切换主控", async () => { await runtime.Input.HandoffAsync(row.Serial); MainDevice = row; CurrentDevice = row; });
     }
 
-    public Task SendInputAsync(InputSnapshot input) => ExecuteAsync("发送输入", async () =>
+    public async Task SendInputAsync(InputSnapshot input)
     {
-        if (pendingLaunchSelection > 0 && (input.Kind is InputKind.Key or InputKind.Text ? SyncKeyboard : SyncMouse)) throw new DeviceException("同步目标中存在未连接设备，请先连接或取消选择。", 409, 1003);
-        if (Transferring) throw new DeviceException("文件传输进行中，完成或停止传输后再控制");
-        var source = Devices.FirstOrDefault(row => row.Serial == input.SourceSerial);
-        if (input.Kind is InputKind.Tap or InputKind.Swipe && source is not null &&
-            (input.SourceWidth != source.Info.Width || input.SourceHeight != source.Info.Height))
-            throw new DeviceException("截图与设备当前尺寸不一致，请刷新截图后重试；未发送手势");
-        if (ScriptBusy(input.SourceSerial) || input.TargetSerials.Any(ScriptBusy)) throw new DeviceException("目标设备正在执行脚本，停止脚本后再控制");
-        await runtime.Input.SendAsync(input);
-    });
+        if (input.Kind == InputKind.Cancel)
+        {
+            await runtime.Input.SendAsync(input);
+            return;
+        }
+        if (input.Kind == InputKind.Up && (Busy || Transferring || pendingLaunchSelection > 0
+            || ScriptBusy(input.SourceSerial) || input.TargetSerials.Any(ScriptBusy)))
+            await runtime.Input.SendAsync(input with { Kind = InputKind.Cancel });
+        await ExecuteAsync("发送输入", async () =>
+        {
+            if (pendingLaunchSelection > 0 && (input.Kind is InputKind.Key or InputKind.Text ? SyncKeyboard : SyncMouse)) throw new DeviceException("同步目标中存在未连接设备，请先连接或取消选择。", 409, 1003);
+            if (Transferring) throw new DeviceException("文件传输进行中，完成或停止传输后再控制");
+            var source = Devices.FirstOrDefault(row => row.Serial == input.SourceSerial);
+            if (input.Kind is InputKind.Tap or InputKind.Swipe && source is not null &&
+                (input.SourceWidth != source.Info.Width || input.SourceHeight != source.Info.Height))
+                throw new DeviceException("截图与设备当前尺寸不一致，请刷新截图后重试；未发送手势");
+            if (ScriptBusy(input.SourceSerial) || input.TargetSerials.Any(ScriptBusy)) throw new DeviceException("目标设备正在执行脚本，停止脚本后再控制");
+            await runtime.Input.SendAsync(input);
+        }, blocksApiWrites: false);
+    }
 
     public IReadOnlyList<string> InputTargets(string source, bool mouse) => (mouse ? SyncMouse : SyncKeyboard) ? Devices.Where(row => row.IsSelected && row.Serial != source).Select(row => row.Serial).ToArray() : [];
     public Task KeyAsync(int code)
@@ -22162,8 +22581,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     {
         var targets = RequireTargets();
         var text = TextInput;
+        using var write = runtime.Writes.Acquire(targets.Select(row => row.Serial));
         foreach (var row in targets) await runtime.Backend.TextAsync(row.Serial, text);
-    });
+    }, blocksApiWrites: false);
 
     public Task LoadNodesAsync() => ExecuteAsync("刷新截图与节点", async () =>
     {
@@ -22376,6 +22796,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         var command = ShellInput.Trim();
         if (command.Length == 0) return;
         if (ScriptBusy(row.Serial)) throw new DeviceException("设备正在执行脚本");
+        using var write = runtime.Writes.Acquire([row.Serial]);
         try
         {
             var output = await runtime.Backend.ShellAsync(row.Serial, command);
@@ -22387,7 +22808,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
             throw;
         }
         finally { ShellInput = ""; }
-    });
+    }, blocksApiWrites: false);
 
     public Task LoadAppsAsync() => ExecuteAsync("读取应用列表", async () =>
     {
@@ -22401,6 +22822,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     public Task InstallAppAsync(string path) => ExecuteAsync("安装 APK", async () =>
     {
         var targets = RequireTargets();
+        using var write = runtime.Writes.Acquire(targets.Select(row => row.Serial));
         var results = new List<string>();
         foreach (var row in targets)
         {
@@ -22409,7 +22831,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         }
         AddActivity(string.Join("；", results));
         if (results.Any(result => result.Contains("：失败", StringComparison.Ordinal))) throw new InvalidOperationException(string.Join("；", results));
-    });
+    }, blocksApiWrites: false);
 
     private Task ChangeAppAsync(string operation) => ExecuteAsync("应用操作", async () =>
     {
@@ -22421,6 +22843,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
             var detail = $"{label}\n包名：{app.PackageName}\n设备数量：{targets.Count}\n{string.Join("\n", targets.Select(row => $"{row.Name} ({row.Serial})"))}\n此操作会删除应用数据。";
             if (!Confirm(label, detail)) return;
         }
+        using var write = runtime.Writes.Acquire(targets.Select(row => row.Serial));
         var failures = new List<string>();
         foreach (var row in targets)
         {
@@ -22439,7 +22862,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         }
         if (failures.Count > 0) throw new InvalidOperationException(string.Join("；", failures));
         if (operation == "uninstall") Apps.Remove(app);
-    });
+    }, blocksApiWrites: false);
 
     private IReadOnlyList<DeviceRow> RequireTargets()
     {
@@ -22468,12 +22891,15 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     public async Task StartTransfersAsync()
     {
         if (Busy || Transferring) return;
+        var pending = Transfers.Where(PendingTransfer).ToArray();
+        if (pending.Length == 0) return;
         transferCancellation = new CancellationTokenSource();
         Transferring = true;
         Error = "";
         try
         {
-            foreach (var row in Transfers.Where(PendingTransfer).ToList())
+            using var write = runtime.Writes.Acquire(pending.Select(row => row.Serial));
+            foreach (var row in pending)
             {
                 if (transferCancellation.IsCancellationRequested) break;
                 row.State = "传输中";
@@ -22493,6 +22919,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
             }
             Changed(nameof(OverallProgress));
         }
+        catch (Exception ex) { Error = "传输未完成：" + PresentError(ex); AddActivity(Error); }
         finally { Transferring = false; transferCancellation.Dispose(); transferCancellation = null; }
     }
 
@@ -24390,14 +24817,16 @@ public sealed class ScriptScheduler : IAsyncDisposable
     private readonly IDeviceBackend backend;
     private readonly DeviceCatalog? catalog;
     private readonly IIdentityPinnedDeviceCommands? identityCommands;
+    private readonly DeviceWriteCoordinator? writes;
     private readonly bool isDemo;
-    private sealed class Run(CancellationTokenSource cancellation, Guid? jobId = null, ScriptJobTarget? target = null)
+    private sealed class Run(CancellationTokenSource cancellation, Guid? jobId = null, ScriptJobTarget? target = null, IDisposable? writeLease = null)
     {
         public CancellationTokenSource Cancellation { get; } = cancellation;
         public Task Task { get; set; } = Task.CompletedTask;
         public TaskCompletionSource Activation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Guid? JobId { get; } = jobId;
         public ScriptJobTarget? Target { get; } = target;
+        public IDisposable? WriteLease { get; } = writeLease;
         public bool Finishing { get; set; }
     }
     private readonly object gate = new();
@@ -24416,13 +24845,14 @@ public sealed class ScriptScheduler : IAsyncDisposable
     public event Action<ScriptJobStatus>? JobChanged;
     public event Action<Guid, ScriptLogEntry>? JobLogAdded;
 
-    public ScriptScheduler(IDeviceBackend backend)
+    public ScriptScheduler(IDeviceBackend backend, DeviceWriteCoordinator? writes = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         this.backend = backend;
+        this.writes = writes;
     }
 
-    public ScriptScheduler(IDeviceBackend backend, DeviceCatalog catalog, bool isDemo) : this(backend)
+    public ScriptScheduler(IDeviceBackend backend, DeviceCatalog catalog, bool isDemo, DeviceWriteCoordinator? writes = null) : this(backend, writes)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         this.catalog = catalog;
@@ -24448,22 +24878,32 @@ public sealed class ScriptScheduler : IAsyncDisposable
             ct.ThrowIfCancellationRequested();
             RequireJobTarget(frozen);
             if (runs.ContainsKey(frozen.Serial)) throw new DeviceException($"设备 {frozen.Serial} 已有脚本运行，任务未接纳。", 409, 1003);
-            var id = Guid.NewGuid();
-            var started = DateTimeOffset.UtcNow;
-            accepted = new(id, frozen, snapshot.Manifest.Id, snapshot.Manifest.Version, ScriptRunState.Running, -1, snapshot.Steps.Count, started);
-            run = new(CancellationTokenSource.CreateLinkedTokenSource(ct), id, frozen);
-            jobs.Add(id, accepted); jobLogs.Add(id, []);
-            logs[frozen.Serial] = [];
-            latestJobProjection[frozen.Serial] = id;
-            var projected = new ScriptRunStatus(frozen.Serial, ScriptRunState.Running, snapshot.Manifest.Id, StartedUtc: started);
-            statuses[frozen.Serial] = projected;
-            runs.Add(frozen.Serial, run);
-            notifications.Enqueue((projected, accepted));
-            run.Task = Task.Run(() => ExecuteAsync(frozen.Serial, snapshot, run));
+            var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            IDisposable? lease = null;
+            try
+            {
+                lease = writes?.Acquire([frozen.Serial]);
+                var id = Guid.NewGuid();
+                var started = DateTimeOffset.UtcNow;
+                accepted = new(id, frozen, snapshot.Manifest.Id, snapshot.Manifest.Version, ScriptRunState.Running, -1, snapshot.Steps.Count, started);
+                run = new(cancellation, id, frozen, lease);
+                jobs.Add(id, accepted); jobLogs.Add(id, []);
+                logs[frozen.Serial] = [];
+                latestJobProjection[frozen.Serial] = id;
+                var projected = new ScriptRunStatus(frozen.Serial, ScriptRunState.Running, snapshot.Manifest.Id, StartedUtc: started);
+                statuses[frozen.Serial] = projected;
+                runs.Add(frozen.Serial, run);
+                notifications.Enqueue((projected, accepted));
+                run.Task = Task.Run(() => ExecuteOwnedAsync(frozen.Serial, snapshot, run));
+            }
+            catch { cancellation.Dispose(); lease?.Dispose(); throw; }
         }
-        PublishStatuses();
-        Append(frozen.Serial, $"开始运行：{snapshot.Manifest.Name} ({snapshot.Manifest.Id})。", accepted.JobId);
-        run.Activation.TrySetResult();
+        try
+        {
+            PublishStatuses();
+            Append(frozen.Serial, $"开始运行：{snapshot.Manifest.Name} ({snapshot.Manifest.Id})。", accepted.JobId);
+        }
+        finally { run.Activation.TrySetResult(); }
         return new(accepted.JobId, run.Task);
     }
 
@@ -24523,23 +24963,33 @@ public sealed class ScriptScheduler : IAsyncDisposable
             if (runs.ContainsKey(serial)) task = Task.CompletedTask;
             else
             {
-                var run = new Run(CancellationTokenSource.CreateLinkedTokenSource(ct));
-                logs[serial] = [];
-                latestJobProjection[serial] = null;
-                started = new ScriptRunStatus(serial, ScriptRunState.Running, snapshot.Manifest.Id, StartedUtc: DateTimeOffset.UtcNow);
-                statuses[serial] = started;
-                notifications.Enqueue((started, null));
-                runs[serial] = run;
-                launched = run;
-                task = run.Task = Task.Run(() => ExecuteAsync(serial, snapshot, run));
+                var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                IDisposable? lease = null;
+                try
+                {
+                    lease = writes?.Acquire([serial]);
+                    var run = new Run(cancellation, writeLease: lease);
+                    logs[serial] = [];
+                    latestJobProjection[serial] = null;
+                    started = new ScriptRunStatus(serial, ScriptRunState.Running, snapshot.Manifest.Id, StartedUtc: DateTimeOffset.UtcNow);
+                    statuses[serial] = started;
+                    notifications.Enqueue((started, null));
+                    runs[serial] = run;
+                    launched = run;
+                    task = run.Task = Task.Run(() => ExecuteOwnedAsync(serial, snapshot, run));
+                }
+                catch { cancellation.Dispose(); lease?.Dispose(); throw; }
             }
         }
         if (started is null) Append(serial, "脚本正在运行，未重复启动。");
         else
         {
-            PublishStatuses();
-            Append(serial, $"开始运行：{snapshot.Manifest.Name} ({snapshot.Manifest.Id})。");
-            launched!.Activation.TrySetResult();
+            try
+            {
+                PublishStatuses();
+                Append(serial, $"开始运行：{snapshot.Manifest.Name} ({snapshot.Manifest.Id})。");
+            }
+            finally { launched!.Activation.TrySetResult(); }
         }
         return task;
     }
@@ -24550,7 +25000,7 @@ public sealed class ScriptScheduler : IAsyncDisposable
         Guid? jobId;
         lock (gate)
         {
-            if (!runs.TryGetValue(serial, out var run)) return false;
+            if (!runs.TryGetValue(serial, out var run) || run.Finishing) return false;
             jobId = run.JobId;
             status = statuses[serial] with { State = ScriptRunState.Cancelling };
             statuses[serial] = status;
@@ -24576,6 +25026,19 @@ public sealed class ScriptScheduler : IAsyncDisposable
     public ScriptRunStatus GetStatus(string serial)
     {
         lock (gate) return statuses.GetValueOrDefault(serial) ?? new(serial, ScriptRunState.Idle);
+    }
+
+    private async Task ExecuteOwnedAsync(string serial, ScriptPackage package, Run run)
+    {
+        try { await ExecuteAsync(serial, package, run).ConfigureAwait(false); }
+        finally
+        {
+            lock (gate)
+            {
+                if (runs.TryGetValue(serial, out var current) && ReferenceEquals(current, run)) runs.Remove(serial);
+                run.WriteLease?.Dispose();
+            }
+        }
     }
 
     private async Task ExecuteAsync(string serial, ScriptPackage package, Run run)
@@ -24647,13 +25110,10 @@ public sealed class ScriptScheduler : IAsyncDisposable
         finally
         {
             ScriptRunStatus ended;
-            if (run.JobId is not null)
+            lock (gate)
             {
-                lock (gate)
-                {
-                    run.Finishing = true;
-                    if (state == ScriptRunState.Completed && run.Cancellation.IsCancellationRequested) state = ScriptRunState.Cancelled;
-                }
+                run.Finishing = true;
+                if (run.JobId is not null && state == ScriptRunState.Completed && run.Cancellation.IsCancellationRequested) state = ScriptRunState.Cancelled;
             }
             var stateName = state switch { ScriptRunState.Completed => "已完成", ScriptRunState.Cancelled => "已取消", ScriptRunState.Failed => "失败", _ => "已结束" };
             Append(serial, $"运行结束：{stateName}。", run.JobId);
@@ -24662,7 +25122,6 @@ public sealed class ScriptScheduler : IAsyncDisposable
                 ended = statuses[serial] with { State = state, Error = failure, EndedUtc = DateTimeOffset.UtcNow };
                 if (runs.TryGetValue(serial, out var current) && ReferenceEquals(current, run))
                 {
-                    runs.Remove(serial);
                     statuses[serial] = ended;
                     ScriptJobStatus? completed = null;
                     if (run.JobId is { } id)
@@ -24802,7 +25261,7 @@ public sealed class ScriptScheduler : IAsyncDisposable
         {
             if (disposed) return;
             disposed = true;
-            foreach (var run in runs.Values) run.Cancellation.Cancel();
+            foreach (var run in runs.Values) if (!run.Finishing) run.Cancellation.Cancel();
             pending = runs.Values.Select(run => run.Task).ToArray();
         }
         try { await Task.WhenAll(pending).ConfigureAwait(false); }
@@ -24831,7 +25290,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MatrixDevice.Host;
 
-public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend backend, AutomationService automation, RollingLog log) : IAsyncDisposable
+public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend backend, AutomationService automation, RollingLog log, DeviceWriteCoordinator? writes = null) : IAsyncDisposable
 {
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private WebApplication? _basic;
@@ -25010,6 +25469,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
     }
     private async Task HandleLdPlayerAsync(HttpContext context, string path)
     {
+        IDisposable? writeLease = null;
         try
         {
             object data;
@@ -25031,7 +25491,10 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
                 ValidateWriteRequest(context);
                 var service = LdPlayer ?? throw new DeviceException("尚未配置雷电命令行程序", 503, 2001);
                 var body = await ReadBodyAsync(context);
-                RequireWriteAvailable(LdSerialForWriteGuard?.Invoke(index));
+                var serial = LdSerialForWriteGuard?.Invoke(index);
+                if (string.IsNullOrWhiteSpace(serial)) serial = null;
+                RequireWriteAvailable(serial);
+                writeLease = serial is null ? writes?.AcquireAll() : writes?.Acquire([serial]);
                 if (LdCommandIdentityGuard is not null) await LdCommandIdentityGuard(index, parts[3], context.RequestAborted);
                 data = await service.ExecuteAsync(index, parts[3], JsonNode.Parse(body.GetRawText())!.AsObject(), context.RequestAborted);
                 log.Write("ldplayer-command", $"index={index}, operation={parts[3]}");
@@ -25044,9 +25507,11 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             log.Write("ldplayer-api-error", e.Message);
             await WriteAsync(context, ErrorStatus(e), new { ok = false, message = e.Message });
         }
+        finally { writeLease?.Dispose(); }
     }
     private async Task HandleDeviceAsync(HttpContext context, string serial, int port)
     {
+        IDisposable? writeLease = null;
         try
         {
             var device = catalog.Snapshot.FirstOrDefault(x => x.Serial == serial);
@@ -25069,6 +25534,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             ValidateWriteRequest(context);
             var body = await ReadBodyAsync(context);
             RequireWriteAvailable(serial);
+            writeLease = writes?.Acquire([serial]);
             var ct = context.RequestAborted;
             object? data = null;
             switch (path)
@@ -25091,9 +25557,11 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             log.Write("basic-api-error", e.Message, serial);
             await WriteAsync(context, ErrorStatus(e), new { ok = false, message = e.Message });
         }
+        finally { writeLease?.Dispose(); }
     }
     private async Task HandleAutomatorAsync(HttpContext context)
     {
+        IDisposable? writeLease = null;
         try
         {
             var path = NormalizePath(context.Request.Path.Value).Trim('/');
@@ -25115,7 +25583,12 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             var body = await ReadBodyAsync(context);
             if (path is "device/shell" or "device/execute" or "device/set-prop" or "device/set-timezone" or "device/set-sim-info" or
                 "app/start" or "app/stop" or "app/clear" or "input/tap" or "input/swipe" or "input/keyevent" or "service/stop" or
-                "element/click-if-exists" or "element/click-text" or "element/set-text" or "element/click-node") RequireWriteAvailable(RequiredString(body, "serial"));
+                "element/click-if-exists" or "element/click-text" or "element/set-text" or "element/click-node")
+            {
+                var serial = RequiredString(body, "serial");
+                RequireWriteAvailable(serial);
+                writeLease = writes?.Acquire([serial]);
+            }
             var dataResult = await automation.ExecuteAsync(path, body, context.RequestAborted);
             await WriteAsync(context, 200, new { code = 0, message = "ok", data = dataResult });
         }
@@ -25126,6 +25599,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             var code = e is DeviceException de ? de.Code : e is JsonException or ArgumentException ? 1007 : 2000;
             await WriteAsync(context, ErrorStatus(e), new { code, message = e.Message });
         }
+        finally { writeLease?.Dispose(); }
     }
     private static void ValidateWriteRequest(HttpContext context)
     {
@@ -25533,6 +26007,8 @@ public sealed class MatrixRuntime : IAsyncDisposable
     public required DeviceCatalog Devices { get; init; }
     public required ScriptScheduler Scripts { get; init; }
     public required InputCoordinator Input { get; init; }
+    // Hand-built runtimes must explicitly inject this same instance into all write entry points.
+    public DeviceWriteCoordinator Writes { get; init; } = new();
     public required ApiServiceManager Api { get; init; }
     public required SettingsStore SettingsStore { get; init; }
     public required CatalogRepository Metadata { get; init; }
@@ -25598,8 +26074,9 @@ public sealed class MatrixRuntime : IAsyncDisposable
             var top = y ?? 0;
             return PngImage.Crop(png, left, top, width ?? size.Width - left, height ?? size.Height - top);
         };
-        scripts = new ScriptScheduler(backend, catalog, demo);
-        input = new InputCoordinator(catalog, backend);
+        var writes = new DeviceWriteCoordinator();
+        scripts = new ScriptScheduler(backend, catalog, demo, writes);
+        input = new InputCoordinator(catalog, backend, writes);
         if (demo) ldPlayer = new LdPlayerService(new DemoLdConsoleRunner(), true);
         else if (!string.IsNullOrWhiteSpace(settings.LdConsolePath))
         {
@@ -25611,7 +26088,7 @@ public sealed class MatrixRuntime : IAsyncDisposable
             }
             catch (DeviceException e) { ldPlayerError = e.Message; log.Write("ldplayer-configuration-error", e.Message); }
         }
-        api = new ApiServiceManager(catalog, backend, automation, log) { LdPlayer = ldPlayer };
+        api = new ApiServiceManager(catalog, backend, automation, log, writes) { LdPlayer = ldPlayer };
         if (admissions is { Count: > 0 } && (ldPlayer is null || admissions.Any(proof => !settings.LdSerialBindings.TryGetValue(proof.Index, out var serial) || serial != proof.Serial || !settings.AdbAllowedSerials.Contains(proof.Serial, StringComparer.Ordinal))))
             throw new DeviceException("接入凭据与运行时授权不一致。", 409, 1003);
         bool ScriptBusy(string serial) => scripts.GetStatus(serial).State is ScriptRunState.Running or ScriptRunState.Cancelling;
@@ -25620,7 +26097,7 @@ public sealed class MatrixRuntime : IAsyncDisposable
         var runtime = new MatrixRuntime
         {
             Backend = backend, Devices = catalog, Automation = automation, Scripts = scripts,
-            Input = input, Api = api,
+            Input = input, Api = api, Writes = writes,
             SettingsStore = store, Settings = settings, FrozenConnectionSettings = settings with { AdbAllowedSerials = settings.AdbAllowedSerials.ToArray(), LdSerialBindings = new(settings.LdSerialBindings) }, Metadata = metadata,
             Log = log, IsDemo = demo, LdPlayer = ldPlayer, LdEditor = ldEditor, LdPlayerError = ldPlayerError
         };
@@ -25739,6 +26216,13 @@ public sealed class MatrixRuntime : IAsyncDisposable
         var frozen = FrozenConnectionSettings;
         if (Settings.LdConsolePath != frozen.LdConsolePath || Settings.AdbPath != frozen.AdbPath || Settings.CommandTimeoutSeconds != frozen.CommandTimeoutSeconds || Settings.AgentBaseUrl != frozen.AgentBaseUrl || Settings.AgentSerial != frozen.AgentSerial || !Settings.AdbAllowedSerials.SequenceEqual(frozen.AdbAllowedSerials) || !Settings.LdSerialBindings.OrderBy(pair => pair.Key).SequenceEqual(frozen.LdSerialBindings.OrderBy(pair => pair.Key)))
             throw new DeviceException("连接配置已保存但尚未生效，请重新启动矩阵设备后再接入或管理实例。", 409, 1003);
+    }
+    public IDisposable AcquireLdWrite(int index)
+    {
+        RequireFrozenConnectionSettings();
+        if (index <= 0) throw new DeviceException("原实例0受保护，未发送雷电命令。", 403, 1003);
+        var serial = Api.LdSerialForWriteGuard?.Invoke(index);
+        return string.IsNullOrWhiteSpace(serial) ? Writes.AcquireAll() : Writes.Acquire([serial]);
     }
     public async Task RefreshLdPlayerAsync(CancellationToken ct = default)
     {
@@ -31983,6 +32467,453 @@ public static class CatalogPathTests
 
 ```
 
+## tests/MatrixDevice.Tests/DeviceWriteTests.cs
+
+```csharp
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Http.Json;
+using System.Net.Sockets;
+using System.Reflection;
+using System.Runtime.ExceptionServices;
+using System.Text.Json;
+using MatrixDevice.Core;
+using MatrixDevice.Features;
+using MatrixDevice.Host;
+
+internal static class DeviceWriteTests
+{
+    private const string A = "DEMO-001", B = "DEMO-002";
+    private static readonly TimeSpan Step = TimeSpan.FromSeconds(5), Drain = TimeSpan.FromSeconds(10);
+    private static string? unresolved;
+    private static readonly List<object> retained = [];
+    public static void Register(Action<string, Func<Task>> test)
+    {
+        test("Device writes API in-flight rejects same-target script admission", () => Run("W01", async p =>
+        {
+            p.Backend.Hold("legacy", A);
+            var api = p.Post(A); await p.Backend.Entered.Task.WaitAsync(Step);
+            ScriptJobHandle? accepted = null; var rejected = Reject(() => accepted = p.Submit(A));
+            if (accepted is not null) await p.Backend.PinnedEntered.Task.WaitAsync(Step);
+            var observed = await p.Backend.Taps(A);
+            p.Observe(new { rejected, accepted = accepted?.JobId, observed, scriptCalls = p.Backend.Count("pinned", A) });
+            Check(rejected && p.Backend.Count("pinned", A) == 0 && observed == "Tap 0", "PRODUCT: API in-flight allowed same-target script admission/backend action.");
+            p.Backend.Release.TrySetResult(); Check((await api).IsSuccessStatusCode, "Original API writer failed.");
+        }));
+        test("Device writes script blocks API A but API B and HTTP reads continue", () => Run("W02", async p =>
+        {
+            p.Backend.Hold("pinned", A); var job = p.Submit(A); await p.Backend.Entered.Task.WaitAsync(Step);
+            using var denied = await p.Post(A); using var allowed = await p.Post(B);
+            using var read = await p.Track(p.Http.GetAsync(p.Url + "/devices"));
+            Check(denied.StatusCode == HttpStatusCode.Conflict && allowed.IsSuccessStatusCode && read.IsSuccessStatusCode, "PRODUCT: same-target exclusion blocked another target or read-only HTTP.");
+            Check(p.Backend.Count("legacy", A) == 0 && await p.Backend.Taps(B) == "Tap 1", "Rejected API wrote A or B did not reach real Demo.");
+            p.Backend.Release.TrySetResult(); await job.Completion.WaitAsync(Step);
+        }));
+        test("Device writes competing API requests admit one A while B progresses", () => Run("W03", async p =>
+        {
+            p.Backend.Hold("legacy", A); var first = p.Post(A); await p.Backend.Entered.Task.WaitAsync(Step);
+            using var second = await p.Post(A); using var other = await p.Post(B);
+            p.Observe(new { second = (int)second.StatusCode, aCalls = p.Backend.Count("legacy", A), b = await p.Backend.Taps(B) });
+            Check(second.StatusCode == HttpStatusCode.Conflict && p.Backend.Count("legacy", A) == 1 && other.IsSuccessStatusCode && await p.Backend.Taps(B) == "Tap 1", "PRODUCT: two overlapping API writers reached A, or independent B was blocked.");
+            p.Backend.Release.TrySetResult(); Check((await first).IsSuccessStatusCode, "Original API request did not finish.");
+        }));
+        test("Device writes aborted API retains ownership until noncooperative backend drains", () => Run("W04", async p =>
+        {
+            p.Backend.Hold("legacy", A); using var cancel = new CancellationTokenSource();
+            var request = p.Post(A, cancel.Token); await p.Backend.Entered.Task.WaitAsync(Step); cancel.Cancel();
+            try { await request; } catch (OperationCanceledException) { }
+            await p.Backend.CancelObserved.Task.WaitAsync(Step);
+            ScriptJobHandle? accepted = null; var rejected = Reject(() => accepted = p.Submit(A));
+            if (accepted is not null) await p.Backend.PinnedEntered.Task.WaitAsync(Step);
+            p.Observe(new { rejected, accepted = accepted?.JobId, heldTaskPending = p.Backend.Tasks.Any(task => !task.IsCompleted) });
+            Check(rejected && p.Backend.Count("pinned", A) == 0, "PRODUCT: HTTP cancellation released ownership before original backend task drained.");
+            p.Backend.Release.TrySetResult(); await p.Backend.Drained.Task.WaitAsync(Step);
+        }));
+        test("Device writes Input fanout rejects atomically when API owns B", () => Run("W05", async p =>
+        {
+            await p.Input.HandoffAsync(A); p.Backend.Hold("legacy", B); var api = p.Post(B); await p.Backend.Entered.Task.WaitAsync(Step);
+            var rejected = await RejectAsync(() => p.Track(p.Input.SendAsync(p.Snapshot(InputKind.Tap, [B]))));
+            p.Observe(new { rejected, aCalls = p.Backend.Count("legacy", A), bCalls = p.Backend.Count("legacy", B), a = await p.Backend.Taps(A) });
+            Check(rejected && p.Backend.Count("legacy", A) == 0 && p.Backend.Count("legacy", B) == 1 && await p.Backend.Taps(A) == "Tap 0", "PRODUCT: Input batch partly wrote A/B despite B being occupied.");
+            p.Backend.Release.TrySetResult(); await api;
+        }));
+        test("Device writes Input holds its whole target group until all backend actions drain", () => Run("W06", async p =>
+        {
+            await p.Input.HandoffAsync(A); p.Backend.Hold("legacy", A);
+            var input = p.Track(p.Input.SendAsync(p.Snapshot(InputKind.Tap, [B]))); await p.Backend.Entered.Task.WaitAsync(Step);
+            await p.Backend.BDrained.Task.WaitAsync(Step);
+            using var denied = await p.Post(B);
+            Check(denied.StatusCode == HttpStatusCode.Conflict && p.Backend.Count("legacy", B) == 1, "PRODUCT: completed B part released its group ownership while A remained in-flight.");
+            p.Backend.Release.TrySetResult(); await input.WaitAsync(Step);
+            Check(await p.Backend.Taps(A) == "Tap 1" && await p.Backend.Taps(B) == "Tap 1", "Input group did not execute exactly once per target.");
+        }));
+        test("Device writes cancelling script keeps A occupied until its actual task finishes", () => Run("W07", async p =>
+        {
+            p.Backend.Hold("pinned", A); var job = p.Submit(A); await p.Backend.Entered.Task.WaitAsync(Step);
+            Check(p.Scheduler.CancelJob(job.JobId), "Accepted job refused cancellation.");
+            using var denied = await p.Post(A);
+            Check(denied.StatusCode == HttpStatusCode.Conflict && !job.Completion.IsCompleted && p.Scheduler.GetJob(job.JobId)!.State == ScriptRunState.Cancelling, "PRODUCT: cancelling job released A before backend drain.");
+            p.Backend.Release.TrySetResult(); await job.Completion.WaitAsync(Step);
+            var next = p.Submit(A); await next.Completion.WaitAsync(Step);
+            Check(p.Scheduler.GetJob(next.JobId)!.State == ScriptRunState.Completed && await p.Backend.Taps(A) == "Tap 2", "Drained cancellation leaked the lease or cancelled its successor.");
+        }));
+        test("Device writes backend exception releases API lease for a later request", () => Run("W08", async p =>
+        {
+            p.Backend.ThrowNext = true; using var failed = await p.Post(A); using var next = await p.Post(A);
+            Check(failed.StatusCode == HttpStatusCode.InternalServerError && next.IsSuccessStatusCode && await p.Backend.Taps(A) == "Tap 1", "PRODUCT: backend failure leaked ownership or wrote an extra action.");
+        }));
+        test("Device writes Acquire AB is atomic and independent B remains usable", () => Contract("W09", () =>
+        {
+            var gate = Gate.Required(); using var b = gate.Acquire([B]);
+            Check(Reject(() => gate.Acquire([A, B])), "Acquire AB succeeded while B was held.");
+            using var a = gate.Acquire([A]); Check(gate.Busy(A) && gate.Busy(B), "Failed AB retained A or independent acquisition was lost.");
+        }));
+        test("Device writes global barrier covers future keys and conflicts in both directions", () => Contract("W10", () =>
+        {
+            var gate = Gate.Required();
+            using (gate.All()) Check(Reject(() => gate.Acquire(["future-C"])), "AcquireAll did not cover a previously unseen serial.");
+            using (gate.Acquire(["future-C"])) Check(Reject(() => gate.All()), "AcquireAll ignored an active device lease.");
+            using var after = gate.All(); Check(gate.Busy(A) && gate.Busy("future-D"), "Global barrier IsBusy excluded future keys.");
+        }));
+        test("Device writes old lease double dispose cannot clear a newer same-target lease", () => Contract("W11", () =>
+        {
+            var gate = Gate.Required(); var old = gate.Acquire([A]); old.Dispose();
+            using var current = gate.Acquire([A]); old.Dispose();
+            Check(gate.Busy(A) && Reject(() => gate.Acquire([A])), "Old lease disposal cleared the current owner.");
+            using var b = gate.Acquire([B]); Check(gate.Busy(B), "A lease blocked unrelated B.");
+        }));
+        test("Device writes Runtime factory shares one gate across Scheduler Input and API", async () =>
+        {
+            if (unresolved is not null) throw new InvalidOperationException("NOT-RUN: " + unresolved);
+            var runtime = await MatrixRuntime.CreateAsync(new(), Temp(), true); IDisposable? lease = null; var tasks = new List<Task>();
+            try
+            {
+                var property = typeof(MatrixRuntime).GetProperty("Writes") ?? throw new ContractMissing("Runtime.Writes");
+                var gate = new Gate(property.GetValue(runtime) ?? throw new ContractMissing("Runtime.Writes value")); lease = gate.Acquire([A]);
+                var info = runtime.Devices.GetRequired(A);
+                ScriptJobHandle? accepted = null;
+                var scriptRejected = Reject(() => { accepted = runtime.Scripts.SubmitJob(new(A, info.Generation, info.TransportId, true), Package()); tasks.Add(accepted.Completion); });
+                var inputRejected = await RejectAsync(() => { var task = runtime.Input.SendAsync(new() { SourceSerial = A, Kind = InputKind.Tap, X = 20, Y = 30, SourceWidth = info.Width, SourceHeight = info.Height }); tasks.Add(task); return task; });
+                await runtime.Api.StartAutomatorAsync(Port()); using var http = new HttpClient { Timeout = Step };
+                var url = "http://127.0.0.1:" + runtime.Api.RunningAutomatorPort;
+                using var response = await http.PostAsJsonAsync(url + "/input/tap", new { serial = A, x = 20, y = 30 });
+                using var other = await http.PostAsJsonAsync(url + "/input/tap", new { serial = B, x = 20, y = 30 });
+                Check(scriptRejected && inputRejected && response.StatusCode == HttpStatusCode.Conflict && other.IsSuccessStatusCode, "Runtime factory failed to inject one shared gate into all writers.");
+                Check((await runtime.Backend.DumpAsync(A)).ChildNodeList[1].Text == "Tap 0" && (await runtime.Backend.DumpAsync(B)).ChildNodeList[1].Text == "Tap 1", "Runtime gate rejection still changed A or blocked B.");
+            }
+            finally
+            {
+                lease?.Dispose();
+                var drain = Task.WhenAll(tasks);
+                try { await drain.WaitAsync(Drain); }
+                catch (Exception error)
+                {
+                    if (tasks.Any(task => !task.IsCompleted))
+                    {
+                        unresolved = "W12 original tasks did not drain; runtime disposal not started: " + error;
+                        retained.Add(new { runtime, drain, tasks });
+                        Console.WriteLine("DEVICE_WRITE_CASE " + JsonSerializer.Serialize(new { name = "W12", cleanupStatus = "NOT-STARTED-PENDING-TASKS", pending = tasks.Count(task => !task.IsCompleted), error = error.ToString() }));
+                        throw;
+                    }
+                }
+                var cleanup = runtime.DisposeAsync().AsTask();
+                try { await cleanup.WaitAsync(Drain); }
+                catch (Exception error) { unresolved = "W12 runtime cleanup failed: " + error; retained.Add(new { runtime, cleanup, tasks }); throw; }
+                finally { Console.WriteLine("DEVICE_WRITE_CASE " + JsonSerializer.Serialize(new { name = "W12", cleanupStatus = cleanup.Status.ToString(), pending = tasks.Count(task => !task.IsCompleted) + (cleanup.IsCompleted ? 0 : 1) })); }
+            }
+        });
+        test("Device writes busy Up invalidates its old gesture before a later Up", () => Run("W13", async p =>
+        {
+            await p.Input.HandoffAsync(A); await p.Track(p.Input.SendAsync(p.Snapshot(InputKind.Down, [])));
+            p.Backend.Hold("legacy", A); var api = p.Post(A); await p.Backend.Entered.Task.WaitAsync(Step);
+            var rejected = await RejectAsync(() => p.Track(p.Input.SendAsync(p.Snapshot(InputKind.Up, []))));
+            Check(rejected && p.Backend.Count("legacy", A) == 1, "PRODUCT: busy Up reached the backend instead of rejecting the old gesture.");
+            p.Backend.Release.TrySetResult(); await api;
+            await p.Track(p.Input.SendAsync(p.Snapshot(InputKind.Up, [])));
+            Check(p.Backend.Count("legacy", A) == 1 && await p.Backend.Taps(A) == "Tap 1", "PRODUCT: later Up replayed a gesture invalidated by busy rejection.");
+        }));
+        test("Device writes blocked A terminal observer does not prevent B completion", () => Run("W14", async p =>
+        {
+            _ = Gate.Required();
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            ScriptJobHandle? first = null, second = null;
+            Task? observerWait = null; Exception? primary = null;
+            void BlockA(ScriptJobStatus status)
+            {
+                if (status.Target.Serial != A || status.State != ScriptRunState.Completed) return;
+                observerWait = release.Task.WaitAsync(TimeSpan.FromSeconds(20));
+                entered.TrySetResult();
+                observerWait.GetAwaiter().GetResult();
+            }
+            p.Scheduler.JobChanged += BlockA;
+            try
+            {
+                first = p.Submit(A); await entered.Task.WaitAsync(Step);
+                second = p.Submit(B); await p.Backend.BDrained.Task.WaitAsync(Step);
+                try { await second.Completion.WaitAsync(Step); }
+                catch (TimeoutException error) { throw new InvalidOperationException("PRODUCT: B completion waited for another serial's blocked terminal observer.", error); }
+                p.Observe(new { aJob = first.JobId, bJob = second.JobId, aPending = !first.Completion.IsCompleted, bCompleted = second.Completion.IsCompletedSuccessfully, aObserverReleased = release.Task.IsCompleted, observerWait = observerWait?.Status.ToString(), b = await p.Backend.Taps(B) });
+                Check(!release.Task.IsCompleted && observerWait is { IsCompleted: false } && !first.Completion.IsCompleted && second.Completion.IsCompletedSuccessfully && p.Scheduler.GetJob(second.JobId)!.State == ScriptRunState.Completed && await p.Backend.Taps(B) == "Tap 1", "PRODUCT: B did not complete its real Demo action independently of A's blocked terminal observer.");
+                using var next = await p.Post(B);
+                Check(next.IsSuccessStatusCode && !release.Task.IsCompleted && observerWait is { IsCompleted: false } && !first.Completion.IsCompleted && p.Backend.Count("legacy", B) == 1 && await p.Backend.Taps(B) == "Tap 2", "PRODUCT: B completion did not release its lease while A's terminal observer remained blocked.");
+            }
+            catch (Exception error) { primary = error; throw; }
+            finally
+            {
+                release.TrySetResult();
+                p.Scheduler.JobChanged -= BlockA;
+                if (observerWait is not null) p.CleanupTasks.Add(observerWait);
+                var accepted = new[] { first?.Completion, second?.Completion }.OfType<Task>().ToArray();
+                var drain = p.Track(Task.WhenAll(observerWait is null ? accepted : accepted.Append(observerWait)));
+                try { await drain.WaitAsync(Drain); }
+                catch (Exception cleanup) when (primary is not null) { throw new AggregateException(primary, cleanup); }
+            }
+        }));
+        test("Device writes FIFO queued A waits for the entire earlier AB group", () => Run("W15", async p =>
+        {
+            _ = Gate.Required(); await p.Input.HandoffAsync(A); p.Backend.Hold("legacy", B);
+            Exception? primary = null;
+            try
+            {
+                var first = p.Track(p.Input.SendAsync(p.Snapshot(InputKind.Tap, [B])));
+                await p.Backend.Entered.Task.WaitAsync(Step); await p.Backend.ADrained.Task.WaitAsync(Step);
+                Check(await p.Backend.Taps(A) == "Tap 1" && await p.Backend.Taps(B) == "Tap 0", "Own first-group A completion/B hold precondition was not reached.");
+                var before = p.Backend.Calls.ToArray();
+                var second = p.Track(p.Input.SendAsync(p.Snapshot(InputKind.Tap, [])));
+                var dispatched = p.Track(p.Input.SendAsync(p.Snapshot(InputKind.Move, []) with { IncludeSource = false }));
+                await dispatched.WaitAsync(Step);
+                p.Observe(new { phase = "second-group-enqueued", first = first.Status.ToString(), second = second.Status.ToString(), secondError = second.Exception?.ToString(), calls = p.Backend.Calls.ToArray(), a = await p.Backend.Taps(A), b = await p.Backend.Taps(B) });
+                Check(!first.IsCompleted && !second.IsCompleted && p.Backend.Count("legacy", A) == 1 && p.Backend.Count("legacy", B) == 1, "PRODUCT: queued A self-conflicted or wrote before the earlier AB group drained.");
+                var observation = second.WaitAsync(Step); var timedOut = false;
+                try { await observation; }
+                catch (TimeoutException) { timedOut = true; }
+                catch (DeviceException error) when (error.Status == 409 && error.Code == 1003) { throw new InvalidOperationException("PRODUCT: FIFO queued A self-conflicted with its still-running AB predecessor.", error); }
+                p.Observe(new { phase = "single-bounded-pending-observation", timedOut, observation = observation.Status.ToString(), originalSecond = second.Status.ToString(), first = first.Status.ToString(), calls = p.Backend.Calls.ToArray() });
+                Check(timedOut && !first.IsCompleted && !second.IsCompleted && p.Backend.Calls.Count == 2, "PRODUCT: queued A did not remain pending while its AB predecessor still owned B.");
+                p.Backend.Release.TrySetResult(); await Task.WhenAll(first, second).WaitAsync(Step);
+                var after = p.Backend.Calls.ToArray(); p.Observe(new { phase = "both-groups-drained", calls = after });
+                Check(after.Length == 3 && after.Take(before.Length).SequenceEqual(before) && after[^1].Serial == A && await p.Backend.Taps(A) == "Tap 2" && await p.Backend.Taps(B) == "Tap 1", "PRODUCT: queued A did not execute once after its complete AB predecessor.");
+            }
+            catch (Exception error) { primary = error; throw; }
+            finally
+            {
+                p.Backend.Release.TrySetResult(); var drain = p.Track(Task.WhenAll(p.Tasks.ToArray()));
+                try { await drain.WaitAsync(Drain); }
+                catch when (p.Tasks.All(task => task.IsCompleted)) { }
+                catch (Exception cleanup) when (primary is not null) { throw new AggregateException(primary, cleanup); }
+            }
+        }));
+        test("Device writes cancelled queued AB cannot release or write through its predecessor", () => Run("W16", async p =>
+        {
+            _ = Gate.Required(); await p.Input.HandoffAsync(A); p.Backend.Hold("legacy", A);
+            using var cancel = new CancellationTokenSource(); Exception? primary = null;
+            try
+            {
+                var first = p.Track(p.Input.SendAsync(p.Snapshot(InputKind.Tap, [B])));
+                await p.Backend.Entered.Task.WaitAsync(Step); await p.Backend.BDrained.Task.WaitAsync(Step);
+                var before = p.Backend.Calls.ToArray();
+                var second = p.Track(p.Input.SendAsync(p.Snapshot(InputKind.Tap, [B]), cancel.Token));
+                var dispatched = p.Track(p.Input.SendAsync(p.Snapshot(InputKind.Move, []) with { IncludeSource = false }));
+                await dispatched.WaitAsync(Step); cancel.Cancel();
+                using var denied = await p.Post(B);
+                p.Observe(new { phase = "queued-group-cancelled", first = first.Status.ToString(), second = second.Status.ToString(), response = (int)denied.StatusCode, calls = p.Backend.Calls.ToArray(), a = await p.Backend.Taps(A), b = await p.Backend.Taps(B) });
+                Check(!first.IsCompleted && denied.StatusCode == HttpStatusCode.Conflict && p.Backend.Calls.Count == 2 && await p.Backend.Taps(A) == "Tap 0" && await p.Backend.Taps(B) == "Tap 1", "PRODUCT: cancelling queued AB released its predecessor's lease or sent a later-group action.");
+                p.Backend.Release.TrySetResult(); await first.WaitAsync(Step);
+                var cancelled = false; try { await second.WaitAsync(Step); } catch (OperationCanceledException) { cancelled = true; }
+                Check(cancelled && p.Backend.Calls.Count == 2 && p.Backend.Calls.ToArray().SequenceEqual(before), "PRODUCT: cancelled queued AB wrote an action or failed to drain as cancelled.");
+                var next = p.Track(p.Input.SendAsync(p.Snapshot(InputKind.Tap, [B]))); await next.WaitAsync(Step);
+                p.Observe(new { phase = "successor-drained", calls = p.Backend.Calls.ToArray() });
+                Check(p.Backend.Count("legacy", A) == 2 && p.Backend.Count("legacy", B) == 2 && await p.Backend.Taps(A) == "Tap 2" && await p.Backend.Taps(B) == "Tap 2", "PRODUCT: queued cancellation leaked a group lease or affected its successor.");
+            }
+            catch (Exception error) { primary = error; throw; }
+            finally
+            {
+                cancel.Cancel(); p.Backend.Release.TrySetResult(); var drain = p.Track(Task.WhenAll(p.Tasks.ToArray()));
+                try { await drain.WaitAsync(Drain); }
+                catch when (p.Tasks.All(task => task.IsCompleted)) { }
+                catch (Exception cleanup) when (primary is not null) { throw new AggregateException(primary, cleanup); }
+            }
+        }));
+    }
+    private static ScriptPackage Package() => new() { Manifest = new() { Id = "write-test", Name = "own Demo write", Version = "1" }, Steps = [new() { Action = "click", Value = "20,30" }] };
+    private static string Temp() { var path = Path.Combine(Path.GetTempPath(), "matrix-write-tests", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(path); return path; }
+    private static int Port() { var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop(); return port; }
+    private static void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
+    private static bool Reject(Action action) { try { action(); return false; } catch (DeviceException error) when (error.Status == 409 && error.Code == 1003) { return true; } }
+    private static async Task<bool> RejectAsync(Func<Task> action) { try { await action().WaitAsync(Step); return false; } catch (DeviceException error) when (error.Status == 409 && error.Code == 1003) { return true; } }
+    private sealed class ContractMissing(string member) : Exception("CONTRACT-NOT-IMPLEMENTED: public " + member + " is absent; this is not a reproduced backend behavior.");
+    private static Task Contract(string name, Action action)
+    {
+        if (unresolved is not null) throw new InvalidOperationException("NOT-RUN: " + unresolved);
+        try { action(); Console.WriteLine("DEVICE_WRITE_CASE " + JsonSerializer.Serialize(new { name, classification = "CONTRACT-PASS", pending = 0 })); return Task.CompletedTask; }
+        catch (Exception error) { Console.WriteLine("DEVICE_WRITE_CASE " + JsonSerializer.Serialize(new { name, classification = error is ContractMissing ? "CONTRACT-NOT-IMPLEMENTED" : "PRODUCT-FAIL", error = error.ToString(), pending = 0 })); throw; }
+    }
+    private static async Task Run(string name, Func<Probe, Task> action)
+    {
+        if (unresolved is not null) throw new InvalidOperationException("NOT-RUN: " + unresolved);
+        var probe = await Probe.Create(); Exception? primary = null, cleanup = null;
+        try { await action(probe); } catch (Exception error) { primary = error; }
+        try { await probe.DisposeAsync(); } catch (Exception error) { cleanup = error; unresolved = name + " cleanup was not terminal: " + error; retained.Add(probe); }
+        Console.WriteLine("DEVICE_WRITE_CASE " + JsonSerializer.Serialize(new { name, gatePresent = probe.GatePresent, observations = probe.Observations, calls = probe.Backend.Calls.ToArray(), tasks = probe.Tasks.Select(task => task.Status.ToString()), backendTasks = probe.Backend.Tasks.Select(task => task.Status.ToString()), cleanupTasks = probe.CleanupTasks.Select(task => task.Status.ToString()), cleanupError = cleanup?.ToString(), primaryError = primary?.ToString(), pending = probe.Tasks.Concat(probe.Backend.Tasks).Concat(probe.CleanupTasks).Distinct().Count(task => !task.IsCompleted) }));
+        if (primary is not null && cleanup is not null) throw new AggregateException(primary, cleanup);
+        if (primary is not null) ExceptionDispatchInfo.Capture(primary).Throw();
+        if (cleanup is not null) ExceptionDispatchInfo.Capture(cleanup).Throw();
+    }
+    private sealed class Gate(object value)
+    {
+        internal object Value => value;
+        internal static Gate? Optional() { var type = typeof(IDeviceBackend).Assembly.GetType("MatrixDevice.Core.DeviceWriteCoordinator"); return type is null ? null : new(Activator.CreateInstance(type)!); }
+        internal static Gate Required() => Optional() ?? throw new ContractMissing("DeviceWriteCoordinator");
+        internal IDisposable Acquire(IEnumerable<string> serials) => (IDisposable)Invoke("Acquire", [typeof(IEnumerable<string>)], [serials])!;
+        internal IDisposable All() => (IDisposable)Invoke("AcquireAll", [], [])!;
+        internal bool Busy(string serial) => (bool)Invoke("IsBusy", [typeof(string)], [serial])!;
+        private object? Invoke(string name, Type[] signature, object?[] arguments)
+        {
+            var method = value.GetType().GetMethod(name, signature) ?? throw new ContractMissing(name);
+            try { return method.Invoke(value, arguments); } catch (TargetInvocationException error) when (error.InnerException is not null) { ExceptionDispatchInfo.Capture(error.InnerException).Throw(); throw; }
+        }
+        internal static T Construct<T>(Gate? gate, params object[] original)
+        {
+            if (gate is null) return (T)Activator.CreateInstance(typeof(T), original)!;
+            var constructor = typeof(T).GetConstructors().SingleOrDefault(item => item.GetParameters().Length == original.Length + 1 && item.GetParameters()[^1].ParameterType == gate.Value.GetType()) ?? throw new ContractMissing(typeof(T).Name + " shared gate constructor");
+            return (T)constructor.Invoke(original.Append(gate.Value).ToArray());
+        }
+    }
+    private sealed class Probe : IAsyncDisposable
+    {
+        internal readonly BlockingBackend Backend = new();
+        internal DeviceCatalog Catalog = null!;
+        internal ScriptScheduler Scheduler = null!;
+        internal InputCoordinator Input = null!;
+        internal ApiServiceManager Api = null!;
+        internal RollingLog Log = null!;
+        internal readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
+        internal readonly List<Task> Tasks = [];
+        internal readonly List<Task> CleanupTasks = [];
+        internal readonly List<object> Observations = [];
+        internal bool GatePresent;
+        internal string Url = "";
+        internal static async Task<Probe> Create()
+        {
+            var p = new Probe();
+            try
+            {
+                var gate = Gate.Optional(); p.GatePresent = gate is not null;
+                p.Catalog = new(p.Backend); await p.Catalog.RefreshAsync();
+                p.Scheduler = Gate.Construct<ScriptScheduler>(gate, p.Backend, p.Catalog, true);
+                p.Input = Gate.Construct<InputCoordinator>(gate, p.Catalog, p.Backend);
+                p.Log = new(Temp()); p.Api = Gate.Construct<ApiServiceManager>(gate, p.Catalog, p.Backend, new AutomationService(p.Backend, p.Catalog), p.Log);
+                p.Api.ScriptWriteBusy = serial => p.Scheduler.GetStatus(serial).State is ScriptRunState.Running or ScriptRunState.Cancelling;
+                p.Api.AnyScriptWriteBusy = () => p.Catalog.Snapshot.Any(device => p.Api.ScriptWriteBusy(device.Serial));
+                await p.Api.StartAutomatorAsync(Port()); p.Url = "http://127.0.0.1:" + p.Api.RunningAutomatorPort; return p;
+            }
+            catch (Exception primary)
+            {
+                try { await p.DisposeAsync(); } catch (Exception cleanup) { unresolved = "Probe construction cleanup failed: " + cleanup; retained.Add(p); throw new AggregateException(primary, cleanup); }
+                throw;
+            }
+        }
+        internal T Track<T>(T task) where T : Task { Tasks.Add(task); return task; }
+        internal Task<HttpResponseMessage> Post(string serial, CancellationToken ct = default) => Track(Http.PostAsJsonAsync(Url + "/input/tap", new { serial, x = 20, y = 30 }, ct));
+        internal ScriptJobHandle Submit(string serial) { var info = Catalog.GetRequired(serial); var handle = Scheduler.SubmitJob(new(serial, info.Generation, info.TransportId, true), Package()); Track(handle.Completion); return handle; }
+        internal InputSnapshot Snapshot(InputKind kind, string[] targets) { var info = Catalog.GetRequired(A); return new() { SourceSerial = A, SourceGeneration = info.Generation, Generation = Input.CurrentGeneration, Kind = kind, TargetSerials = targets, SourceWidth = info.Width, SourceHeight = info.Height, X = 20, Y = 30, GestureId = 42 }; }
+        internal void Observe(object observation) => Observations.Add(observation);
+        public async ValueTask DisposeAsync()
+        {
+            Backend.Release.TrySetResult();
+            var requests = Task.WhenAll(Tasks); CleanupTasks.Add(requests);
+            try { await requests.WaitAsync(Drain); } catch when (Tasks.All(task => task.IsCompleted)) { }
+            var backend = Task.WhenAll(Backend.Tasks); CleanupTasks.Add(backend);
+            try { await backend.WaitAsync(Drain); } catch when (Backend.Tasks.All(task => task.IsCompleted)) { }
+            var errors = new List<Exception>();
+            async Task Close(Func<Task> dispose)
+            {
+                Task original;
+                try { original = dispose(); CleanupTasks.Add(original); }
+                catch (Exception error) { errors.Add(error); return; }
+                try { await original.WaitAsync(Step); }
+                catch (Exception error)
+                {
+                    if (!original.IsCompleted) throw new InvalidOperationException("CLEANUP-FAIL: original disposal task is still pending; later components will not be released.", error);
+                    errors.Add(error);
+                }
+            }
+            if (Api is not null) await Close(() => Api.DisposeAsync().AsTask());
+            if (Input is not null) await Close(() => Input.DisposeAsync().AsTask());
+            if (Scheduler is not null) await Close(() => Scheduler.DisposeAsync().AsTask());
+            await Close(() => Backend.DisposeAsync().AsTask());
+            if (Log is not null) await Close(() => Log.DisposeAsync().AsTask());
+            foreach (var response in Tasks.OfType<Task<HttpResponseMessage>>().Where(task => task.IsCompletedSuccessfully)) response.Result.Dispose();
+            Http.Dispose(); if (errors.Count > 0) throw new AggregateException("CLEANUP-FAIL", errors);
+        }
+    }
+    private sealed record BackendCall(string Lane, string Serial);
+    private sealed class BlockingBackend : IDeviceBackend, IIdentityPinnedDeviceBackend
+    {
+        private readonly DemoDeviceBackend inner = new();
+        private string? holdLane, holdSerial; private int held;
+        internal bool ThrowNext;
+        internal ConcurrentQueue<BackendCall> Calls { get; } = new();
+        internal ConcurrentBag<Task> Tasks { get; } = [];
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource CancelObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource PinnedEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Drained { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource BDrained { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ADrained { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal void Hold(string lane, string serial) { holdLane = lane; holdSerial = serial; }
+        internal int Count(string lane, string serial) => Calls.Count(call => call.Lane == lane && call.Serial == serial);
+        internal async Task<string> Taps(string serial) => (await inner.DumpAsync(serial)).ChildNodeList[1].Text!;
+        private Task Tap(string lane, string serial, Func<CancellationToken, Task> actual, CancellationToken ct)
+        {
+            var task = Core(); Tasks.Add(task); return task;
+            async Task Core()
+            {
+                Calls.Enqueue(new(lane, serial)); if (lane == "pinned") PinnedEntered.TrySetResult();
+                if (ThrowNext) { ThrowNext = false; throw new IOException("own Demo injected backend failure"); }
+                var block = lane == holdLane && serial == holdSerial && Interlocked.CompareExchange(ref held, 1, 0) == 0;
+                try
+                {
+                    if (block) { using var registration = ct.Register(() => CancelObserved.TrySetResult()); Entered.TrySetResult(); await Release.Task; }
+                    await actual(block ? CancellationToken.None : ct); if (serial == B) BDrained.TrySetResult();
+                    if (serial == A) ADrained.TrySetResult();
+                }
+                finally { if (block) Drained.TrySetResult(); }
+            }
+        }
+        public IIdentityPinnedDeviceCommands BindIdentity(DeviceCatalog catalog) => new Pinned(this, ((IIdentityPinnedDeviceBackend)inner).BindIdentity(catalog));
+        private sealed class Pinned(BlockingBackend owner, IIdentityPinnedDeviceCommands commands) : IIdentityPinnedDeviceCommands
+        {
+            public bool IsDemo => commands.IsDemo;
+            public Task TapAsync(DeviceCommandTarget target, int x, int y, CancellationToken ct = default) => owner.Tap("pinned", target.Serial, token => commands.TapAsync(target, x, y, token), ct);
+            public Task SwipeAsync(DeviceCommandTarget target, int x1, int y1, int x2, int y2, int duration, CancellationToken ct = default) => commands.SwipeAsync(target, x1, y1, x2, y2, duration, ct);
+            public Task<string> StartAppAsync(DeviceCommandTarget target, string packageName, CancellationToken ct = default) => commands.StartAppAsync(target, packageName, ct);
+        }
+        public Task TapAsync(string serial, int x, int y, CancellationToken ct = default) => Tap("legacy", serial, token => inner.TapAsync(serial, x, y, token), ct);
+        public Task<IReadOnlyList<DeviceInfo>> DiscoverAsync(CancellationToken ct = default) => inner.DiscoverAsync(ct);
+        public Task<AndroidNode> DumpAsync(string serial, CancellationToken ct = default) => inner.DumpAsync(serial, ct);
+        public Task<byte[]> ScreenshotAsync(string serial, CancellationToken ct = default) => inner.ScreenshotAsync(serial, ct);
+        public Task<string> ShellAsync(string serial, string command, bool useRoot = false, CancellationToken ct = default) => inner.ShellAsync(serial, command, useRoot, ct);
+        public Task SwipeAsync(string serial, int x1, int y1, int x2, int y2, int duration, CancellationToken ct = default) => inner.SwipeAsync(serial, x1, y1, x2, y2, duration, ct);
+        public Task KeyEventAsync(string serial, int code, CancellationToken ct = default) => inner.KeyEventAsync(serial, code, ct);
+        public Task TextAsync(string serial, string text, CancellationToken ct = default) => inner.TextAsync(serial, text, ct);
+        public Task<string> StartAppAsync(string serial, string packageName, string? activity = null, CancellationToken ct = default) => inner.StartAppAsync(serial, packageName, activity, ct);
+        public Task<string> StopAppAsync(string serial, string packageName, CancellationToken ct = default) => inner.StopAppAsync(serial, packageName, ct);
+        public Task<bool> ClearAppAsync(string serial, string packageName, CancellationToken ct = default) => inner.ClearAppAsync(serial, packageName, ct);
+        public Task<IReadOnlyList<AppInfo>> ListAppsAsync(string serial, bool showSystem = false, bool needVersion = true, CancellationToken ct = default) => inner.ListAppsAsync(serial, showSystem, needVersion, ct);
+        public Task InstallAsync(string serial, string path, CancellationToken ct = default) => inner.InstallAsync(serial, path, ct);
+        public Task UninstallAsync(string serial, string packageName, CancellationToken ct = default) => inner.UninstallAsync(serial, packageName, ct);
+        public Task PushAsync(string serial, string path, string remote, IProgress<double>? progress = null, CancellationToken ct = default) => inner.PushAsync(serial, path, remote, progress, ct);
+        public Task PullAsync(string serial, string remote, string path, IProgress<double>? progress = null, CancellationToken ct = default) => inner.PullAsync(serial, remote, path, progress, ct);
+        public Task SetNodeTextAsync(string serial, NodeSelector selector, string text, CancellationToken ct = default) => inner.SetNodeTextAsync(serial, selector, text, ct);
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+}
+
+```
+
 ## tests/MatrixDevice.Tests/ExistingAdbTests.cs
 
 ```csharp
@@ -35156,6 +36087,7 @@ if (liveIndex >= 0)
 
 ScriptParameterTests.Register(Test);
 ScriptJobTests.Register(Test);
+DeviceWriteTests.Register(Test);
 
 var failures = 0; var totalTimer = Stopwatch.StartNew();
 foreach (var (name, run) in tests)

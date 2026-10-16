@@ -294,6 +294,8 @@ public partial class MainWindow
         if (!confirmed) { applicationResult.Text = "已取消确认，未操作任何模拟器。"; return; }
         if (!CanManageApplicationTargets() || !ReferenceEquals(runtime, ViewModel.Runtime) || !frozenSelection.Select(ApplicationTargetIdentity).ToHashSet().SetEquals(SelectedApplicationTargets().Select(ApplicationTargetIdentity)))
             throw new DeviceException("确认期间工作区或勾选目标已变化，未发送命令。", 409, 1003);
+        var writesDevices = plan.Any(item => item.Operation != ApplicationOperation.List);
+        using var write = writesDevices ? runtime.Writes.Acquire(plan.Select(item => item.Target.Serial)) : null;
         applicationReadTimer?.Stop(); applicationReadPending = false; applicationTasks.Clear(); foreach (var item in plan) applicationTasks.Add(new(item));
         applicationCancellation = new(); applicationRunning = true; applicationCancel.IsEnabled = true; RefreshApplicationControls();
         try
@@ -302,9 +304,9 @@ public partial class MainWindow
             {
                 async Task Validate(ApplicationTarget target, CancellationToken token)
                 {
-                    await Dispatcher.InvokeAsync(() => RequireApplicationContext(runtime, target));
+                    await Dispatcher.InvokeAsync(() => RequireApplicationContext(runtime, target, writesDevices));
                     await runtime.Devices.RefreshAsync(token);
-                    await Dispatcher.InvokeAsync(() => RequireApplicationContext(runtime, target));
+                    await Dispatcher.InvokeAsync(() => RequireApplicationContext(runtime, target, writesDevices));
                 }
                 var batch = new ApplicationBatch(runtime.Backend, Validate);
                 var results = await batch.ExecuteAsync(plan, true, result => Dispatcher.Invoke(() =>
@@ -315,16 +317,16 @@ public partial class MainWindow
                     runtime.Log.Write("application-batch-item", JsonSerializer.Serialize(new { result.Index, result.Item.Target.Serial, result.Item.Operation, result.Item.PackageName, result.State, result.Message }, JsonDefaults.Options), result.Item.Target.Serial);
                 }), applicationCancellation.Token);
                 if (results.Any(result => result.State == ApplicationTaskState.Failed)) throw new DeviceException(applicationResult.Text + "；请查看逐项结果。", 409, 1003);
-            });
+            }, blocksApiWrites: !writesDevices);
         }
         finally
         {
             applicationCancellation.Dispose(); applicationCancellation = null; applicationRunning = false; applicationCancel.IsEnabled = false; RefreshApplicationControls();
         }
     }
-    private void RequireApplicationContext(MatrixRuntime runtime, ApplicationTarget target)
+    private void RequireApplicationContext(MatrixRuntime runtime, ApplicationTarget target, bool ownsWriteLease = false)
     {
-        if (!ReferenceEquals(runtime, ViewModel.Runtime) || ViewModel.Transferring || runtime.Api.HasActiveRequests || ApplicationTargetProtected(target.Serial) || ApplicationScriptBusy(runtime, target.Serial)
+        if (!ReferenceEquals(runtime, ViewModel.Runtime) || ViewModel.Transferring || (!ownsWriteLease && runtime.Api.HasActiveRequests) || ApplicationTargetProtected(target.Serial) || ApplicationScriptBusy(runtime, target.Serial)
             || !SelectedApplicationTargets().Select(ApplicationTargetIdentity).Contains(ApplicationTargetIdentity(target)))
             throw new DeviceException($"工作区或并行任务已变化，未继续操作：{target.Serial}。", 409, 1003);
         target.RequireSame(ViewModel.Devices.SingleOrDefault(row => row.Serial == target.Serial)?.Info); target.RequireSame(runtime.GetDevices().SingleOrDefault(device => device.Serial == target.Serial));

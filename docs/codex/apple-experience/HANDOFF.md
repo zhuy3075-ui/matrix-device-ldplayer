@@ -2,6 +2,16 @@
 
 更新：2026-10-17。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
+## 当前执行：A15c共同写入占用
+
+- 实际最新交付为13f3514885ac036bea8bb7200be96598748bd03d，远端feature同值/test49e不变；A15b已核包并push，回执artifacts/mcp-stdio-main/push-complete.json。下方A15b“待核包/未push”为历史，不重做。
+- 当前阶段见[规格与记录](../automation-expansion/MCP_WRITE_OWNERSHIP.md)，独立write-core/desktop/tests/verifier从13f开始。同Runtime共享显式原子目标组，覆盖API/Input/Scheduler及桌面完整操作；不开放real、IPC或跨Runtime。main已经批准集成14源及本阶段文档修改，两用户PNG和配置保持，不进提交。
+- 原13f新13回归为3PASS/6业务红/4合同未实现，旧209保持。首候选通知排空跨serial成环已撤；第二候选FIFO AB到A自拒已有实际red，最终Core r03增加同Work结束屏障保留lane。Desktop新入口的编译CS0176及runner空集合preflight失败均独立保留，不冒称业务红。
+- write-verifier/artifacts/write-ownership/core-red-r03已终态：Build0、224/225唯一W15红、旧Desktop VM5业务红、16清理均terminal，无kill/pending/retained。实际PDB九文档root核过，但旧二进制未冻结、后继Build已替换，独审不称复读原PDB；原流/源保护/业务调用均已独核，不重跑旧红。
+- 当前green-r01原session59782已terminal0：Build81944自然0/114.556秒，225/225（原209exact，56.67秒），MCP Demo14/13NOTRUN、VM5和三早拒均通过；无kill/timeout/retained/error，source189/main186/148/用户3保持。execution F05BFFE295967F6BF9E3BD5FC306F277A24BFE893C554AF8753C4E5A07F9907C；实际156产品已先冻compiled-frozen，frozen-products.json A7E5EBE11DAED21B814AA892E296D1F204C4A9AB13A03A2398F278357542AE99，14源PDB已实际核，两独审复核已通过。主仓代表尚未完成，不拿此替代主仓验收。
+- 最终源码14：write-core/candidate-r03五源；write-desktop/frozen-desktop-r02七源（App5B85、SmokeAB26）；write-tests/frozen-r01c两源（Tests00CD、Program3E74），均local artifacts逐SHA冻结。两独审已实际通过Green；main已机械集成14，批准manifest15F5FE803293FFE0C29868659EC36465695A2834D9EA5B481C0A1AFB4666E222。Main outer FD758A28...E97CC8F唯一原session81092已terminal0：Build57120自然0/114.452秒，225/225/56.51秒、3既有警告0错、MCP14/13NOTRUN、VM5/三早拒均过；五child/原流终态无kill/pending/retained。execution760F684E33543ECEC60039A523F2D5E349D6A59AACF7B131DFD507061CE092B5；156实际产品已先冻compiled-frozen，frozen-products C4F362FD01D889C7F749E9CAB89AFB022DAEBCA6CF1D367B38FF3F4F286052D0，14PDB与MCP逐wire/业务/保护均已获两独立终态审。27个已导入staging ZIP按原合同保留，不称文件已删除。下一门仅文档/三清单/核包/精确23路径index审与单功能private feature push；scope存main artifacts/write-ownership/delivery-scope.json，不重Build、不先merge/release，是否已push读实际Git及回执。
+- 完整GUI/应用GUI生命周期/DPI/真实MCP/抓包及最终双30分钟仍必交付。当前范围未操作真实模拟器、共享ADB、账号或VPN；约13工作块/7类不因新增离线用例数而扣减。
+
 ## 当前执行：A15b实际stdio接入
 
 - 当前已获main终态独审有限通过：实际wire/227调用/13JobId、80原流/3089IO终态，186输入/148产物/PDB14/用户3、原两FAIL及八raw均实核保持；编译3项既有警告/0错误。下一门仅文档冻结、既有工具生成完整包/三清单、精确37路径index独审后单功能private feature push，不重Build或stdio。最终是否push必须读取实际Git，当前还未stage/commit。完整目标及13类NOTRUN/real/GUI/双30分钟仍开放。

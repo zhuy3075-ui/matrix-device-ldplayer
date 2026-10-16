@@ -156,6 +156,10 @@ ABS_PROJECT\src\MatrixDevice.Mcp\bin\Release\net10.0\MatrixDevice.Mcp.dll
 
 独立专项及主仓精确集成后的一次复验均实际完成14组顶层Demo用例、14个真实OS-stdio会话及12个严格拒绝子例，并获独审有限通过；主仓原209项另计通过，构建3项既有警告、0错误。客户端使用官方`StreamClientTransport`连接外部进程真实管道，不是内存模拟；旧`StdioClientTransport`退出兼容失败仍保留。另13类压力/竞争/兼容与真实设备覆盖仍NOT-RUN，完整MCP、GUI、抓包和最终稳定性没有因此完成，详见[主仓实际记录](docs/codex/automation-expansion/MCP_STDIO.md#主仓集成门)。
 
+标准Runtime工厂创建的工作区现在共享[设备写入占用](docs/codex/automation-expansion/MCP_WRITE_OWNERSHIP.md)：脚本、输入、HTTP和桌面写操作在实际执行前原子取得目标，冲突返回409/1003；同一输入组完成后再放行后续输入，上传至自动安装之间不释放。取消会等待原动作返回，不把取消请求当作已经停止。明确目标的文本/传输不会全局阻断其他设备API；工作区全局busy和原读取门禁仍保留。它不是外部ADB沙箱，不协调另一进程或运行时换代，也没有因此启用真实MCP。
+
+本阶段独立与主仓离线225项（旧209加16并发用例）、MCP Demo14、无窗VM5及三严格拒参均通过并获独审，构建3条既有警告、0错误，全部原失败保留。`--demo --verify-write-ownership --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`只运行自有演示后端与本机HTTP，不创建窗口、不读取用户配置、不操作真实模拟器；其中假APK只用于Demo，不能当真实安装或GUI验收证据。
+
 ## 数据与设备边界
 
 默认数据位于 `%LOCALAPPDATA%/MatrixDevice.Reconstructed/`；桌面 demo 与真实模式使用分离子目录。配置主文件/备份、SQLite 和日志均为本工程所有，不读取 CODEBRAIN 或旧产品数据。SQLite 使用新的 schema version=1；没有原产品密码或迁移兼容承诺。
@@ -184,7 +188,7 @@ ABS_PROJECT\src\MatrixDevice.Mcp\bin\Release\net10.0\MatrixDevice.Mcp.dll
 
 ## 验证与交付
 
-`tools/Build.ps1 -Verify`构建八个项目，先执行原209项，再执行独立计数的14组MCP Demo专项；MCP仍标`PASS-LIMITED`，13类NOT-RUN不计通过。启动前输出`MCP_EVIDENCE_RELATIVE=`及本次唯一证据目录，只有专项exit0才输出`MCP_DEMO_VERIFIED_RELATIVE=`；失败不自动重试或删除证据。普通`Build.ps1`仅编译，不启动测试或真实设备。这个入口只是测试编排，不保证被外部强制结束时完成清理，独立验收另有有界进程与原流审计。`--smoke --screenshot ABSOLUTE_PATH`自动使用Demo渲染各页面后退出；真实设备验收步骤见`docs/VERIFICATION.md`。文档逐项覆盖见`docs/COVERAGE.md`，缺失/矛盾处理见`docs/ASSUMPTIONS.md`。
+`tools/Build.ps1 -Verify`构建八个项目，先执行225项（原209加16共同写入回归），再执行独立计数的14组MCP Demo专项；MCP仍标`PASS-LIMITED`，13类NOT-RUN不计通过。启动前输出`MCP_EVIDENCE_RELATIVE=`及本次唯一证据目录，只有专项exit0才输出`MCP_DEMO_VERIFIED_RELATIVE=`；失败不自动重试或删除证据。普通`Build.ps1`仅编译，不启动测试或真实设备。这个入口只是测试编排，不保证被外部强制结束时完成清理，独立验收另有有界进程与原流审计。`--smoke --screenshot ABSOLUTE_PATH`自动使用Demo渲染各页面后退出；真实设备验收步骤见`docs/VERIFICATION.md`。文档逐项覆盖见`docs/COVERAGE.md`，缺失/矛盾处理见`docs/ASSUMPTIONS.md`。
 
 截屏输入验收保留原定位与命中断言，新增有限OS/WPF坐标和输入源诊断。本轮独立正式150项通过，但完整GUI在输入前置失败；三个快照已确认活动鼠标源缺失，成因未定，不是坐标算法或实机修复通过。原始失败、采样范围及未执行项见[输入诊断报告](docs/codex/apple-experience/AP033_INPUT_DIAGNOSTICS.md)。
 

@@ -212,6 +212,7 @@ public partial class MainWindow
         if (!ViewModel.ConnectionReloadAvailable) throw new DeviceException("请先停止接口服务、脚本和文件传输。", 409, 1003);
         if (ViewModel.Demo) throw new DeviceException("演示模式不会操作真实模拟器。", 409, 1003);
         ViewModel.Runtime.RequireFrozenConnectionSettings();
+        using var write = ViewModel.Runtime.Writes.AcquireAll();
         ldBusy = true; ViewModel.SetExternalBusy(true); RefreshLdButtons();
         await StopMonitorAsync();
         using var cancellation = new CancellationTokenSource(); ldOperationCancellation = cancellation;

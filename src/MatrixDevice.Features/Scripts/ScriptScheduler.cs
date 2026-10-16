@@ -17,14 +17,16 @@ public sealed class ScriptScheduler : IAsyncDisposable
     private readonly IDeviceBackend backend;
     private readonly DeviceCatalog? catalog;
     private readonly IIdentityPinnedDeviceCommands? identityCommands;
+    private readonly DeviceWriteCoordinator? writes;
     private readonly bool isDemo;
-    private sealed class Run(CancellationTokenSource cancellation, Guid? jobId = null, ScriptJobTarget? target = null)
+    private sealed class Run(CancellationTokenSource cancellation, Guid? jobId = null, ScriptJobTarget? target = null, IDisposable? writeLease = null)
     {
         public CancellationTokenSource Cancellation { get; } = cancellation;
         public Task Task { get; set; } = Task.CompletedTask;
         public TaskCompletionSource Activation { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Guid? JobId { get; } = jobId;
         public ScriptJobTarget? Target { get; } = target;
+        public IDisposable? WriteLease { get; } = writeLease;
         public bool Finishing { get; set; }
     }
     private readonly object gate = new();
@@ -43,13 +45,14 @@ public sealed class ScriptScheduler : IAsyncDisposable
     public event Action<ScriptJobStatus>? JobChanged;
     public event Action<Guid, ScriptLogEntry>? JobLogAdded;
 
-    public ScriptScheduler(IDeviceBackend backend)
+    public ScriptScheduler(IDeviceBackend backend, DeviceWriteCoordinator? writes = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         this.backend = backend;
+        this.writes = writes;
     }
 
-    public ScriptScheduler(IDeviceBackend backend, DeviceCatalog catalog, bool isDemo) : this(backend)
+    public ScriptScheduler(IDeviceBackend backend, DeviceCatalog catalog, bool isDemo, DeviceWriteCoordinator? writes = null) : this(backend, writes)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         this.catalog = catalog;
@@ -75,22 +78,32 @@ public sealed class ScriptScheduler : IAsyncDisposable
             ct.ThrowIfCancellationRequested();
             RequireJobTarget(frozen);
             if (runs.ContainsKey(frozen.Serial)) throw new DeviceException($"设备 {frozen.Serial} 已有脚本运行，任务未接纳。", 409, 1003);
-            var id = Guid.NewGuid();
-            var started = DateTimeOffset.UtcNow;
-            accepted = new(id, frozen, snapshot.Manifest.Id, snapshot.Manifest.Version, ScriptRunState.Running, -1, snapshot.Steps.Count, started);
-            run = new(CancellationTokenSource.CreateLinkedTokenSource(ct), id, frozen);
-            jobs.Add(id, accepted); jobLogs.Add(id, []);
-            logs[frozen.Serial] = [];
-            latestJobProjection[frozen.Serial] = id;
-            var projected = new ScriptRunStatus(frozen.Serial, ScriptRunState.Running, snapshot.Manifest.Id, StartedUtc: started);
-            statuses[frozen.Serial] = projected;
-            runs.Add(frozen.Serial, run);
-            notifications.Enqueue((projected, accepted));
-            run.Task = Task.Run(() => ExecuteAsync(frozen.Serial, snapshot, run));
+            var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            IDisposable? lease = null;
+            try
+            {
+                lease = writes?.Acquire([frozen.Serial]);
+                var id = Guid.NewGuid();
+                var started = DateTimeOffset.UtcNow;
+                accepted = new(id, frozen, snapshot.Manifest.Id, snapshot.Manifest.Version, ScriptRunState.Running, -1, snapshot.Steps.Count, started);
+                run = new(cancellation, id, frozen, lease);
+                jobs.Add(id, accepted); jobLogs.Add(id, []);
+                logs[frozen.Serial] = [];
+                latestJobProjection[frozen.Serial] = id;
+                var projected = new ScriptRunStatus(frozen.Serial, ScriptRunState.Running, snapshot.Manifest.Id, StartedUtc: started);
+                statuses[frozen.Serial] = projected;
+                runs.Add(frozen.Serial, run);
+                notifications.Enqueue((projected, accepted));
+                run.Task = Task.Run(() => ExecuteOwnedAsync(frozen.Serial, snapshot, run));
+            }
+            catch { cancellation.Dispose(); lease?.Dispose(); throw; }
         }
-        PublishStatuses();
-        Append(frozen.Serial, $"开始运行：{snapshot.Manifest.Name} ({snapshot.Manifest.Id})。", accepted.JobId);
-        run.Activation.TrySetResult();
+        try
+        {
+            PublishStatuses();
+            Append(frozen.Serial, $"开始运行：{snapshot.Manifest.Name} ({snapshot.Manifest.Id})。", accepted.JobId);
+        }
+        finally { run.Activation.TrySetResult(); }
         return new(accepted.JobId, run.Task);
     }
 
@@ -150,23 +163,33 @@ public sealed class ScriptScheduler : IAsyncDisposable
             if (runs.ContainsKey(serial)) task = Task.CompletedTask;
             else
             {
-                var run = new Run(CancellationTokenSource.CreateLinkedTokenSource(ct));
-                logs[serial] = [];
-                latestJobProjection[serial] = null;
-                started = new ScriptRunStatus(serial, ScriptRunState.Running, snapshot.Manifest.Id, StartedUtc: DateTimeOffset.UtcNow);
-                statuses[serial] = started;
-                notifications.Enqueue((started, null));
-                runs[serial] = run;
-                launched = run;
-                task = run.Task = Task.Run(() => ExecuteAsync(serial, snapshot, run));
+                var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                IDisposable? lease = null;
+                try
+                {
+                    lease = writes?.Acquire([serial]);
+                    var run = new Run(cancellation, writeLease: lease);
+                    logs[serial] = [];
+                    latestJobProjection[serial] = null;
+                    started = new ScriptRunStatus(serial, ScriptRunState.Running, snapshot.Manifest.Id, StartedUtc: DateTimeOffset.UtcNow);
+                    statuses[serial] = started;
+                    notifications.Enqueue((started, null));
+                    runs[serial] = run;
+                    launched = run;
+                    task = run.Task = Task.Run(() => ExecuteOwnedAsync(serial, snapshot, run));
+                }
+                catch { cancellation.Dispose(); lease?.Dispose(); throw; }
             }
         }
         if (started is null) Append(serial, "脚本正在运行，未重复启动。");
         else
         {
-            PublishStatuses();
-            Append(serial, $"开始运行：{snapshot.Manifest.Name} ({snapshot.Manifest.Id})。");
-            launched!.Activation.TrySetResult();
+            try
+            {
+                PublishStatuses();
+                Append(serial, $"开始运行：{snapshot.Manifest.Name} ({snapshot.Manifest.Id})。");
+            }
+            finally { launched!.Activation.TrySetResult(); }
         }
         return task;
     }
@@ -177,7 +200,7 @@ public sealed class ScriptScheduler : IAsyncDisposable
         Guid? jobId;
         lock (gate)
         {
-            if (!runs.TryGetValue(serial, out var run)) return false;
+            if (!runs.TryGetValue(serial, out var run) || run.Finishing) return false;
             jobId = run.JobId;
             status = statuses[serial] with { State = ScriptRunState.Cancelling };
             statuses[serial] = status;
@@ -203,6 +226,19 @@ public sealed class ScriptScheduler : IAsyncDisposable
     public ScriptRunStatus GetStatus(string serial)
     {
         lock (gate) return statuses.GetValueOrDefault(serial) ?? new(serial, ScriptRunState.Idle);
+    }
+
+    private async Task ExecuteOwnedAsync(string serial, ScriptPackage package, Run run)
+    {
+        try { await ExecuteAsync(serial, package, run).ConfigureAwait(false); }
+        finally
+        {
+            lock (gate)
+            {
+                if (runs.TryGetValue(serial, out var current) && ReferenceEquals(current, run)) runs.Remove(serial);
+                run.WriteLease?.Dispose();
+            }
+        }
     }
 
     private async Task ExecuteAsync(string serial, ScriptPackage package, Run run)
@@ -274,13 +310,10 @@ public sealed class ScriptScheduler : IAsyncDisposable
         finally
         {
             ScriptRunStatus ended;
-            if (run.JobId is not null)
+            lock (gate)
             {
-                lock (gate)
-                {
-                    run.Finishing = true;
-                    if (state == ScriptRunState.Completed && run.Cancellation.IsCancellationRequested) state = ScriptRunState.Cancelled;
-                }
+                run.Finishing = true;
+                if (run.JobId is not null && state == ScriptRunState.Completed && run.Cancellation.IsCancellationRequested) state = ScriptRunState.Cancelled;
             }
             var stateName = state switch { ScriptRunState.Completed => "已完成", ScriptRunState.Cancelled => "已取消", ScriptRunState.Failed => "失败", _ => "已结束" };
             Append(serial, $"运行结束：{stateName}。", run.JobId);
@@ -289,7 +322,6 @@ public sealed class ScriptScheduler : IAsyncDisposable
                 ended = statuses[serial] with { State = state, Error = failure, EndedUtc = DateTimeOffset.UtcNow };
                 if (runs.TryGetValue(serial, out var current) && ReferenceEquals(current, run))
                 {
-                    runs.Remove(serial);
                     statuses[serial] = ended;
                     ScriptJobStatus? completed = null;
                     if (run.JobId is { } id)
@@ -429,7 +461,7 @@ public sealed class ScriptScheduler : IAsyncDisposable
         {
             if (disposed) return;
             disposed = true;
-            foreach (var run in runs.Values) run.Cancellation.Cancel();
+            foreach (var run in runs.Values) if (!run.Finishing) run.Cancellation.Cancel();
             pending = runs.Values.Select(run => run.Task).ToArray();
         }
         try { await Task.WhenAll(pending).ConfigureAwait(false); }

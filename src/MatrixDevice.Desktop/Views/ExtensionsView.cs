@@ -43,7 +43,11 @@ public partial class MainWindow
         {
             var row = ViewModel.CurrentDevice ?? throw new InvalidOperationException("未选择设备");
             if (!ViewModel.Confirm("修改设备时区", $"设备：{row.Name} ({row.Serial})\n时区：{timezone.Text}\n操作需要 root。")) return;
-            await ViewModel.ExecuteAsync("修改时区", async () => await new EnvironmentConfigurationService(ViewModel.Runtime.Backend).ApplyAsync(row.Serial, new EnvironmentConfiguration { Timezone = timezone.Text.Trim() }));
+            await ViewModel.ExecuteAsync("修改时区", async () =>
+            {
+                using var write = ViewModel.Runtime.Writes.Acquire([row.Serial]);
+                await new EnvironmentConfigurationService(ViewModel.Runtime.Backend).ApplyAsync(row.Serial, new EnvironmentConfiguration { Timezone = timezone.Text.Trim() });
+            }, blocksApiWrites: false);
         }, write: true));
         grid.Children.Add(new ScrollViewer { Name = "ExtensionSettingsScroll", Content = proxyPanel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
 

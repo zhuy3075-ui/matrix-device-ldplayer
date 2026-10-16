@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MatrixDevice.Host;
 
-public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend backend, AutomationService automation, RollingLog log) : IAsyncDisposable
+public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend backend, AutomationService automation, RollingLog log, DeviceWriteCoordinator? writes = null) : IAsyncDisposable
 {
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private WebApplication? _basic;
@@ -189,6 +189,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
     }
     private async Task HandleLdPlayerAsync(HttpContext context, string path)
     {
+        IDisposable? writeLease = null;
         try
         {
             object data;
@@ -210,7 +211,10 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
                 ValidateWriteRequest(context);
                 var service = LdPlayer ?? throw new DeviceException("尚未配置雷电命令行程序", 503, 2001);
                 var body = await ReadBodyAsync(context);
-                RequireWriteAvailable(LdSerialForWriteGuard?.Invoke(index));
+                var serial = LdSerialForWriteGuard?.Invoke(index);
+                if (string.IsNullOrWhiteSpace(serial)) serial = null;
+                RequireWriteAvailable(serial);
+                writeLease = serial is null ? writes?.AcquireAll() : writes?.Acquire([serial]);
                 if (LdCommandIdentityGuard is not null) await LdCommandIdentityGuard(index, parts[3], context.RequestAborted);
                 data = await service.ExecuteAsync(index, parts[3], JsonNode.Parse(body.GetRawText())!.AsObject(), context.RequestAborted);
                 log.Write("ldplayer-command", $"index={index}, operation={parts[3]}");
@@ -223,9 +227,11 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             log.Write("ldplayer-api-error", e.Message);
             await WriteAsync(context, ErrorStatus(e), new { ok = false, message = e.Message });
         }
+        finally { writeLease?.Dispose(); }
     }
     private async Task HandleDeviceAsync(HttpContext context, string serial, int port)
     {
+        IDisposable? writeLease = null;
         try
         {
             var device = catalog.Snapshot.FirstOrDefault(x => x.Serial == serial);
@@ -248,6 +254,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             ValidateWriteRequest(context);
             var body = await ReadBodyAsync(context);
             RequireWriteAvailable(serial);
+            writeLease = writes?.Acquire([serial]);
             var ct = context.RequestAborted;
             object? data = null;
             switch (path)
@@ -270,9 +277,11 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             log.Write("basic-api-error", e.Message, serial);
             await WriteAsync(context, ErrorStatus(e), new { ok = false, message = e.Message });
         }
+        finally { writeLease?.Dispose(); }
     }
     private async Task HandleAutomatorAsync(HttpContext context)
     {
+        IDisposable? writeLease = null;
         try
         {
             var path = NormalizePath(context.Request.Path.Value).Trim('/');
@@ -294,7 +303,12 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             var body = await ReadBodyAsync(context);
             if (path is "device/shell" or "device/execute" or "device/set-prop" or "device/set-timezone" or "device/set-sim-info" or
                 "app/start" or "app/stop" or "app/clear" or "input/tap" or "input/swipe" or "input/keyevent" or "service/stop" or
-                "element/click-if-exists" or "element/click-text" or "element/set-text" or "element/click-node") RequireWriteAvailable(RequiredString(body, "serial"));
+                "element/click-if-exists" or "element/click-text" or "element/set-text" or "element/click-node")
+            {
+                var serial = RequiredString(body, "serial");
+                RequireWriteAvailable(serial);
+                writeLease = writes?.Acquire([serial]);
+            }
             var dataResult = await automation.ExecuteAsync(path, body, context.RequestAborted);
             await WriteAsync(context, 200, new { code = 0, message = "ok", data = dataResult });
         }
@@ -305,6 +319,7 @@ public sealed class ApiServiceManager(DeviceCatalog catalog, IDeviceBackend back
             var code = e is DeviceException de ? de.Code : e is JsonException or ArgumentException ? 1007 : 2000;
             await WriteAsync(context, ErrorStatus(e), new { code, message = e.Message });
         }
+        finally { writeLease?.Dispose(); }
     }
     private static void ValidateWriteRequest(HttpContext context)
     {

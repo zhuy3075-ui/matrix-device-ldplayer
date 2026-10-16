@@ -83,6 +83,7 @@
 | AP-053 | P2/日志消费问题已独立核定，原失败保留 | 独立r04两restore及Build60528均0，原209实际通过；外层以严格UTF8读取含C8字节的混合日志而失败，MCP未启动 | [A15b](../automation-expansion/MCP_STDIO.md)保留execution321461...BD2C及六raw。两独审以Latin1一一保字节映射仅提取并断言ASCII PASS，209名序/result同；新续跑已实际越过该门，不重Build，不将非ASCII全文冒称已解码或改原outer1 |
 | AP-054 | P1/Schema夹具修复已独立及主仓有限复验 | 实际wire ListToolsResult只有tools，旧夹具用默认STJ重新序列化SDK DTO，添入线上缺失的_meta/title/icons等null，与严格Schema冲突 | [A15b](../automation-expansion/MCP_STDIO.md)原PRECONDITION-FAIL保留。专用官方序列化并按实际raw请求id验原Schema；领域JSON与explicit-null负例不动。独立与主仓均实际14顶层/227调用通过获独审，不能扩大为13类未验或真实设备通过 |
 | AP-055 | P1/受控Stream路径自然清理已独立及主仓有限复验，旧Stdio兼容失败开放 | 旧官方Stdio等待进程退出未关闭stdin，与relay形成EOF环；原SDK45512 exit-1/缺报告保持。新路径是官方StreamClientTransport接原Process真实管道，不是原Stdio问题已修 | [A15b](../automation-expansion/MCP_STDIO.md)独立及主仓各14真实会话获独审：13自然0、复用RPC id负例自然1，原输入关闭/流与SDK终态、无kill/pending/保留/清理错；12raw拒绝也通过。real、崩溃/背压等13类NOTRUN保持；不用stop-file、反射或假transport |
+| AP-056 | P1/标准同Runtime入口独立及主仓离线修复通过，实机并发待验 | 原13f先查busy后写与单命令队列不能保护完整动作；API已进入仍接纳同A脚本，HTTP取消但原后端未返回仍可抢占，忙B时Input组却先写A | [A15c](../automation-expansion/MCP_WRITE_OWNERSHIP.md)原209通过、新13的6业务红/4合同缺失保持，后继FIFO和旧VM5红保留；最终共同门/完整组结束屏障后独立与主仓各225、MCP14/13NOTRUN、VM5及三早拒获独审。原任务/流终态、189输入/156产物/实际14PDB/用户3实核，3既有警告0错；跨进程、Runtime换代、真实MCP/实机并发和完整GUI不由本项替代 |
 
 ## 修复记录规则
 

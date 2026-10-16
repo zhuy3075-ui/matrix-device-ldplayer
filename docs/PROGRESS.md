@@ -1,5 +1,12 @@
 # 当前目标阶段记录
 
+## 2026-10-17 / A15c共同写入占用
+
+- Goal/Decision：从已实际推送13f继续，不重做A15b交付；上一条仅状态回复按no-progress处理，本轮重新核源与终态后实施。标准Runtime共享DeviceWriteCoordinator，明确目标组原子接纳，未知LD目标全局屏障；取消到原动作返回才释放，不引入第二Runtime或启用real。
+- Verification：原13f旧209通过，新13为3通过/6业务红/4合同缺失；候选通知排空跨设备成环和FIFO AB到A自拒均经独审拒绝后窄修。core-red-r03实际224/225，仅W15自拒，旧Desktop VM5均业务红；原raw/清理保持。runner空集合和新入口CS0176失败单列，不伪作产品红，不循环取绿。
+- Independent Green：最终14源独立225/225、MCP Demo14/13NOTRUN、VM5及三早拒全过；Build81944自然0/114.556秒，原209exact/56.67秒，无kill/timeout/pending/retained，source189/main186/148/用户3保持。先冻结156实际产物，独审直接解析5个Portable PDB核14源，并核W14至W16实际门、VM5后续API及取消跨度；execution F05BFFE2...7F9907C/frozen A7E5EBE1...542AE99。红轮只保留PDB报告而未冻结旧二进制的证据边界已明确，不补造原件。
+- Main/Next：按冻结字节精确集成14源（11旧改/3新），旧175其余输入及用户3保持，批准manifest15F5FE80...4666E222。唯一主仓session81092已terminal0，Build57120自然0/114.452秒、225/225/56.51秒、3既有警告0错、MCP14/13NOTRUN、VM5/三早拒均过，无kill/pending/retained；156实际产品先冻并核14PDB，execution760F684E...E092B5/frozen C4F362FD...6052D0，两终态独审已通过。27个已导入staging ZIP按原合同留存，不把handle排空称文件删除。下一门仅文档/清单/包与单功能private feature push，不重Build；全目标/GUI/真实应用/跨进程MCP/抓包及最终双30分钟保持开放。
+
 ## 2026-10-17 / A15b测试机制复验与主仓集成
 
 - Context：上一用户状态回复本身不构成开发进展；重新核main ca6及原164输入逐文件一致、无运行中的Matrix程序后继续。此前两轮实际失败、独立终态审及全部raw保留，不重跑原209消除日志失败。

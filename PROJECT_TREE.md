@@ -52,7 +52,8 @@ MatrixDevice.Reconstructed/
 |   |   |-- automation-expansion/
 |   |   |   |-- CAPTURE_RESEARCH.md
 |   |   |   |-- MCP_DESIGN.md
-|   |   |   +-- MCP_STDIO.md
+|   |   |   |-- MCP_STDIO.md
+|   |   |   +-- MCP_WRITE_OWNERSHIP.md
 |   |   |-- device-action-dedup/
 |   |   |   +-- REPORT.md
 |   |   |-- launch-memory-policy/
@@ -230,6 +231,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- AdbServerIdentity.cs
 |   |   |   |-- DemoDeviceBackend.cs
 |   |   |   |-- DeviceCatalog.cs
+|   |   |   |-- DeviceWriteCoordinator.cs
 |   |   |   |-- ExistingAdbSocket.cs
 |   |   |   |-- ExistingAdbTransport.cs
 |   |   |   |-- IdentityPinnedDeviceCommands.cs
@@ -292,6 +294,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- DebugView.cs
 |   |   |   |-- DeviceFilterSmoke.cs
 |   |   |   |-- DeviceLayoutReportSmoke.cs
+|   |   |   |-- DeviceWriteWorkspaceSmoke.cs
 |   |   |   |-- DirectoryView.cs
 |   |   |   |-- ExtensionsView.cs
 |   |   |   |-- FilesView.cs
@@ -405,6 +408,7 @@ MatrixDevice.Reconstructed/
 |       |-- ApplicationBatchTests.cs
 |       |-- ApplicationPreflightAcceptance.cs
 |       |-- CatalogPathTests.cs
+|       |-- DeviceWriteTests.cs
 |       |-- ExistingAdbTests.cs
 |       |-- LdLaunchMemoryTests.cs
 |       |-- LdRunningWindowTests.cs
