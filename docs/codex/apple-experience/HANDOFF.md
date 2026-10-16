@@ -2,7 +2,15 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 当前执行：A14a1参数绑定有限域通过，准备单功能交付
+## 当前执行：AP042只读诊断已复测，待有限交付
+
+- 上轮为progress：A14a1已实际提交推送`84e0b5842945db2db79a22a5c2ca4b7027ebe94c`，远端同值/test49e4710不变；回执`artifacts/script-bindings-main/push-complete.json` SHA1C07BF5697D4A144F4EA5B07E0CCF5DC41DD7B7447B97739E15E7AB7EF67F555，20路径/336源/339ZIP/171汇编段均独审。以下参数阶段的“待交付”为历史，不重做。
+- [只读诊断](AP042_PEER_CACHE_DIAGNOSTICS.md)唯一fixture源码66EFC759...AF0560，106+/1-；独立/主仓各Build193与VM4通过，原390诊断均exit1/PRODUCT-FAIL，后续AP040/几何NOT-RUN。主仓report900656D5...83F4C1D，终态8CA8EF2E...38C06C；六流完整、owned0，无timeout/kill/清理错，不重跑。
+- 实际host正文4→27→4，应用346×470且可见；旧页visual脱离、logical仍保留。原根同List/子向量，146×3/缺3/残留111；466记录/438原查询/14snapshot/14event，9解绑/error0/drop0，原五任务保持。Window peer14null/listener14false只作条件，不证明provider或根因。
+- 独立主仓终态审已通过有限诊断交付：156全文同独立实跑、155原raw/24其它Smoke/26原guard保持、实际PDB38。生产源码、原断言与等待未改；本阶段只剩文档/完整核包/精确index审核和单独推私有feature，实际Git决定状态，不合并发布，不称AP042修复。
+- 下一步另立官方客户端纯文本读取前后对照，先审独立Demo gate/归属/有界清理，不预称provider初始化或因果成立。AP045输入分支仍停止，不用原生UIA/Win32/强制缓存重置绕过；本轮无截图/模拟器/ADB/用户配置动作。全部必需exec已结束、锁root，完整目标active。
+
+## 历史：A14a1参数绑定有限域通过，准备单功能交付
 
 - AP040已实际提交推送`f2d171744c9296e7cbb4314f63649a0b4374408a`，远端feature同值、test仍49e4710；ignored回执`artifacts/application-feedback-main/push-complete.json`记录15路径及核包。下方“待交付”为历史，不重做。
 - 上一goal轮有实际摘要修复/验证/推送和只读17步证据，分类为progress。当前f2d独立`script-parameter-bindings-fix`的Core red-r01已实际编译成功/0警告错，原169名序PASS、新24一绿23红（含新API缺失单列），child77276 exit1/76.987秒；[A14a1规格](A14_SCRIPT_PARAMETER_BINDINGS.md)存原始结果。

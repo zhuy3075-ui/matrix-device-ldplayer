@@ -1,5 +1,12 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / AP042切页子树只读诊断
+
+- Goal/Decision：定位实际正文切换与公开peer子树不一致；只给原WorkspaceAccessibilitySmoke加有界原位日志，保留原三阶段、一次GetChildren、Product断言、等待和清理。不改生产或重置缓存；[规格与实际结果](codex/apple-experience/AP042_PEER_CACHE_DIAGNOSTICS.md)。
+- Verification：独立/主仓各193/193及无窗VM4通过；原390链均14PASS/8EXPECTED后AP042原4PRODUCT红，146×3/缺3/旧残留111，后续AP040/几何NOT-RUN。实际visual4→27→4，原peer集合身份未变，466记录完整、诊断error0/drop0、9解绑/原五任务终态。
+- Evidence：主仓diagnostic execution62A5102B...10F7D、summary900656D5...83F4C1D、终态8CA8EF2E...38C06C；独审156全文/PDB38/193名序、155原raw/24其它Smoke/26原guard保持。六流完整、无timeout/kill/清理错、owned0。
+- Next/Risks：独审仅准诊断有限交付；核包/index后单独推原私有feature，Git实际为准。Window peer/listener条件非根因证明；下一步另定官方纯文本对照，不恢复AP045输入。AP042、全GUI、真实双实例/应用GUI/最终30分钟及A08-A16仍开放，goal active。
+
 ## 2026-10-16 / A14a1版本化脚本参数绑定
 
 - Goal/Decision：修复“编辑参数已保存、步骤仍执行原literal”，显式executionContract.version=1及whole-field绑定，局部JSON保留null；原Scheduler前编译私有快照，VM在metadata/准备前完整验证，legacy保留。范围见[规格与原件](codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)。

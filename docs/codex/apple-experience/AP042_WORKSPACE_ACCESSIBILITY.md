@@ -1,5 +1,7 @@
 # AP-042 工作区正文无障碍子树
 
+最新状态以[切页子树原位诊断](AP042_PEER_CACHE_DIAGNOSTICS.md)为准：独立/主仓193与VM4通过，但原390诊断仍PRODUCT-FAIL，实际视觉已切页、公开返回子树仍146×3/应用缺3/旧残留111。该轮仅增加观测，不改生产或关闭本项；下文绿测为历史，不覆盖当前失败。
+
 ## 背景与目标
 
 基线2ca79ce。官方Sky首次明确使用include_screenshot:false/include_text:true，成功读取独立Demo窗口：12个导航入口可见，但树止于47号TabControl，没有设备正文。原件SHA `626239CCC07A520F7B4BB2B1652D1E3EA6F6EC6210A8D025222812267DB027D4`。该探测窗口最终由精确PID/UTC ticks/路径/profile核验后的自有进程清理终止，不称自然关闭；runner的killAttempted=false不代表未发生外部清理。一次JSON日期类型比较预检误拒未采取动作。
