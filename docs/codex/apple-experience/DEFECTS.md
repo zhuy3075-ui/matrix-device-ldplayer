@@ -49,7 +49,7 @@
 | AP-038 | P1/七点模式误判已实证，最小测试修正验过 | 旧测量用Ideal、实际版本Tooltip为Display，143宽下30.48与17高度不一致 | [A07d](A07_TOOLTIP_DIAGNOSTICS.md)d01原5PASS7红保持，7图完整尾-long支持判据A。只改测量用实际mode，宽/font/DPI/高度predicate/+1不变；独立及主仓新12全过、各232诊断/error0/133图核。仅解释这七点，不扩大到全部Tooltip/DPI，旧失败不回填 |
 | AP-039 | P1/字形试验范围及输入已修正，主仓有限域验过 | c01在原Fonts.Count>20与全部历史Key当前字号=baseline×1.5合取处失败 | [A07d](A07_TOOLTIP_DIAGNOSTICS.md)原117失配保留；7248夹具首次setter本地覆盖+当前完整域判据后，c02与root-r01各12/2890/12清理过，当前505含344隐藏全登记/1.5/0缺失失配、历史128保留，末transform/SameCalls/glyph图过。非DPI/字体绑定保真，不推重置时点；s01/AP041与真实GUI仍开放 |
 | AP-040 | P2/已观察，待独立专项修正 | 读取应用后的批次摘要仍无条件包含“安装命令完成（包名未核验）0”，信息重复且易被理解成执行过安装 | c02自有glyph图及ApplicationsView原ApplicationBatchSummary证实该安装专属零计数字段总被拼接；本轮布局候选未改业务tail，不混入修复。后续按实际Operation/非零状态展示必要结果，并测试List/Install/混合失败取消，不因此否定本轮布局阅读或冒称安装发生 |
-| AP-041 | P1/受控无图链已取证，原负例及报告修复待做 | s01首device390×640的offline-reject未达OS/WPF指针一致前置，随后非有限Double使原JSON报告再次失败；新诊断实测同代row Offline撤图且Visible，旧公式非有限，增代对照保图 | [诊断](AP041_OFFLINE_DIAGNOSTICS.md)独立/主仓各158及实际390×640新模式过，6同步快照不扰动/22Task终态/局部JSON分类保存/cleanup通过，catalog始终Ready。未重跑旧指针套，不能推s01具体坏字段或OS同因；原S01/11NOTRUN、AP019/020/033及实机仍开放。下一独立修复评估仅offline后不重新定位与原报告局部有限编码，保留有效Down/Up/零副作用断言，不放行全局NaN或整批跳负例 |
+| AP-041 | P1/报告子项已修，原指针负例未复验 | s01首device390×640的offline-reject未达OS/WPF指针一致前置，随后非有限Double使原JSON报告再次失败；受控诊断证明同代row Offline撤图但Visible时旧公式可非有限 | [报告出口](AP041_REPORT_RELIABILITY.md)同一实际writer红6PASS/8FAIL，局部double编码后原14类全PASS；独立与主仓各158及原3E几何/22Task/cleanup保持，8条预期stderr完整，FAIL/原异常/有限JSON不变，全局仍拒绝NaN。仅报告子项通过；原S01/11NOTRUN、AP019/020/033及实机仍开放，不推原具体坏字段或OS同因。下一独立阶段评估有效图像/有限坐标的后置定位合同，保留每个原Down/Up及零副作用断言，不整批跳负例 |
 
 ## 修复记录规则
 

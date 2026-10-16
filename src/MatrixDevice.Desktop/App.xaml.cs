@@ -95,6 +95,7 @@ public partial class App : Application
             if (e.Args.Contains("--open-monitor", StringComparer.OrdinalIgnoreCase) && !smoke && !shellVerification && !deviceLayoutVerification && !monitorLayoutVerification && !liveVerification && !unifiedVerification && !oneClickVerification && !monitorVerification) window.NavigateTo("实时监控");
             if (offlineDiagnosis)
             {
+                window.VerifyDeviceLayoutReportContract();
                 await window.RunOfflineGeometryDiagnosticsAsync(e.Args); window.Close();
             }
             if (monitorLayoutVerification)

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -524,14 +525,38 @@ public partial class MainWindow
             catch (Exception timerError) { failure = failure is null ? timerError : new AggregateException("验收与定时器恢复均失败", failure, timerError); }
             try { if (screenshot is not null) { Directory.CreateDirectory(Path.GetDirectoryName(screenshot)!); SaveRender(screenshot); } }
             catch (Exception screenshotError) { failure = failure is null ? screenshotError : new AggregateException("验收与最终截图均失败", failure, screenshotError); }
-            try { File.WriteAllText(Path.Combine(ViewModel.DataDirectory, "device-layout.json"), JsonSerializer.Serialize(new
+            failure = SaveDeviceLayoutReport(() => Path.Combine(ViewModel.DataDirectory, "device-layout.json"), () => new
             {
                 status = failure is null ? "PASS-OFFLINE-WPF" : "FAIL", scope = "Isolated Demo, actual WPF controls and routed events; not physical clicks, Android, ADB wire, DPI or discovery proof",
                 width, height, actualWidth = ActualWidth, actualHeight = ActualHeight, phase, checks, observations, fixtureInvocations, error = failure?.ToString()
-            }, JsonDefaults.Options)); }
-            catch (Exception reportError) { Console.Error.WriteLine(reportError); failure = failure is null ? reportError : new AggregateException("验收与报告保存均失败", failure, reportError); }
+            }, failure);
         }
         if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    private static Exception? SaveDeviceLayoutReport(Func<string> destination, Func<object> report, Exception? priorFailure)
+    {
+        try
+        {
+            var options = new JsonSerializerOptions(JsonDefaults.Options);
+            options.Converters.Add(new DeviceLayoutDoubleConverter());
+            File.WriteAllText(destination(), JsonSerializer.Serialize(report(), options));
+        }
+        catch (Exception reportError) { Console.Error.WriteLine(reportError); priorFailure = priorFailure is null ? reportError : new AggregateException("验收与报告保存均失败", priorFailure, reportError); }
+        return priorFailure;
+    }
+
+    private sealed class DeviceLayoutDoubleConverter : JsonConverter<double>
+    {
+        public override double Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => throw new NotSupportedException("设备布局报告转换器仅支持写出。");
+        public override void Write(Utf8JsonWriter writer, double value, JsonSerializerOptions options)
+        {
+            if (double.IsFinite(value)) { writer.WriteNumberValue(value); return; }
+            writer.WriteStartObject();
+            writer.WriteNull("value"); writer.WriteBoolean("finite", false);
+            writer.WriteString("kind", double.IsNaN(value) ? "NaN" : double.IsPositiveInfinity(value) ? "PositiveInfinity" : "NegativeInfinity");
+            writer.WriteEndObject();
+        }
     }
 
     private static Rect DeviceProbeBounds(FrameworkElement element, Visual ancestor) => element.TransformToAncestor(ancestor).TransformBounds(new Rect(element.RenderSize));

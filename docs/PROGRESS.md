@@ -1,5 +1,13 @@
 # 当前目标阶段记录
 
+## 2026-10-16 / AP-041验收报告出口稳健性
+
+- Goal/Context：诊断5263587已推原私有feature；原s01报告二次失败仍待修，先修同一真实writer，不改原指针或生产输入。
+- Decision/Files：原路径/payload factory、stderr及异常归并保留；仅报告本地clone选项加double写转换器，有限原JSON不变，非有限明确null/finitefalse/kind；新增14类纯契约和App安全mode唯一首hook，全局仍严格。参见[规格及实测](codex/apple-experience/AP041_REPORT_RELIABILITY.md)。
+- Verification：独立红14=6PASS8FAIL，8红实际严格double错误；独立绿及主仓均原158和原14全过、0警告错误。主仓Build82636 exit0/72.112秒、mode41336 exit0/2.082秒；8EXPECTED stderr9842B完整、0UNEXPECTED。原3E几何/6快照/22Task/cleanup保持，全部child/raw流终态/owned0。
+- Evidence：主仓summary4E7EC02F...7E7FA、execution01DDF9A1...A856B、末afterFF153C17...CA2C8、DLL E7293521...CF0A9；150输入/147原件/旧20/PDB28与独立已执行canonical全文同，配置和两PNG保持。准备稿的解析/行尾假设错误未运行产品，原件记录保留。
+- Next/Risks：仅报告子项通过，独立终态已过，待文档/完整核包/精确index审核后单独推私有feature；不合并发布，实际交付以Git/回执为准。继续原S01/11NOTRUN、AP019/020/033、真实GUI/双实例同步和当前安装卸载/最终30分钟、A08-A16；goal仍active，不把新增日志测试当全功能验收。
+
 ## 2026-10-16 / AP-041受控离线几何诊断
 
 - Goal/Context：A07c/d已实际推送a23348b，原s01首设备指针前置及报告保存失败保留；先证明无图/几何链，不改缓存、原负例或生产输入。

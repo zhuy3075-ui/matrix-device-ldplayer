@@ -2,6 +2,16 @@
 
 更新：2026-10-16。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
+## 当前执行：AP-041 报告子项已修，待限域交付
+
+- 上阶段诊断已实际交付 `5263587911b0534fe56c60a864cf6fdcc6ff9d13`，回执 `artifacts/ap041-main/push-complete.json` SHA `ECCB1681A3E6BBD6F10BA11FDB665C72C75526A1A57340067B80ABDE403D7D2B`。不要依下方历史再打包/推该阶段。
+- 本阶段隔离树device-report-fix/verifier基于5263587，只抽出原device-layout报告出口并加局部double编码，不改任何原Position/Negative/DownUp/等待/断言。App唯一hook与新14类纯契约直接验证实际writer，路径/payload factory保留原catch边界；全局JsonDefaults仍严格。正式说明见[报告稳健性](AP041_REPORT_RELIABILITY.md)。
+- 独立红r01已实际6PASS/8FAIL，8红全为严格double序列化，原158过、几何NOT-RUN；独立绿g01同14全PASS，原158过/原3E几何到达。红receipt825E3639...25592、绿receipt777A8A0D...B34AB，原失败与预期stderr都保留，不重跑。准备稿解析/行尾假设两次拒绝只属本机harness，未执行产品，不算产品红。
+- 主仓root-r01已terminal：session47331/Build82636 exit0/72.112秒（158/50.97、0警告错误），mode41336 exit0/2.082秒；14全PASS/8EXPECTED/0UNEXPECTED，summary `4E7EC02F005AABDC97FFA7FC49AD91C58AA4437A0514EF5CC77E6769F687E7FA`，stderr9842B原样保留。原几何仍3E0F...D1DACE/22Task终态/6快照/cleanuptrue；两child四流全终态，无timeoutkill/清理错/owned残留。执行回执 `01DDF9A1E046D3AAAF0E0B8361C7628FE00E202CC98DF3CCB3B2B92E7BBA856B`，末after `FF153C174CEEC7F01C782C2393D70D4C9926BC1E98F979AA9865B9E94B0CA2C8`，位置root artifacts/device-report-main/green-root-r01；不要重做此运行。
+- 三冻源App F5FB7C44...8DC27、Responsive8408AAF2...44548、fixture99E20B67...571BE已机械导入，DLL E7293521...CF0A9；150输入的147原raw/旧20Smoke/实际PDB28、独立已执行输入canonical+全文、配置/两用户PNG保持，几何/API/VM/Wall/Main未改。全部必需exec已结束，锁归root；独立终态回执9BA48779...AF518已通过，正式10路径冻结、核包和精确13路径index审核后按原授权单独推feature，不合并发布。实际Git及本机push-complete回执决定交付状态，不预写提交SHA或重复运行。
+- 原S01输入失败/11NOTRUN、AP019/020/033、真实GUI/双实例同步/当前应用管理安装卸载/最终双实例30分钟及A08-A16仍全部必交付。下一独立阶段先冻结有效图像和有限坐标的后置定位合同，保留原真实Down/Up及零副作用断言。本阶段不运行原指针套或guest；Computer Use两次捕获失败后不新增Win32/UIA/SendInput绕过。CMFA下载本轮只读核SHA仍AF7F05D8...A3753D，不重装、不授权权限或VPN。
+- 以下为历史阶段，不授予重复执行或推送权限。
+
 ## 当前执行：AP-041 安全诊断已运行，待限域交付
 
 - A07c/d 已实际交付：`a23348ba78093b3fcde385c87dde3ddfd81a818d` 已推原私有 feature，远端同值；test 仍 `49e471081d2648a4d533cc98ec00be4f5a103c77`。双独审核 15 路径、319 源、322 ZIP 项、161 源码段，主配置与两用户 PNG 保持；回执 `artifacts/app-layout-main/push-complete.json` SHA `30EDDDF8253DB39C41AC49ACBA676F26F8FA97C6736863D0B290124470AADFF0`。不要重复打包、提交或推送该阶段，不合并发布。

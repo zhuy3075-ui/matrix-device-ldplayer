@@ -1,6 +1,6 @@
 # 当前版本功能与交互验收矩阵
 
-日期：2026-10-16。基线8303cdc；当前目标的真实业务实测尚未开始，逐阶段离线证据分别标记。控件键见CONTROL_CATALOG.md。以下每个分项为独立caseId，不因同页其他操作通过而继承成功。
+日期：2026-10-16。初始基线8303cdc；当前目标仅有分阶段有限实测，完整验收尚未完成，逐阶段离线与实机证据分别标记。控件键见CONTROL_CATALOG.md。以下每个分项为独立caseId，不因同页其他操作通过而继承成功。
 
 ## 状态与运行方式
 
@@ -19,6 +19,7 @@
 | DEV-LABEL 设备操作含义 | 当前筛选表头范围、同一row冷/过渡/未知/运行/连接/保护等动作名称与描述 | Connected+Device优先、空Device矛盾、phase不授信；命令身份和原Demo启用性保留 | 独立PASS-OFFLINE：[A05b文案](A05_DEVICE_LABELS.md)，三桌面每36项/11观察，主仓最终复验同样通过；未调用命令，不代替DEV-01/02实机效果或权限验证 |
 | DEV-LAYOUT 设备正文 | 六尺寸原DataGrid/虚拟长列表/冻结选择动作/三动作44/14信息边缘与原值/主控自然滚动 | 599/600、919/920边界；MainA/CurrentB/隐藏勾选/原滚动意图；新wheel不被旧恢复覆盖 | 独立PASS-OFFLINE-WPF：[A05b1](A05_DEVICE_RESPONSIVE.md)，六正文889或847检查、纯几何命令调用0；主仓两390各889。非实机、全值同时像素或其它页面小屏通过 |
 | DEV-OFFLINE-DIAG 离线诊断 | 独立严格Demo新入口，原发布图绑定到MainA/CurrentB；同代与增代row Offline对照 | 窗口实际390×640、六快照只读、非有限分类/Empty/null标准JSON、Task/进程清理；三输入反例预创建拒绝 | PASS-OWN-DEMO-DIAGNOSTIC：[AP-041](AP041_OFFLINE_DIAGNOSTICS.md)独立/主仓各158及新390/27记录检查/22Task过；Catalog仍Ready，不是原指针套、原日志出口修复、实机或S01恢复 |
+| DEV-REPORT 验收日志 | 同一原device-layout出口有限全文不变，NaN/正负无穷及Point/Size/Rect/Empty可写标准JSON | 原FAIL/phase/异常及清理聚合保留，真实I/O/不支持类型/两factory失败保留stderr；全局仍严格 | PASS-DEVICE-LAYOUT-REPORT-CONTRACT：[报告修复](AP041_REPORT_RELIABILITY.md)实际红6/8、同14类绿全过，独立/主仓各158、原3E几何/22Task/cleanup保持；8条注入预期错误不等于无stderr。仅日志子项，不关闭原S01/11NOTRUN、实机或完整GUI |
 | MAIN-01 主控 | 已连接行控制→主控画面；主页/返回/任务/音量；单点/滑动坐标实际效果 | MainA/CurrentB、主控离线、脚本冲突、切换/关闭/拖动中断；不影响另一目标 | NOT-RUN |
 | MAIN-02 主控 | 同步点击滑动和同步按键各自只作用明确勾选其他设备 | 未连接/旧transport目标拒绝；不监听原生雷电窗口/不冒充物理键盘镜像 | NOT-RUN |
 | MAIN-UI 主控路由与截图守卫 | 实际Image路由Tap/Swipe/同步B，核Demo副作用与冻结snapshot；同一主控关闭/离页/失活后拒绝新截图任务 | resize/失捕/离线/忙/各代次/正文滚动/同形不同像素/父留白与捕获拖出均零新输入；已接纳截图可完成但不接纳第二轮 | 独立及主仓代表尺寸PASS-OFFLINE-WPF：[A05b1](A05_DEVICE_RESPONSIVE.md)；默认内部gutter不适用，实际外侧留白已测。不是物理点击、Android、自动timer或ADB wire证明；MAIN-01/02实机仍NOT-RUN |
