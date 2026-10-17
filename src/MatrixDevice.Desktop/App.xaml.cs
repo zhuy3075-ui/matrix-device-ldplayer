@@ -81,6 +81,13 @@ public partial class App : Application
                 Shutdown(0);
                 return;
             }
+            if (e.Args.Contains("--verify-live-file-terminal", StringComparer.OrdinalIgnoreCase))
+            {
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                await MatrixDevice.Desktop.MainWindow.RunLiveDualSyncAcceptanceAsync(e.Args, filesTerminal: true);
+                Shutdown(0);
+                return;
+            }
             if (e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -249,7 +256,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--verify-files-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-text-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-settings-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
+            if (e.Args.Contains("--verify-live-file-terminal", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-files-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-text-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-settings-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(ex);
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;

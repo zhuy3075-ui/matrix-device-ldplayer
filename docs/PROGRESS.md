@@ -1,5 +1,18 @@
 # 当前目标阶段记录
 
+## 2026-10-17 / A08f真实终端与文件
+
+- Goal/Context：上一Files已推226c1e4并后审通过，回执D2D8CCE…32C9E6；本轮优先补当前原ShellCommand/QueuePush/Pull/Start在专用1/2的真实字节回读，不重做已交付Demo。轻SPEC见[A08f](codex/apple-experience/A08_LIVE_FILE_TERMINAL.md)，完整目标仍active。
+- Decision/Files：fresh detached live-file-terminal，baseline0FB70210…849BE5保护main195/255、user3/21proof、fresh195raw/旧33Smoke。只App与现有DualSync的默认关闭窄模式、新partial测试入口；旧UI动作不调用，不改VM/backend。r01静审末端pending-cleanup资源释放拒点原源保留，r02集中补后获独审，仅准离线；三源4234/CEBA/A022另冻source-r02/6DFA9A2F…CB8CB。
+- Verification：唯一host-r01 CLI36172/160ms自然0/23目录/原流排空后，被新增VBox同安装目录假设拒绝（D4526303…234143），非产品红。诊断与历史/签名证据支持角色exact路径/SHA；续验不重发CLI，仅新host child8380/1210ms自然0，536B+0双流排空/native前后同、Ready1/2 transport8/9，guest0。execution2E166F25…B5C94/after222111CA…54CFFE获实际独审，仅host样本，不能当fresh当前全目录/TCP准入。
+- Verification/Next：fixed Offline runnerECDFFAFA…CB7D59/合同7AF308A1…20975F经root全文读取，唯一offline-r01/session54742已由原handle续至自然0（终态872eb5）。实际235/235、MCP14PASS/13NOT-RUN、旧11+新12早拒全过，guest0/error与postflight null/retained0；executionF91E508A…1AF005/afterE56F8C2C…A8ACD，Build/MCP/PDB前缀已独审，整轮23负例终审待核。live草稿8449C187…B46ED保首throw/四PENDING，仅准备不执行；不重跑Offline，全部必需exec已终态。
+- Risks：真实操作尚未执行，原GUI/DPI/picker/文本/APK/重连/任意IO/最终双30分钟仍开放；host安装假设与源码静审拒点不计产品红，不缩减约13工作包或完整目标。
+- Verification/Next：Offline全轮实际独审随后通过，24child/48raw与23精确早拒、输入输出/Junction边界、235/MCP、196/255/PDB3及主仓保护均保持，无kill/timeout/残留。另建live执行候选1B950D6A…FB6DE仅填四实际pins/删首throw/改说明，draft保持；root读全文与差异后交独立静审，尚未执行guest或创建live-r01。只离线通过，不扣真实工作包。
+- Verification：Live-r01获准后root唯一63653自然1，execution6AC612EF…63046B，仅1原件/stages0/livefalse/retained0，host/guest前PDB JSON属性顺序比较假红。root及独审实际Portable PDB复现同三源/SHA256算法/两GUID及255原产物，仅键枚举顺序不同；不改C#、不Build、不计设备或产品失败。新r02仅结构比较及fresh输出，原件保持，待独审执行；所有exec终态、无guest。
+- Verification：实际Live-r02唯一30391已终态1；五child全natural0，live65256/9595ms内PASS、11phase/14steps/6原Command/44Task终态，四history/四queue及六真实文件bytes/两独占目录14清理动作均获实际独审，无串设备/残留/pending，身份和非目标21实例保持。原outer1仅Size F1 KiB显示字符串被错按整数比的schema假红，原execution22B2D76C…4F5220/after2FAB66B3…6632B/summaryD233AE59…FF4601保持；不重发真实操作、不重Build。纯文件审计续验6F2E9AE8…31B25E（56原件输入FEC6856D…18DEE）已准备待静审，Main草稿保首throw，主仓代码未集成；后继只代表离线/核包/单功能push，完整目标和约13块不变。
+- Verification/Next：r03唯一8468已natural0且实际独审通过，execution737E3A98…81BC10/after3B0D0765…9062F6/report97CCDB06…847E26，56原件及原outer1保持、无新增产品/host/guest。获准精确三源集成主仓后，root031dba保存prior两源与copy.json，196输入和其它193raw/旧255/用户保护保持。固定Main离线runnerE7102F18…E554F8A经两静审，唯一79914（初6f0424）正在执行；须续原handle，不重Build/guest。后继实际终审、核包/index审与单功能普通push，不提前称已交付。
+- Verification/Next：Main79914已自然0（7b019d）并获实际全轮终审，原235/235=56.94秒、MCP14+13NOT-RUN、23精确早拒/24child48raw、PDB3/新255冻结与全部保护通过，既有警告保持。executionFBA40DD5…6BCACD/after907372FE…F6C75F、Main新CodeView501ee4b8…a64b；所有必需exec终态，不重复Build或设备动作。正式有限报告已冻结，后继仅核包/精确12路径index独审/同private feature普通push及回执后审，完整GUI/文本/APK/RPA/MCP/抓包及最终双30分钟仍开放。
+
 ## 2026-10-17 / A08e文件工作区
 
 - Goal/Context：A08d文本14文件确已推1f397cf且提交后独审通过，上一轮是progress，完整目标active。当前读取原FilesView/VM/TransferRow及UI规格，AP073/074先实际复现，不按源码疑点预写通过。[轻规格](codex/apple-experience/A08_FILES_WORKSPACE.md)。

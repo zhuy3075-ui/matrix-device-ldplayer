@@ -2,7 +2,21 @@
 
 更新：2026-10-17。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 当前执行：A08e文件工作区
+## 当前执行：A08f真实终端与文件
+
+- 上一goal轮为progress：Files14路径已普通推226c1e4d4963d32709b418c8ea6b5bd8ce4a3691且提交后独审过；回执artifacts/files-workspace/push-complete.json SHA D2D8CCE232145856249435D6556308AF5890848BDD256DC19828315AB932C9E6。test49e471保持，不重做下方Files历史交付或Build。
+- 新轻SPEC见[A08f](A08_LIVE_FILE_TERMINAL.md)。fresh detached live-file-terminal从226c1e4，baseline0FB70210…849BE5固定main195/255、user3/21proof、fresh195raw及33旧Smoke。root仅隔离树三测试源（App/原DualSync扩展/新LiveFileTerminal），不改VM/backend；独立verifier终审，api作者仅ignored host脚本。
+- 首静审r01仅生命周期末端host-audit pending仍可能释放上游/CTS拒点，source-r01原三源保留，未Build/guest；r02集中补files模式每步冻结pending及CTS实际终态释放，候选App42340B…D89B48/DualCEBA06…49409D/newA02235…EF87F3已获独立静审且另冻source-r02，只准固定离线，尚未Build/live。双方noLaunch，不走旧Prepare/Exercise/am start；只原ShellCommand/QueuePush/Pull/Start，独占nonce目录与精确清理。无exec在运行。
+- host-r01唯一CLI36172/160ms自然0/双raw排空/23目录后，被新wrapper错误VBox同目录假设拒绝；executionD4526303…234143，guest0/注册未运行，不重发CLI。真实VBox独立目录/旧SHA及Valid证书已核。角色exact门的续验script19A09F…E28B12获两静审后唯一d7d3ad自然0，仅host child8380/1210ms/536B+0raw，native前后同，实际Ready1/2 tid8/9；guest0。execution2E166F…B5C94/after222111CA…54CFFE/samplemanifest36AC9A0B…06672D，实审待核。只旧CLI样本+新native/注册，不是live准入；live前必须fresh所有准入。
+- host续验实际独审已过，仅样本不授信guest。fixed Offline runnerECDFFAFA…CB7D59/合同7AF308A1…20975F经root全文读取，唯一offline-r01/session54742（初chunk04222f）已由原handle续至自然0（872eb5）；禁止重Build或重跑。实际235/235、MCP14PASS/13NOT-RUN、旧11+新12早拒全过，guest0/error及postflight null/retained0。executionF91E508A…1AF005/afterE56F8C2C…A8ACD，整轮独审待核；Build/MCP/PDB和196/255冻结前缀已独审，不扩大为整轮批准。live草稿8449C187…B46ED保首throw及四PENDING，未创建live-r01；所有必需exec已终态。
+- 后继：实际离线终态独审后才填固定live runner的receipt/products/PDB pins、移草稿首throw并全文审；fresh1/2 noLaunch全目录/native/角色/TCP及实际transport准入，原命令和异源文件往返、清理原件独审，然后文档/核包/单功能push。物理GUI/原生picker/文本/APK/DPI/重连/最终30分钟及完整目标仍开放；约13工作包不减为局部用例数。
+- 最新Offline全轮实审已通过，24child/48raw、23精确早拒及Junction输入输出边界、235/MCP、196/255/PDB3和主仓保护均匹配。api新建live执行候选1B950D6A…FB6DE，仅填F91/E56/A1ADCB2D…A7ADC7/90B1F260…B9EB88四pin并删首throw/改说明，原draft保持；root已全文读draft与实际差异，独立静审进行中，尚未执行live，无活exec。
+- 最新Live-r01获静审后唯一63653已自然1，execution6AC612EF…63046B；stages0/livefalse/manifestnull/retained0，任何host/guest前PDB字串比较假红。root/独审实际复现原Hashtable键顺序与旧JSON不同，三源/PDB算法和8b2c…5bdc双GUID/255当前及冻结均同；不改源/重Build、不算产品红。api仅ignored新r02结构比较与fresh live-r02输出，原r01保留，尚待静审；所有exec已终态，无guest。
+- 最新真正Live-r02经独审后唯一30391已终态1，但五child均自然0/十raw排空、实际live65256/9595ms内PASS，11phase/14steps/6原Command/44owned终态、四history及四queue、六实际字节与14精确cleanup已获实际独审有限通过，pending/残留/窗口0。原outer1只是Size本为F1 KiB字符串而错按字节整数比较，保留原件，不重发guest或Build。execution22B2D76C…4F5220/after2FAB66B3…6632B/summaryD233AE59…FF4601；全部SHA与边界见A08f，源/PDB/255/main/user3/21proof保持。只读续验script6F2E9AE8…31B25E/输入FEC6856D…18DEE（56原件）已由root全文读、待窄独审；Main-offline draft B7356C…BD3C0E4保首throw/PENDING，三源尚未集成main，无活exec。
+- 最新r03唯一8468已natural0且实审通过，execution737E3A98…81BC10/after3B0D0765…9062F6/report97CCDB06…847E26；原outer1、56原件保持，未再发设备/host/产品。root031dba已精确3源集成main，备份旧两源与copy.json；196输入/其余193raw/旧255/user3/21proof均保持。固定Main runnerE7102F18…E554F8A经root全文与独审准入，唯一main-offline-r01/session79914（初6f0424）正在执行原235/MCP/23合成早拒/PDB3和新255冻结；必须续原handle至终态，不重Build、不重发guest。main index须保持空，等终态实审后才核包/提交。
+- 最新Main79914已原handle自然0（7b019d）且全轮实审通过：原235/235、MCP14+13NOT-RUN、23精确早拒、24child48raw/PDB3/新255冻结与保护全过，既有警告保留。executionFBA40DD5…6BCACD/after907372FE…F6C75F/PDB364E5B1F…D00873/products5E071526…4BEEF5，Main新GUID501ee4b8…a64b。源196/其余193raw/user3/21proof/old33、隔离196/255及live56/r03/r01原件均保持。全部必需exec已终态，禁止再Build/重跑。正式9路径已更新，后继只既有工具生成394sources/211bundle/397ZIP候选的实际包+三清单、精确12scope/index独审/单功能普通push/回执后审；实际交付看Git和新push-complete.json，完整目标仍active。
+
+## 上轮执行：A08e文件工作区
 
 - 主仓唯一Main-r01/session44853已自然0并获实际独立终审，tests Green-r01/session14440同样通过：各15PASS/326检查/842Task终态、原235/MCP14+13未验/三拒参四PDB、15唯一清理及0残留。全部必需exec终态，不再Build或重跑；下面过程记录的“正在Green/未集成”均为历史。完整SHA见[A08e](A08_FILES_WORKSPACE.md)。
 - 实际Green审通过后，root只集成精确App2A31/SmokeDFBB/VM21DC/FilesView0E27四源，先保主仓旧三源并提高mtime，import-r01/copy.json已CreateNew保存。其余191原输入、旧255产品及用户3/17proof在首Build前保持。Main runner53D66F…BBD635/合同9D78C1…4CB7以main raw为基底，旧255只核Build前，编后核本轮255/冻结；tests Green195/255及旧Red/Green三原件始终保护。

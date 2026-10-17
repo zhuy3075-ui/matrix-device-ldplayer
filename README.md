@@ -28,6 +28,8 @@
 
 文件页在添加上传/下载任务后即时更新总进度，下载成功后更新同一行的本地大小，不需切页或手动刷新。保留原路径、五个动作、上传后安装开关与七列队列；动作使用局部44逻辑命中区域，长值可通过原绑定提示查看。独立候选及主仓各原235项、MCP演示14项及15组自有WPF/Demo专项通过并获独审，包含六尺寸、326项检查、真实本地文件字节回读和原队列取消/重试。入口为`--verify-files-workspace --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`，详见[文件工作区记录](docs/codex/apple-experience/A08_FILES_WORKSPACE.md)。这不代表真实模拟器、原生选择器、上传APK后安装、物理GUI/DPI或最终双实例30分钟已验收。
 
+专用实例1/2已通过[真实终端与文件往返补验](docs/codex/apple-experience/A08_LIVE_FILE_TERMINAL.md)：四条原终端历史、两上传/两下载，以及32769/65537字节的异源文件回读分别匹配，两个本次独占临时目录最终清理。六个原命令Task与44个已登记任务终态，无串设备、残留或共享ADB重启。严格入口`--verify-live-file-terminal`只接受已核定的两台Ready专用实例和fresh manifest，禁止启动，不是任意设备操作入口，默认构建不会触发实机。三测试源精确集成主仓后，原235项、MCP演示14项/13项未验、23项合成早拒及三源PDB/新255产物冻结已通过独审，仍有既有编译警告。保留PDB字段顺序和Size显示格式两次测试脚本误判的原失败；只读报告续验不重复设备写入、不改写原outer1。该结果仅为VM-SDK路径，不代表物理GUI、原生文件选择器、中文输入、APK安装卸载、取消重试、重连或最终双实例30分钟均通过。
+
 完整文件清单见 `PROJECT_TREE.md`；全部源码文本见 `SOURCE_BUNDLE.md`；对应文件摘要见 `SOURCE_MANIFEST.json`。这三个文件由 `tools/New-SourcePackage.ps1` 生成，源码 ZIP 位于 `artifacts/`。
 
 全面验收与界面重设计正在按[当前计划](plan.md)实施；目标、技术边界、视觉/命名及依赖任务分别见[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[UI规格](docs/UI_SPEC.md)、[任务表](docs/TASKS.md)。当前测试范围见[功能矩阵](docs/codex/apple-experience/TEST_MATRIX.md)、[逐控件目录](docs/codex/apple-experience/CONTROL_CATALOG.md)和[问题清单](docs/codex/apple-experience/DEFECTS.md)，进展见[阶段记录](docs/PROGRESS.md)。已修复主控A/当前B时投屏错目标的代码路径，增加主控身份与进程所有权守卫，见[A02独立离线验收](docs/codex/apple-experience/A02_MAIN_TARGET.md)；真实外部投屏仍待验。这是进行中的工作，149项和三尺寸Demo不代表本轮全功能/实机/窄屏已通过。

@@ -4576,6 +4576,13 @@ public partial class App : Application
                 Shutdown(0);
                 return;
             }
+            if (e.Args.Contains("--verify-live-file-terminal", StringComparer.OrdinalIgnoreCase))
+            {
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                await MatrixDevice.Desktop.MainWindow.RunLiveDualSyncAcceptanceAsync(e.Args, filesTerminal: true);
+                Shutdown(0);
+                return;
+            }
             if (e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -4744,7 +4751,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--verify-files-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-text-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-settings-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
+            if (e.Args.Contains("--verify-live-file-terminal", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-files-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-text-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-settings-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(ex);
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -13859,21 +13866,23 @@ public partial class MainWindow
     private sealed class DualSyncFailure(string classification, string message) : Exception(message)
     { internal string Classification { get; } = classification; }
 
-    internal static async Task RunLiveDualSyncAcceptanceAsync(string[] args)
+    internal static async Task RunLiveDualSyncAcceptanceAsync(string[] args, bool filesTerminal = false)
     {
+        var mode = filesTerminal ? "--verify-live-file-terminal" : "--verify-live-dual-sync";
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var index = 0; index < args.Length; index++)
         {
             var key = args[index];
-            if (key == "--verify-live-dual-sync") { if (!values.TryAdd(key, "")) throw new ArgumentException("Duplicate mode."); continue; }
+            if (key == mode) { if (!values.TryAdd(key, "")) throw new ArgumentException("Duplicate mode."); continue; }
             if (key is not ("--manifest" or "--manifest-sha256" or "--data-dir") || !values.TryAdd(key, "")) throw new ArgumentException("Unknown or duplicate dual-sync argument: " + key);
             if (++index >= args.Length || args[index].StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("Missing value: " + key);
             values[key] = args[index];
         }
-        if (values.Count != 4 || !values.ContainsKey("--verify-live-dual-sync") || !values.ContainsKey("--manifest") || !values.ContainsKey("--manifest-sha256") || !values.ContainsKey("--data-dir")) throw new ArgumentException("Dual sync requires exactly mode, manifest, SHA256 and data-dir.");
+        if (values.Count != 4 || !values.ContainsKey(mode) || !values.ContainsKey("--manifest") || !values.ContainsKey("--manifest-sha256") || !values.ContainsKey("--data-dir")) throw new ArgumentException("Dual sync requires exactly mode, manifest, SHA256 and data-dir.");
         var output = DualSyncAbsolute(values["--data-dir"]); var input = DualSyncAbsolute(values["--manifest"]);
         if (!output.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
             || Directory.Exists(output) || File.Exists(output) || input.StartsWith(output.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Fresh separate absolute artifacts output required.");
+        if (filesTerminal) ValidateFileTerminalPaths(input, output);
         if (!DualSyncSha(values["--manifest-sha256"])) throw new ArgumentException("Manifest SHA256 must be 64 hex digits.");
         using var lease = new FileStream(input, FileMode.Open, FileAccess.Read, FileShare.Read);
         if (lease.Length is <= 0 or > 65536) throw new ArgumentException("Manifest size must be 1..65536 bytes.");
@@ -13882,9 +13891,10 @@ public partial class MainWindow
         using var json = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 32 }); DualSyncUniqueKeys(json.RootElement);
         var manifest = JsonSerializer.Deserialize<DualSyncManifest>(bytes, new JsonSerializerOptions(JsonDefaults.Options) { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow }) ?? throw new ArgumentException("Empty manifest.");
         DualSyncValidateManifest(manifest);
+        if (filesTerminal && manifest.Targets.Any(target => target.AllowLaunch)) throw new ArgumentException("File/terminal acceptance forbids every launch; both dedicated instances must already be Ready.");
         if (Application.Current.Windows.Count != 0 || Application.Current.MainWindow is not null) throw new InvalidOperationException("Live VM sync must start without an application window.");
         Directory.CreateDirectory(output); await File.WriteAllBytesAsync(Path.Combine(output, "manifest-input.json"), bytes);
-        var state = new DualSyncRun(manifest, output);
+        var state = new DualSyncRun(manifest, output, filesTerminal);
         await state.Run(manifestSha);
     }
 
@@ -13915,9 +13925,9 @@ public partial class MainWindow
         if (readyTargets.Select(target => target.TransportId).Distinct().Count() != readyTargets.Length) throw new ArgumentException("Approved Ready targets must have unique transports.");
     }
 
-    private sealed class DualSyncRun(DualSyncManifest manifest, string output)
+    private sealed partial class DualSyncRun(DualSyncManifest manifest, string output, bool filesTerminal = false)
     {
-        private readonly CancellationTokenSource deadline = new(TimeSpan.FromMinutes(10));
+        private readonly CancellationTokenSource deadline = new(filesTerminal ? TimeSpan.FromMinutes(3) : TimeSpan.FromMinutes(10));
         private readonly List<object> steps = [], cleanupErrors = [];
         private readonly List<Exception> reportErrors = [], observedOperationErrors = [];
         private readonly List<Task> owned = [];
@@ -13932,7 +13942,9 @@ public partial class MainWindow
         private WorkspaceViewModel? vm;
         private int sequence, launches;
         private bool runtimeDisposeAttempted, runtimeDisposeCompleted;
-        private readonly List<string> planned = ["bootstrap", "runtime", "00-tap", "00-swipe", "00-home", "10-tap", "10-swipe", "10-home", "01-tap", "01-swipe", "01-home", "11-tap", "11-swipe", "11-home", "unselected-tap", "unselected-home"];
+        private readonly List<string> planned = filesTerminal
+            ? ["bootstrap", "runtime", "sources", "claim-1", "claim-2", "terminal-1", "terminal-2", "upload", "download", "file-shell-1", "file-shell-2"]
+            : ["bootstrap", "runtime", "00-tap", "00-swipe", "00-home", "10-tap", "10-swipe", "10-home", "01-tap", "01-swipe", "01-home", "11-tap", "11-swipe", "11-home", "unselected-tap", "unselected-home"];
         private readonly HashSet<string> started = [], completed = [];
         private CancellationToken Ct => deadline.Token;
         private DualSyncTarget Target(int index) => manifest.Targets.Single(target => target.Index == index);
@@ -13971,12 +13983,15 @@ public partial class MainWindow
             Exception? failure = null;
             try
             {
-                await Save("scope.json", new { manifestSha, scope = "Real WorkspaceViewModel/InputCoordinator/ADB effects, no Window or physical GUI.",
-                    setup = "Rebuild only dedicated 1/2 Android Settings UI tasks using NEW_TASK|CLEAR_TASK. This changes the UI task/back stack; no app-data clear or setting toggle. Original back stacks are not restored.",
+                await Save("scope.json", new { manifestSha, scope = filesTerminal ? "Real original VM ShellCommand and file queue, no Window, UI input or physical GUI." : "Real WorkspaceViewModel/InputCoordinator/ADB effects, no Window or physical GUI.",
+                    setup = filesTerminal ? "Both Ready/noLaunch. Only exclusive nonce-owned temporary directories; no Settings task or current application change." : "Rebuild only dedicated 1/2 Android Settings UI tasks using NEW_TASK|CLEAR_TASK. This changes the UI task/back stack; no app-data clear or setting toggle. Original back stacks are not restored.",
                     initialization = "Existing runtime discovery reads getprop/wm size/dumpsys input. Their internal successful shell byte streams and SDK dump XML are not exposed; returned snapshots, explicit shell text, PNG bytes and errors are retained. Outer runner captures original stdout/stderr bytes.",
                     forbidden = new[] { "instance 0 guest operations", "quit/reboot/modify/clone", "external adb.exe", "ADB restart/connect", "API/Agent", "accounts/permissions/settings switches", "app install/login", "OS input/Sky" } });
                 started.Add("bootstrap"); await Bootstrap(); completed.Add("bootstrap");
                 started.Add("runtime"); await CreateRuntime(); completed.Add("runtime");
+                if (filesTerminal) await RunFileTerminal();
+                else
+                {
                 foreach (var bits in new[] { (M: false, K: false), (M: true, K: false), (M: false, K: true), (M: true, K: true) })
                 {
                     vm!.SyncMouse = bits.M; vm.SyncKeyboard = bits.K; SelectB(true);
@@ -13985,6 +14000,7 @@ public partial class MainWindow
                 }
                 vm!.SyncMouse = vm.SyncKeyboard = true; SelectB(false);
                 foreach (var action in new[] { "tap", "home" }) { started.Add("unselected-" + action); await Exercise("unselected-" + action, action, false); completed.Add("unselected-" + action); }
+                }
                 await HostIdentity("final-before-cleanup", Ct);
             }
             catch (Exception error) { failure = error; deadline.Cancel(); }
@@ -13997,19 +14013,36 @@ public partial class MainWindow
                     try { runtime = await runtimeCreation.WaitAsync(TimeSpan.FromSeconds(20)); }
                     catch (Exception error) { if (!runtimeCreation.IsCompleted) cleanupErrors.Add(new { name = "runtime-creation-terminal", error = error.ToString() }); else observedOperationErrors.Add(error); }
                 }
+                if (filesTerminal && vm?.Transferring == true) vm.CancelTransfersCommand.Execute(null);
                 await Cleanup("owned-operations-terminal", () => Task.WhenAll(owned.ToArray().Select(async task => { try { await task; } catch (Exception error) { observedOperationErrors.Add(error); } })));
                 var creationAtOwnership = runtimeCreation;
                 var creationStatusAtOwnership = creationAtOwnership?.Status;
-                var ownershipUnresolved = creationAtOwnership is not null && creationStatusAtOwnership is not (TaskStatus.RanToCompletion or TaskStatus.Canceled or TaskStatus.Faulted);
+                var ownershipUnresolved = creationAtOwnership is not null && creationStatusAtOwnership is not (TaskStatus.RanToCompletion or TaskStatus.Canceled or TaskStatus.Faulted)
+                    || filesTerminal && owned.Any(task => !task.IsCompleted);
                 if (!ownershipUnresolved && runtime is null && creationStatusAtOwnership == TaskStatus.RanToCompletion) runtime = creationAtOwnership!.Result;
+                if (filesTerminal && !ownershipUnresolved && runtime is not null)
+                {
+                    await Cleanup("owned-file-terminal-paths", CleanupFileTerminal);
+                    ownershipUnresolved = owned.Any(task => !task.IsCompleted);
+                }
                 if (!ownershipUnresolved && runtime is not null) runtime.Input.TargetFailed -= OnTargetFailed;
                 if (!ownershipUnresolved && vm is not null) { runtimeDisposeAttempted = true; runtimeDisposeCompleted = await Cleanup("single-owner-vm-shutdown", () => vm.ShutdownAsync()); }
                 else if (!ownershipUnresolved && runtime is not null) { runtimeDisposeAttempted = true; runtimeDisposeCompleted = await Cleanup("single-owner-runtime", () => runtime.DisposeAsync().AsTask()); }
-                if (ownershipUnresolved) cleanupErrors.Add(new { name = "runtime-creation-still-pending", error = "Late runtime ownership unresolved at owner selection; upstream resources stay retained for this cleanup." });
-                using var cleanupDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                if (filesTerminal && owned.Any(task => !task.IsCompleted)) ownershipUnresolved = true;
+                if (!filesTerminal && ownershipUnresolved) cleanupErrors.Add(new { name = "runtime-creation-still-pending", error = "Late runtime ownership unresolved at owner selection; upstream resources stay retained for this cleanup." });
+                using var legacyCleanupDeadline = filesTerminal ? null : new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                var cleanupDeadline = legacyCleanupDeadline ?? new CancellationTokenSource(TimeSpan.FromSeconds(20));
                 if (service is not null) await Cleanup("final-host-audit", () => HostIdentity("final-after-cleanup", cleanupDeadline.Token));
+                if (filesTerminal && owned.Any(task => !task.IsCompleted)) ownershipUnresolved = true;
                 if (!ownershipUnresolved && service is not null) await Cleanup("owned-ld-service", () => service.DisposeAsync().AsTask());
+                if (filesTerminal && owned.Any(task => !task.IsCompleted)) ownershipUnresolved = true;
                 if (!ownershipUnresolved && seed is not null) await Cleanup("owned-host-only-seed", () => seed.DisposeAsync().AsTask());
+                if (filesTerminal)
+                {
+                    if (owned.Any(task => !task.IsCompleted)) ownershipUnresolved = true;
+                    else { cleanupDeadline.Dispose(); ioCleanupAuditTokenDisposed = true; }
+                    if (ownershipUnresolved) cleanupErrors.Add(new { name = "file-terminal-ownership-unresolved", error = "Runtime, original operation or cleanup ownership unresolved; upstream resources and any live audit token stay retained." });
+                }
                 var pendingOwned = owned.Count(task => !task.IsCompleted);
                 if (pendingOwned > 0) cleanupErrors.Add(new { name = "owned-tasks-still-pending", error = pendingOwned + " owned tasks are not terminal." });
                 var deadlineDisposed = !ownershipUnresolved && pendingOwned == 0;
@@ -14021,11 +14054,12 @@ public partial class MainWindow
                     observedOperationErrors = observedOperationErrors.Select(error => error.ToString()).ToArray(), reportErrors = reportErrors.Select(error => error.ToString()).ToArray(),
                     windows = Application.Current.Windows.Count, mainWindowNull = Application.Current.MainWindow is null,
                     targetErrors = targetErrors.Select(error => error.ToString()).ToArray(), noSimulatorStopIssued = true,
-                    physicalGui = "NOT-RUN-AP045-STOPPED", settingsBackStacksRestored = false };
+                    physicalGui = "NOT-RUN-AP045-STOPPED", settingsBackStacksRestored = false,
+                    fileTerminal = filesTerminal ? FileTerminalSummary() : null };
                 try { await Save("summary.json", summary); }
                 catch (Exception error) { failure = failure is null ? error : new AggregateException(failure, error); }
             }
-            if (failure is not null || cleanupErrors.Count > 0) throw new AggregateException("真实双实例同步失败；未关闭模拟器。", new[] { failure }.OfType<Exception>().Concat(cleanupErrors.Select(error => new Exception(JsonSerializer.Serialize(error, JsonDefaults.Options)))));
+            if (failure is not null || cleanupErrors.Count > 0) throw new AggregateException(filesTerminal ? "真实终端与文件验收失败；未关闭模拟器。" : "真实双实例同步失败；未关闭模拟器。", new[] { failure }.OfType<Exception>().Concat(cleanupErrors.Select(error => new Exception(JsonSerializer.Serialize(error, JsonDefaults.Options)))));
         }
         private void OnTargetFailed(string serial, Exception error) => targetErrors.Enqueue(new InvalidOperationException(serial, error));
         private async Task Epoch(string stage, CancellationToken ct)
@@ -14133,7 +14167,7 @@ public partial class MainWindow
             await Identity("runtime-ready", Ct);
         }
         private void SelectB(bool selected) { foreach (var row in vm!.Devices) row.IsSelected = selected && row.Serial == Target(2).Serial; vm.UpdateSelection(); }
-        private async Task Identity(string stage, CancellationToken ct)
+        private async Task Identity(string stage, CancellationToken ct, bool requireCleanOperation = true)
         {
             await HostIdentity(stage + "-host-before", ct); runtime!.RequireFrozenConnectionSettings();
             Need(!runtime.Api.BasicRunning && !runtime.Api.AutomatorRunning && runtime.Api.DevicePorts.Count == 0 && !runtime.Settings.AutoStartApi && !runtime.Settings.AutoConnect && runtime.Settings.AgentBaseUrl is null, "Background services must stay disabled.");
@@ -14144,7 +14178,7 @@ public partial class MainWindow
                 Need(registered.Any(row => row.Serial == frozen.Serial && row.State == "device" && row.TransportId == frozen.TransportId)
                     && runtime.Devices.Snapshot.Any(row => row.Serial == frozen.Serial && row.Online && row.Generation == frozen.Generation && row.TransportId == frozen.TransportId), "Frozen run transport/generation changed.");
             }
-            Need(vm is null || vm.Error.Length == 0, "VM reported operation failure: " + vm?.Error, "PRODUCT-FAIL");
+            Need(!requireCleanOperation || vm is null || vm.Error.Length == 0, "VM reported operation failure: " + vm?.Error, "PRODUCT-FAIL");
             Need(targetErrors.IsEmpty, "Input target failure: " + string.Join("\n", targetErrors.Select(error => error.ToString())), "PRODUCT-FAIL");
             await HostIdentity(stage + "-host-after", ct);
         }
@@ -14327,6 +14361,242 @@ public partial class MainWindow
             foreach (var property in element.EnumerateObject()) { if (!keys.Add(property.Name)) throw new ArgumentException("Duplicate manifest JSON key: " + property.Name); DualSyncUniqueKeys(property.Value); }
         }
         else if (element.ValueKind == JsonValueKind.Array) foreach (var item in element.EnumerateArray()) DualSyncUniqueKeys(item);
+    }
+}
+
+```
+
+## src/MatrixDevice.Desktop/Views/LiveFileTerminalAcceptance.cs
+
+```csharp
+using System.IO;
+using System.Security.Cryptography;
+using System.Text.RegularExpressions;
+
+namespace MatrixDevice.Desktop;
+
+public partial class MainWindow
+{
+    private static void ValidateFileTerminalPaths(string input, string output)
+    {
+        foreach (var path in new[] { input, output })
+            for (var current = path; !string.IsNullOrEmpty(current); current = Path.GetDirectoryName(current))
+                if ((File.Exists(current) || Directory.Exists(current)) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                    throw new ArgumentException("File/terminal acceptance rejects reparse paths: " + current);
+    }
+
+    private sealed partial class DualSyncRun
+    {
+        private sealed class IoFile(int index, string local, string remote, string nonce, byte[] bytes)
+        {
+            internal int Index { get; } = index;
+            internal string Local { get; } = local;
+            internal string Directory { get; } = remote;
+            internal string Remote => Directory + "/payload.bin";
+            internal string Marker => Directory + "/.matrix-owner";
+            internal string Nonce { get; } = nonce;
+            internal byte[] Bytes { get; } = bytes;
+            internal string Sha256 { get; } = Convert.ToHexString(SHA256.HashData(bytes));
+            internal bool ClaimAttempted, Claimed, WriteAttempted, RoundtripVerified, Cleaned;
+        }
+
+        private readonly List<IoFile> ioFiles = [];
+        private readonly List<(string Name, Task Task)> ioCommands = [];
+        private bool ioCleanupAuditTokenDisposed;
+
+        private object FileTerminalSummary() => new
+        {
+            scope = "Original VM commands/queue and actual two-guest bytes; not GUI or parallel transfer execution.",
+            noLaunch = true, noUiActions = true, cleanupAuditTokenDisposed = ioCleanupAuditTokenDisposed,
+            files = ioFiles.Select(file => new { file.Index, serial = Target(file.Index).Serial, file.Local, file.Directory, file.Remote,
+                file.Marker, file.Nonce, bytes = file.Bytes.Length, file.Sha256, file.ClaimAttempted, file.Claimed,
+                file.WriteAttempted, file.RoundtripVerified, file.Cleaned, residual = file.ClaimAttempted && !file.Cleaned }).ToArray(),
+            originalCommands = ioCommands.Select(item => new { item.Name, status = item.Task.Status.ToString(), terminal = item.Task.IsCompleted }).ToArray(),
+            notVerified = new[] { "physical GUI/DPI", "native picker/directory window", "text input", "APK install/uninstall",
+                "actual API in-flight conflict", "reconnect handoff", "arbitrary I/O interleavings", "final dual 30 minutes" }
+        };
+
+        private Task IoCommand(string name, Func<Task> command)
+        {
+            var task = command();
+            owned.Add(task); ioCommands.Add((name, task)); return task;
+        }
+
+        private async Task IoPhase(string name, Func<Task<object>> action)
+        {
+            started.Add(name);
+            await Identity(name + "-before", Ct);
+            await AfterGuard(() => Step(name, action), ct => Identity(name + "-after", ct));
+            completed.Add(name);
+        }
+
+        private void IoSelection(int selected, int current)
+        {
+            vm!.CurrentDevice = Row(current);
+            foreach (var row in vm.Devices) row.IsSelected = row.Serial == Target(selected).Serial;
+            vm.UpdateSelection();
+            Need(vm.CurrentDevice.Serial == Target(current).Serial && vm.Devices.Count(row => row.IsSelected) == 1
+                && Row(selected).IsSelected, "Original Current/checked setup did not hold.", "PRODUCT-FAIL");
+        }
+
+        private async Task RunFileTerminal()
+        {
+            Need(vm is not null && !vm.SyncMouse && !vm.SyncKeyboard && !vm.Busy && !vm.Transferring && vm.Transfers.Count == 0,
+                "File/terminal plan requires idle original VM, empty queue and disabled synchronization.");
+            await IoPhase("sources", async () =>
+            {
+                var directory = "/sdcard/Download/matrix-io-" + Guid.NewGuid().ToString("N");
+                var nonce = Guid.NewGuid().ToString("N");
+                foreach (var index in new[] { 1, 2 })
+                {
+                    var path = Path.Combine(output, "sources", index.ToString(), "payload.bin");
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    var bytes = Enumerable.Range(0, index == 1 ? 32769 : 65537).Select(value => (byte)((value * 73 + index * 41) % 251)).ToArray();
+                    await using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None)) await file.WriteAsync(bytes, Ct);
+                    var source = new IoFile(index, path, directory, nonce + "-" + index, bytes);
+                    Need(DualSyncHash(path) == source.Sha256, "Actual local source differs from planned bytes."); ioFiles.Add(source);
+                }
+                Need(ioFiles[0].Sha256 != ioFiles[1].Sha256 && ioFiles[0].Bytes.Length != ioFiles[1].Bytes.Length, "Sources must distinguish cross-target contamination.");
+                return FileTerminalSummary();
+            });
+            foreach (var file in ioFiles)
+            {
+                await IoPhase("claim-" + file.Index, async () =>
+                {
+                    using var write = runtime!.Writes.Acquire([Target(file.Index).Serial]);
+                    file.ClaimAttempted = true;
+                    var command = $"[ -d '/sdcard/Download' ] && [ ! -e '{file.Directory}' ] && [ ! -L '{file.Directory}' ] && mkdir '{file.Directory}' && printf '%s' '{file.Nonce}' > '{file.Marker}' && [ \"$(cat '{file.Marker}')\" = '{file.Nonce}' ] && printf '%s' 'CLAIMED'";
+                    var task = runtime.Backend.ShellAsync(Target(file.Index).Serial, command, ct: Ct); owned.Add(task);
+                    var text = await task;
+                    Need(text == "CLAIMED", "Exclusive directory claim did not complete."); file.Claimed = true;
+                    return new { file.Index, file.Directory, file.Marker, file.Nonce, command, text, file.Claimed };
+                });
+            }
+            foreach (var file in ioFiles)
+            {
+                var marker = "MATRIX_TERMINAL_" + file.Nonce;
+                await IoShell(file.Index, "terminal-" + file.Index, $"printf '%s\\n' '{marker}'; getprop ro.product.model",
+                    text => text.Replace("\r\n", "\n").Split('\n') is { Length: 2 } lines && lines[0] == marker && !string.IsNullOrWhiteSpace(lines[1]));
+            }
+            await IoPhase("upload", async () =>
+            {
+                foreach (var file in ioFiles)
+                {
+                    Need(file.Claimed && DualSyncHash(file.Local) == file.Sha256, "Owned source changed before enqueue.");
+                    IoSelection(file.Index, 3 - file.Index); vm!.RemotePath = file.Directory;
+                    var count = vm.Transfers.Count; vm.QueuePush(file.Local, false);
+                    Need(vm.Transfers.Count == count + 1, "QueuePush must enqueue exactly the selected target.", "PRODUCT-FAIL");
+                    var row = vm.Transfers[^1];
+                    Need(row.Serial == Target(file.Index).Serial && row.LocalPath == file.Local && row.RemotePath == file.Remote
+                        && row.Direction == "上传" && !row.AutoInstall, "Original upload row target/path drift.", "PRODUCT-FAIL");
+                }
+                Need(vm!.Transfers.Count == 2 && vm.StartTransfersCommand.CanExecute(null), "Original upload command was not available.", "PRODUCT-FAIL");
+                foreach (var file in ioFiles) file.WriteAttempted = true;
+                await IoCommand("original-upload", () => vm.StartTransfersCommand.ExecuteAsync());
+                VerifyIoQueue(2); return IoQueue();
+            });
+            await IoPhase("download", async () =>
+            {
+                foreach (var file in ioFiles)
+                {
+                    IoSelection(3 - file.Index, file.Index); vm!.RemotePath = file.Remote;
+                    var local = Path.Combine(output, "returned", file.Index.ToString(), "payload.bin");
+                    Directory.CreateDirectory(Path.GetDirectoryName(local)!); Need(!File.Exists(local), "Download target must be fresh.");
+                    var count = vm.Transfers.Count; vm.QueuePull(local);
+                    Need(vm.Transfers.Count == count + 1, "QueuePull must enqueue exactly Current.", "PRODUCT-FAIL");
+                    var row = vm.Transfers[^1];
+                    Need(row.Serial == Target(file.Index).Serial && row.LocalPath == local && row.RemotePath == file.Remote
+                        && row.Direction == "下载" && !row.AutoInstall, "Original download row target/path drift.", "PRODUCT-FAIL");
+                }
+                Need(vm!.Transfers.Count == 4 && vm.StartTransfersCommand.CanExecute(null), "Original download command was not available.", "PRODUCT-FAIL");
+                await IoCommand("original-download", () => vm.StartTransfersCommand.ExecuteAsync()); VerifyIoQueue(4);
+                foreach (var file in ioFiles)
+                {
+                    var local = vm.Transfers.Single(row => row.Serial == Target(file.Index).Serial && row.Direction == "下载").LocalPath;
+                    var bytes = await File.ReadAllBytesAsync(local, Ct);
+                    Need(bytes.AsSpan().SequenceEqual(file.Bytes) && DualSyncHash(local) == file.Sha256
+                        && DualSyncHash(local) != ioFiles.Single(other => other.Index != file.Index).Sha256, "Actual roundtrip or target isolation mismatch.", "PRODUCT-FAIL");
+                    file.RoundtripVerified = true;
+                }
+                return new { queue = IoQueue(), effects = FileTerminalSummary() };
+            });
+            foreach (var file in ioFiles)
+            {
+                var command = $"wc -c < '{file.Remote}'; sha256sum '{file.Remote}'";
+                await IoShell(file.Index, "file-shell-" + file.Index, command, text =>
+                {
+                    var lines = text.Replace("\r\n", "\n").Split('\n');
+                    return lines.Length == 2 && lines[0].Trim() == file.Bytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        && Regex.IsMatch(lines[1], "^" + file.Sha256.ToLowerInvariant() + @"[ \t]+" + Regex.Escape(file.Remote) + "$", RegexOptions.CultureInvariant);
+                });
+            }
+            await Save("file-terminal-results.json", new { effects = FileTerminalSummary(), queue = IoQueue(), history = vm!.ShellHistory.ToArray() });
+        }
+
+        private async Task IoShell(int index, string name, string command, Func<string, bool> effect)
+        {
+            await IoPhase(name, async () =>
+            {
+                IoSelection(3 - index, index); var count = vm!.ShellHistory.Count; vm.ShellInput = command;
+                Need(vm.ShellCommand.CanExecute(null), "Original ShellCommand is disabled.", "PRODUCT-FAIL");
+                await IoCommand(name, () => vm.ShellCommand.ExecuteAsync());
+                Need(!vm.Busy && vm.Error.Length == 0 && vm.ShellHistory.Count == count + 1 && vm.ShellInput.Length == 0,
+                    "Original terminal did not finish one successful request: " + vm.Error, "PRODUCT-FAIL");
+                var entry = vm.ShellHistory[0];
+                Need(entry.Serial == Target(index).Serial && entry.Command == command && effect(entry.Output), "Actual terminal source/command/output mismatch.", "PRODUCT-FAIL");
+                return new { index, current = vm.CurrentDevice?.Serial, selected = vm.Devices.Where(row => row.IsSelected).Select(row => row.Serial).ToArray(), entry, vm.Status, vm.Error };
+            });
+        }
+
+        private void VerifyIoQueue(int count) => Need(vm!.Transfers.Count == count && !vm.Transferring && !vm.Busy && vm.Error.Length == 0
+            && vm.Transfers.All(row => row.State == "传输完成" && row.Progress == 100 && !row.AutoInstall), "Original transfer failed or remained pending: " + vm.Error, "PRODUCT-FAIL");
+
+        private object IoQueue() => vm!.Transfers.Select(row => new { row.Serial, row.Direction, row.LocalPath, row.RemotePath, row.State, row.Progress, row.Size, row.AutoInstall }).ToArray();
+
+        private async Task CleanupFileTerminal()
+        {
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(15)); var ct = cleanup.Token;
+            Need(ioCommands.All(item => item.Task.IsCompleted) && !owned.Any(task => !task.IsCompleted), "Original operations must be terminal before remote cleanup.");
+            foreach (var file in ioFiles.Where(file => file.ClaimAttempted && !file.Cleaned))
+            {
+                await Identity("cleanup-" + file.Index + "-before", ct, requireCleanOperation: false);
+                using var write = runtime!.Writes.Acquire([Target(file.Index).Serial]);
+                async Task<string> Shell(string command)
+                {
+                    await Identity("cleanup-" + file.Index + "-shell-before", ct, requireCleanOperation: false);
+                    return await AfterGuard(async () =>
+                    {
+                        var task = runtime.Backend.ShellAsync(Target(file.Index).Serial, command, ct: ct); owned.Add(task);
+                        var result = await task; await Trace("owned-file-cleanup-shell", new { file.Index, command, result }); return result;
+                    }, token => Identity("cleanup-" + file.Index + "-shell-after", token, requireCleanOperation: false));
+                }
+                var absent = await Shell($"if [ ! -e '{file.Directory}' ] && [ ! -L '{file.Directory}' ]; then printf ABSENT; else printf PRESENT; fi");
+                if (absent == "ABSENT") { file.Cleaned = true; continue; }
+                Need(absent == "PRESENT", "Ambiguous owned directory presence.");
+                Need(await Shell($"[ -d '{file.Directory}' ] && [ ! -L '{file.Directory}' ] && [ -f '{file.Marker}' ] && [ ! -L '{file.Marker}' ] && [ \"$(cat '{file.Marker}')\" = '{file.Nonce}' ] && printf OWNED") == "OWNED", "Owned directory nonce/type changed; preserve residual.");
+                var entries = await Shell($"find '{file.Directory}' -mindepth 1 -maxdepth 1 -print0");
+                Need(entries.EndsWith('\0'), "Directory entry listing must be NUL-delimited.");
+                var names = entries.Split('\0')[..^1];
+                Need(names.Length is 1 or 2 && names.Distinct(StringComparer.Ordinal).Count() == names.Length && names.Contains(file.Marker, StringComparer.Ordinal)
+                    && names.All(name => name == file.Marker || name == file.Remote), "Unknown entry in owned directory; preserve all residuals.");
+                if (names.Contains(file.Remote, StringComparer.Ordinal))
+                {
+                    Need(file.WriteAttempted, "Payload was not created by this run; preserve residual.");
+                    Need(await Shell($"[ -f '{file.Remote}' ] && [ ! -L '{file.Remote}' ] && printf FILE") == "FILE", "Payload type changed.");
+                    var local = Path.Combine(output, "cleanup-readback", file.Index + ".bin"); Directory.CreateDirectory(Path.GetDirectoryName(local)!);
+                    var pull = runtime.Backend.PullAsync(Target(file.Index).Serial, file.Remote, local, ct: ct); owned.Add(pull); await pull;
+                    Need(new FileInfo(local).Length == file.Bytes.Length && DualSyncHash(local) == file.Sha256, "Cleanup payload changed or is partial; preserve residual.");
+                    await Identity("cleanup-" + file.Index + "-before-unlink", ct, requireCleanOperation: false);
+                    await Shell($"rm '{file.Remote}'");
+                }
+                await Shell($"rm '{file.Marker}' && rmdir '{file.Directory}'");
+                Need(await Shell($"if [ ! -e '{file.Directory}' ] && [ ! -L '{file.Directory}' ]; then printf ABSENT; else printf PRESENT; fi") == "ABSENT", "Owned directory remains after exact cleanup.");
+                file.Cleaned = true;
+                await Identity("cleanup-" + file.Index + "-after", ct, requireCleanOperation: false);
+            }
+            Need(ioFiles.All(file => !file.ClaimAttempted || file.Cleaned), "Run-owned residual path remains.");
+            await Save("file-terminal-cleanup.json", FileTerminalSummary());
+        }
     }
 }
 
