@@ -2,7 +2,32 @@
 
 更新：2026-10-17。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 当前执行：A08d文本工作区
+## 当前执行：A08e文件工作区
+
+- 主仓唯一Main-r01/session44853已自然0并获实际独立终审，tests Green-r01/session14440同样通过：各15PASS/326检查/842Task终态、原235/MCP14+13未验/三拒参四PDB、15唯一清理及0残留。全部必需exec终态，不再Build或重跑；下面过程记录的“正在Green/未集成”均为历史。完整SHA见[A08e](A08_FILES_WORKSPACE.md)。
+- 实际Green审通过后，root只集成精确App2A31/SmokeDFBB/VM21DC/FilesView0E27四源，先保主仓旧三源并提高mtime，import-r01/copy.json已CreateNew保存。其余191原输入、旧255产品及用户3/17proof在首Build前保持。Main runner53D66F…BBD635/合同9D78C1…4CB7以main raw为基底，旧255只核Build前，编后核本轮255/冻结；tests Green195/255及旧Red/Green三原件始终保护。
+- Main原流/六图/四PDB/195输入与本轮255、tests Green195/255、user3/17proof和旧Red/Green实际独审已过，execution AFE4657D…5A1B8C/afterE95F2F64…2FB224/reportC1C0DE57…185F42。后继仅正式文档/核包/精确14路径index审、同private feature单功能push及回执后审；由Git及新files-workspace/push-complete.json决定实际交付，不提前称已推。
+- 没有新的实机或GUI结果，约13工作块/7类、完整goal仍active。后继优先fresh核定1/2、严格noLaunch原ShellCommand与原队列差异往返，再受控真实文本；不重复旧抖音整套/已停止官方capture输入分支，也不继续加局部Demo扣整包。详细设备准入复用建议在[A08e](A08_FILES_WORKSPACE.md)；界面、安装卸载、RPA/MCP/抓包和最终双30分钟仍必需。
+
+### A08e过程记录（历史）
+
+- 上一轮是progress：文本14路径已普通提交推送`1f397cfcfb8cb640bb3b450014744384b4c3dfb8`，远端feature同值/test49e471保持，提交后独审通过。回执`artifacts/text-workspace/push-complete.json` SHA085CAF5F30AF523B945A48DD1CCA42E29B7A2905E9A43E491B3696DCF866ED47；不要重做下方历史A08d交付门或测试。
+- 当前轻规格见[A08e](A08_FILES_WORKSPACE.md)。AP073/074先用原ProgressBar及原已实现Size cell、实际Demo文件读写复现；不能手设State/Progress、强刷绑定或用回收取绿。路径Width440已有Toolbar收紧，不静态认窄屏红；原七列/控件/目标语义都保留。
+- 从1f397cf新建files-workspace-ui/tests两个detached树，root生产/正式测试作者分离；尚无生产改动、Build/测试或设备操作。原235/32旧Smoke保持，先冻结正式夹具和执行前独审，root唯一执行owner。
+- baseline在tests/artifacts/files-workspace/baseline.json，SHA5EAFED73C14BFE271E90B43CB4D54ACF982ED5FCD2ED321121F67DF3689391AB，固定main194/255、用户3、17历史proof。author api_idle_verify只App/新FilesWorkspaceSmoke（只准compile），terminal_product_review独审及ignored runner准备，root等待原红才改生产。
+- 新host-only-r01唯一console list2已自然0，双raw排空/retained0；execution ECD0689D…DDCDC5，main保护保持，同原生5037owner，23行仅1/2报告AndroidStarted。原raw是CP936，工具先UTF8展示乱码不改raw，另directory-cp936.json解析正确，未重跑。没有ADB协议/guest/启动关闭；Ready transport仍未核。所有必需exec已终态，独审待实际核原件。
+- host实际独审已过。fresh checkout行尾与main不同，另冻tests-base-r01.json SHA3B7D4EA76DE2691C9FC55D61379350D45FCAC59BDF52D8A008916F26C392C05A：同1f pristine UI194 raw，每clean blob=HEAD；tests除App外193 raw全同，原baseline不覆盖/不改行尾。后续runner分别tests raw/main raw/PDB，不能混借或硬猜195/cases字段。仅ignored拒绝执行draft FF0A9818…AA1434已审首throw/Parser0，待author真实schema再定。
+- 原tracked Get-AdbHostState一次host-only版本/注册观察已自然0，tests/artifacts/files-workspace/host-registered-r01/execution.json SHA D1AF952B19D2FF1B5D4D7306F57ED787DA7A29744AA66DFED7E59CEC4A5D9EC6；同native owner/协议0029/现有明确绑定1/2实际transport8/9，guest0。仍未做VBox/TCP准入或guest读写，待独审且下次不永久授信。作者唯一compile-r01/98801已自然0/29.467s/9旧warn0错，无case运行；仅notRun目录术语需更正后最终r02compile，原件保持。
+- 最新两host层原件均已获独审；不恢复设备执行。作者最终r03/session23687自然0/14.450s/8旧warn0错，r01/r02编译原件保留，目录non-modal术语及当前五Button真实重枚举已窄补获静审。最终两测试源冻结：App2A3117DB…34C1EA/28715B，新SmokeDFBB55E4…FD78BD/61079B；frozen-r01/manifest.json SHA861BC82DDABC7B23BBEFD415C9BDB0029302ADCC7C9F376215AD83517B599357，15 exact名/schema/strict3明确。源码/最终PDB/DLL保在frozen-r01，作者已停止编辑/编译；三exec全部终态，无case执行。
+- terminal_product_review正在仅ignored目录准备fixed Red-r01和合同，优先只Red、不预造Green。root读脚本与准入后唯一执行。当前main仅三正式文档WIP，生产源/产品及用户保护保持，UI树生产仍pristine；不要因为case尚未运行就声称AP073/074已修。后继实际旧红→最小VM+FilesView候选（无需动Presentation）→同夹具绿/独审→main/核包/单功能push，完整目标和实机/GUI余项不变。
+- 最新Red-r01 fixed5920E906…DEE297/合同4989F14F…20D21E经两门审后唯一session77311已自然0，Build49244/93865ms、原235/MCP14+13/三拒参四PDB通过；专项18288 exit1/3432ms，5PASS/10纯PRODUCT、314checks/806登记Task终态、15唯一Shutdown/Closed/0窗口retained，error/postflightnull。AP073真实100→新增0后getter50/bar100通知0；AP074真实32KiB/same cell待下载或旧1KiB；六几何32按钮/24checkbox及Name/RemotePath全文红，原440路径首尾通过。executionD602285A…9D76BF/after733AFE16…85F60C/reportCC671B1F…8F1661，原件tests/artifacts/files-workspace/red-r01已保留，root看最小图。
+- terminal_product_review实际旧原件独审中，才可准仅UI两生产源候选；尚未实施。独审可准备gated Green-r01但不能自行执行或改已冻结夹具。所有必需exec已终态，不重跑旧红；main当前只文档WIP，source194/255/用户3/17proof保持。新AP077几何缺陷仅登记实际旧红，完整目标不缩减。
+- 最新旧红实际终审全过，才准root仅UI树两源实施：VM21DCC7558F15F22072C2EE35695D2D010DEE200129081A52CF1563BCCB626981/72581B，FilesView0E27AEDF94340159400BA39867E3A45EC9C3A69C622DDEDE3BCB330443A0CE7C/4731B，19增3删/check0。原NotifyOverall两入队、成功Pull ChangedSize；局部44、grid行头44、原7列Binding提示+ellipsis及有旧图证据的进度列96，其它不变。Presentation/冻结测试不动。尚未拷tests/main或运行候选；terminal_product_review审实际diff/固定仅tests Green-r01，root等静审后才copy+advance mtime/执行，main另门。
+- 最新候选两源实际静审已过。fixed Green-r01 AAA4CC4869DE3D14313F73485E0340A942143B684987879ED4022FE08E510612/合同59EA85DD90977553A943C0C1C086F96E3F3EFBE0949A72451ECBD52141B82D75仅tests、main硬拒绝；Red/同冻结App2A31+SmokeDFBB/全部断言保持。首次机械生成因JS replacement展开PS dollar-apostrophe而Parser失败，无效932F…946FB6和失败27B3CFD7…F13161保在preflight-green-r01，未执行。最终有效版只literal callback重建/Parser0，root全文delta已读。
+- root精确保存旧生产两源red-production-r01-source、新两源candidate-r01-source，然后copy至tests并advance mTime，copy.json实录；唯一真正Green-r01/session14440正在执行（初chunk6173b3）。必须续该原handle到终态，不因等待超时重启；main仍194源/旧255/只有文档WIP。后继实际Green→原件/6图/PDB保护独审→才可main另审/精确4源集成和代表复验→文档/核包/单功能push；当前没有候选通过结论。
+- 真实1/2目前无可直接安全复用的窄入口；旧LiveUiAcceptance/CLI混抖音且直接Transfers.Add，不算当前队列验收。后继strict Ready/noLaunch、原生epoch/admission及实际transport、唯一路径往返，固定Runtime禁止重接。完整GUI/原生picker/DPI/实机/最终双30分钟及全部原目标保持active，约13块不按新case扣减。
+
+## 上轮执行：A08d文本工作区
 
 - 前一终端功能确已推c63b0e9af17bcca0d0f1740a114ba930dcec964f，提交后独审过，test49e471保持；不要重做旧终端交付。上一状态答复已轮询Main/session49344自然0并实际读取报告，属于取得终态证据，不是仍有活进程。
 - 规格、全部失败链与完整SHA见[A08d](A08_TEXT_WORKSPACE.md)。本轮只文本加载所有权及原三按钮44/六尺寸，TextCommand原发送不清草稿且action内快照，全文未改。AP073/074文件绑定单独后继，不混本次。

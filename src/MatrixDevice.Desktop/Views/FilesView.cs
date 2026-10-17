@@ -21,7 +21,7 @@ public partial class MainWindow
 {
     private FrameworkElement BuildFilesPage()
     {
-        var page = Page(); var path = Toolbar(); var pathLabel = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) }; LocalizationService.Bind(pathLabel, TextBlock.TextProperty, "设备路径"); path.Children.Add(pathLabel); var remote = BoundInput(nameof(WorkspaceViewModel.RemotePath)); remote.Width = 440; path.Children.Add(remote); path.Children.Add(Button("\uE72C", "查看目录", async () =>
+        var page = Page(); var path = Toolbar(); var pathLabel = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) }; LocalizationService.Bind(pathLabel, TextBlock.TextProperty, "设备路径"); path.Children.Add(pathLabel); var remote = BoundInput(nameof(WorkspaceViewModel.RemotePath)); remote.Width = 440; remote.MinHeight = 44; path.Children.Add(remote); path.Children.Add(Button("\uE72C", "查看目录", async () =>
         {
             await ViewModel.ExecuteAsync("读取目录", async () =>
             {
@@ -37,7 +37,17 @@ public partial class MainWindow
         actions.Children.Add(Button("\uE896", "添加下载", async () => { var dialog = new SaveFileDialog { FileName = System.IO.Path.GetFileName(ViewModel.RemotePath.TrimEnd('/')) }; if (dialog.ShowDialog(this) == true) await ViewModel.ExecuteAsync("添加下载", async () => { ViewModel.QueuePull(dialog.FileName); await Task.CompletedTask; }); }, canExecute: ViewModel.CanWriteDevice));
         actions.Children.Add(Button("\uE768", "开始", ViewModel.StartTransfersCommand)); actions.Children.Add(Button("\uE71A", "停止", ViewModel.CancelTransfersCommand)); DockPanel.SetDock(actions, Dock.Top); page.Children.Add(actions);
         var progress = new ProgressBar { Minimum = 0, Maximum = 100, Height = 5, Margin = new Thickness(0, 0, 0, 10) }; progress.SetBinding(RangeBase.ValueProperty, new Binding(nameof(WorkspaceViewModel.OverallProgress)) { Mode = BindingMode.OneWay }); DockPanel.SetDock(progress, Dock.Top); page.Children.Add(progress);
-        var queue = new DataGrid { ItemsSource = ViewModel.Transfers, IsReadOnly = true }; TextColumn(queue, "设备", nameof(TransferRow.Serial), 160); TextColumn(queue, "方向", nameof(TransferRow.Direction), 65); TextColumn(queue, "文件", nameof(TransferRow.Name), 170); TextColumn(queue, "大小", nameof(TransferRow.Size), 100); TextColumn(queue, "设备路径", nameof(TransferRow.RemotePath), 230); TextColumn(queue, "%", nameof(TransferRow.Progress), 60); TextColumn(queue, "状态", nameof(TransferRow.State), 190); page.Children.Add(queue); return page;
+        foreach (var button in path.Children.OfType<Button>().Concat(actions.Children.OfType<Button>())) { button.MinWidth = 44; button.MinHeight = 44; }
+        autoInstall.MinHeight = 44;
+        var queue = new DataGrid { ItemsSource = ViewModel.Transfers, IsReadOnly = true, RowHeight = 44, ColumnHeaderHeight = 44 }; TextColumn(queue, "设备", nameof(TransferRow.Serial), 160); TextColumn(queue, "方向", nameof(TransferRow.Direction), 65); TextColumn(queue, "文件", nameof(TransferRow.Name), 170); TextColumn(queue, "大小", nameof(TransferRow.Size), 100); TextColumn(queue, "设备路径", nameof(TransferRow.RemotePath), 230); TextColumn(queue, "%", nameof(TransferRow.Progress), 96); TextColumn(queue, "状态", nameof(TransferRow.State), 190);
+        foreach (var column in queue.Columns.OfType<DataGridTextColumn>())
+        {
+            var textStyle = new Style(typeof(TextBlock), column.ElementStyle);
+            textStyle.Setters.Add(new Setter(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis));
+            textStyle.Setters.Add(new Setter(ToolTipProperty, column.Binding));
+            column.ElementStyle = textStyle;
+        }
+        page.Children.Add(queue); return page;
     }
 
 }

@@ -786,6 +786,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     public void QueuePush(string path, bool autoInstall)
     {
         foreach (var row in RequireTargets()) Transfers.Add(new TransferRow { Serial = row.Serial, Direction = "上传", LocalPath = path, RemotePath = RemotePath.TrimEnd('/') + "/" + Path.GetFileName(path), AutoInstall = autoInstall && Path.GetExtension(path).Equals(".apk", StringComparison.OrdinalIgnoreCase) });
+        Changed(nameof(OverallProgress));
         RefreshCommands();
     }
 
@@ -793,6 +794,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     {
         var row = CurrentDevice ?? throw new InvalidOperationException("未选择设备");
         Transfers.Add(new TransferRow { Serial = row.Serial, Direction = "下载", LocalPath = localPath, RemotePath = RemotePath });
+        Changed(nameof(OverallProgress));
         RefreshCommands();
     }
 
@@ -817,7 +819,11 @@ public sealed partial class WorkspaceViewModel : ObservableObject
                     if (ScriptBusy(row.Serial)) throw new DeviceException("设备正在执行脚本");
                     var progress = new Progress<double>(value => { row.Progress = Math.Clamp(value > 1 ? value : value * 100, 0, 100); Changed(nameof(OverallProgress)); });
                     if (row.Direction == "上传") await runtime.Backend.PushAsync(row.Serial, row.LocalPath, row.RemotePath, progress, transferCancellation.Token);
-                    else await runtime.Backend.PullAsync(row.Serial, row.RemotePath, row.LocalPath, progress, transferCancellation.Token);
+                    else
+                    {
+                        await runtime.Backend.PullAsync(row.Serial, row.RemotePath, row.LocalPath, progress, transferCancellation.Token);
+                        row.Changed(nameof(TransferRow.Size));
+                    }
                     row.Progress = 100;
                     row.State = "传输完成";
                     if (row.AutoInstall) { row.State = "已传输 · 安装中"; await runtime.Backend.InstallAsync(row.Serial, row.LocalPath, transferCancellation.Token); row.State = "已传输 · 已安装"; }

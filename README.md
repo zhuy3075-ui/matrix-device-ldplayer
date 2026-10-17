@@ -26,6 +26,8 @@
 
 文本页加载文件时会保留请求之后新编辑的草稿，包括改后又改回原值的情况；旧读取失效显示停止，不误报替换成功。原粘贴、加载、单/多目标发送及发送后保留草稿的行为不变，三个原动作采用局部44逻辑点击区域。独立候选和主仓各235项、MCP演示14项及15组自有WPF/Demo专项通过，包含六尺寸、227项检查、真实本地文件和Demo节点回读；入口为`--verify-text-workspace --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`，详见[文本工作区记录](docs/codex/apple-experience/A08_TEXT_WORKSPACE.md)。原失败和测量夹具修正均保留；原生文件选择器/剪贴板、物理输入、DPI、真实ADB中文及任意I/O交错仍未验，真实ADB的控制字符限制未改变。
 
+文件页在添加上传/下载任务后即时更新总进度，下载成功后更新同一行的本地大小，不需切页或手动刷新。保留原路径、五个动作、上传后安装开关与七列队列；动作使用局部44逻辑命中区域，长值可通过原绑定提示查看。独立候选及主仓各原235项、MCP演示14项及15组自有WPF/Demo专项通过并获独审，包含六尺寸、326项检查、真实本地文件字节回读和原队列取消/重试。入口为`--verify-files-workspace --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`，详见[文件工作区记录](docs/codex/apple-experience/A08_FILES_WORKSPACE.md)。这不代表真实模拟器、原生选择器、上传APK后安装、物理GUI/DPI或最终双实例30分钟已验收。
+
 完整文件清单见 `PROJECT_TREE.md`；全部源码文本见 `SOURCE_BUNDLE.md`；对应文件摘要见 `SOURCE_MANIFEST.json`。这三个文件由 `tools/New-SourcePackage.ps1` 生成，源码 ZIP 位于 `artifacts/`。
 
 全面验收与界面重设计正在按[当前计划](plan.md)实施；目标、技术边界、视觉/命名及依赖任务分别见[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[UI规格](docs/UI_SPEC.md)、[任务表](docs/TASKS.md)。当前测试范围见[功能矩阵](docs/codex/apple-experience/TEST_MATRIX.md)、[逐控件目录](docs/codex/apple-experience/CONTROL_CATALOG.md)和[问题清单](docs/codex/apple-experience/DEFECTS.md)，进展见[阶段记录](docs/PROGRESS.md)。已修复主控A/当前B时投屏错目标的代码路径，增加主控身份与进程所有权守卫，见[A02独立离线验收](docs/codex/apple-experience/A02_MAIN_TARGET.md)；真实外部投屏仍待验。这是进行中的工作，149项和三尺寸Demo不代表本轮全功能/实机/窄屏已通过。

@@ -1,5 +1,15 @@
 # 当前目标阶段记录
 
+## 2026-10-17 / A08e文件工作区
+
+- Goal/Context：A08d文本14文件确已推1f397cf且提交后独审通过，上一轮是progress，完整目标active。当前读取原FilesView/VM/TransferRow及UI规格，AP073/074先实际复现，不按源码疑点预写通过。[轻规格](codex/apple-experience/A08_FILES_WORKSPACE.md)。
+- Decision/Files：两个fresh detached树files-workspace-ui/tests从1f397cf；正式测试作者只App/新Smoke，root生产与独立verifier分离，旧235/32Smoke保留。baseline5EAFED73…9391AB固定main194/255、用户3和17历史proof。原Toolbar收紧宽度，不能静态认440溢出；等待原ProgressBar/Size cell实际证据，不手设状态或强刷绑定。
+- Verification：两host-only样本ECD0689D…DDCDC5/D1AF952B…5D9EC6已独审，原console目录及host注册/同native owner，guest0；注册不证明VBox/TCP准入或页面。正式15组经原控件/任务/真实Demo文件构造，三compile-only终态与中间源码保留；两源2A31/DFBB冻结，当前按钮重枚举窄补不改业务断言。
+- Verification：唯一Red-r01/session77311自然0，Build93865ms/原235及MCP14+13未验/三拒参四PDB通过；专项18288 exit1/3432ms，5PASS/10纯产品红、314检查/806Task终态、15唯一清理/0残留。AP073 bar100/model50/通知0、AP074真32KiB/cell旧值，六尺寸32按钮/24开关及长Name/RemotePath不全均实核。execution D602285A…9D76BF/after733AFE16…85F60C/reportCC671B1F…8F1661原件已获业务/六图/原流/PDB/保护独审，不重跑。
+- Decision/Files：旧红获审后仅VM21DCC755…626981/FilesView0E27AEDF…0CE7C两生产源，补原通知、局部44与原七列全文提示，Progress原列96保单位；正式App2A31/新SmokeDFBB同夹具冻结，四源精确集成主仓，其余191原输入保持。首次Green runner机械replacement的Parser失败在执行前保留，未当产品红；最终runner仅literal callback修正。
+- Verification：候选Green-r01和主仓唯一Main-r01/session44853均自然0，各15PASS/326检查/842登记Task终态、15唯一Shutdown/Closed、窗口/retained0，原235/MCP14+13未验/三拒参四PDB通过。主仓Build35308/115654ms、专项85912/4513ms，execution AFE4657D…5A1B8C/afterE95F2F64…2FB224/reportC1C0DE57…185F42。两轮原流/六图/PDB/源与保护获非实现者实际终审；Main旧255只用于Build前，编后以本轮新255及冻结为准。
+- Next/Risks：下一门仅正式文档/完整核包、精确14路径index独审及同private feature单功能普通push/回执后审，以实际Git及files-workspace/push-complete.json为准。不再补局部Demo凑整包，后继优先fresh核定1/2的原ShellCommand与原队列差异往返。原GUI/原生picker/DPI/实机与最终双30分钟不关闭，约13工作块/完整目标active。
+
 ## 2026-10-17 / A08d文本工作区
 
 - Goal/Context：上一终端功能已实际推c63b0e9，提交后独审通过；保留完整目标，从当前TextView/FilesView及原VM门禁盘点，不重做旧交付。

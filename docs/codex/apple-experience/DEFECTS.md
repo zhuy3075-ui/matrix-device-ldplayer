@@ -120,10 +120,11 @@
 | ID | 级别/状态 | 事实与边界 | 处理/后续 |
 |---|---|---|---|
 | AP-072 | P1/独立候选及主仓自有WPF限域通过 | 旧等价提取版r01/r02真实文件加载的B/ABA新草稿被覆盖且误报完成；正常/同值/重入保持原行为。只证明所测同步通知边界，不冒称所有任意I/O交错 | [A08d](A08_TEXT_WORKSPACE.md)原setter通知前记录编辑版本、加载入口捕获，失效停止；保留文件错误和原发送。同r02独立/主仓各15PASS/227检查，原生picker/Clipboard与实机另验 |
-| AP-073 | P2/源码绑定风险已确认，动态复现待执行 | QueuePush/QueuePull 增加原行后未通知 OverallProgress，已有完成100的队列增加0行时 getter 和 ProgressBar 可能不同步 | 文件独立阶段用实际 ProgressBar.Value 复现，保留平均算法和原队列；尚未修改或算通过 |
-| AP-074 | P2/源码绑定风险已确认，动态复现待执行 | TransferRow.Size 依赖本地文件，下载成功只更新 Progress/State，没有通知 Size；可继续显示待下载或覆盖前大小 | 文件独立阶段用同一已实现行/七列 Binding 复现，成功下载后通知原 Size，不靠回收重绑取绿；尚未修改或算通过 |
+| AP-073 | P2/独立候选及主仓自有WPF限域通过 | [A08e](A08_FILES_WORKSPACE.md)旧生产原队列真实完成并排空后，QueuePush/Pull各新增0行，两组getter50而同一原ProgressBar仍100，Overall通知0；不是迟到回调或手设状态 | 原新增行后发布OverallProgress；保平均算法、原队列/命令。同冻结夹具候选/主仓均同原bar/getter50、通知1；15组全过并获实际独审，不外推实机/重连交错 |
+| AP-074 | P2/独立候选及主仓自有WPF限域通过 | A08e旧两组原下载实际bytes/SHA正确、Size getter32.0KiB，但同一已实现cell仍待下载/1.0KiB，原row/cell/BindingExpression未换且无后滚动 | 成功Pull后只通知原row Size；不改格式、不重绑表格、不修改Presentation。候选/主仓实际32769B及SHA一致，同原cell即时32.0KiB，Unloaded/DataContextChanges0；实机/任意IO另验 |
 | AP-075 | P2/独立候选及主仓六尺寸限域通过 | 旧文本页三个原按钮裁剪后实际高度均32，不满足本项目UI规格44命中区域；原多行正文读写仍保留 | 仅该页三按钮局部MinWidth/MinHeight44，原控件/命令/TargetContext不换；同r02六尺寸44及正文首尾通过，不外推物理触控/DPI |
 | AP-076 | P2/新增验收度量错误已窄修复验，非产品缺陷 | red-r01的768摘要实际652×68且PNG全文末尾可见，测试默认Ideal量为69.16，与页面Display模式不符；不能将该叶失败算产品裁剪 | FormattedText仅改用实际TextFormattingMode，原内容/阈值/断言不变；同旧生产r02该叶68/68通过且保留八组真实产品红，候选/主仓全过。r01完整保留，未给产品加padding |
+| AP-077 | P2/独立候选及主仓六尺寸限域通过 | A08e旧原五按钮实际32高、安装开关24高；原Name/RemotePath长值被截且没有原全文提示，六组都失败；原440路径框已收紧且首尾阅读通过，不算宽溢出 | 仅原页局部44及七列原Binding全文提示/ellipsis，原进度列96保完整单位；候选/主仓六图、42个44检查及12原Tooltip实核通过，保原列/命令与自然横滚。非物理触控/DPI或原生窗口通过 |
 
 ## 修复记录规则
 
