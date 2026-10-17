@@ -53,6 +53,7 @@
 | FILE-01 文件 | 设备浏览/目录→上传→下载→SHA一致；多目标结果；上传APK后安装流程 | 坏路径/权限/覆盖取消、传输取消、进度/部分失败/断连；清理仅唯一测试目录 | NOT-RUN |
 | FILE-02 文件 | ls目录文本与上传/下载队列的重试、停止等已有入口逐项验证 | 不对未知目录做清理；当前没有设备目录新建/重命名/删除入口，不列作原功能或新需求 | NOT-RUN |
 | TEXT-01 文本 | 粘贴、加载文本文件、明确单/多目标发送中文/英文/空格/换行，测试包回读一致 | 文件选择取消/坏编码、空串/离线/旧目标拒绝、输入模式不支持如实报错；无账号页面使用 | NOT-RUN |
+| TEXT-WORKSPACE 文本正文与草稿 | 自有WPF六尺寸、原三按钮/多行首尾全文/完整目标、实际本地UTF8及BOM文件、原命令单/多Demo节点回读 | 新编辑B/ABA不被旧加载覆盖且显示停止，同值/重入可加载；读取失败恢复、发送在途草稿及原动作快照、空/离线/脚本/传输/共享Writes门禁和导航身份 | [A08d/AP072/075/076](A08_TEXT_WORKSPACE.md)同r02旧7PASS/8产品红，独立与主仓各235/MCP14+13NOTRUN、15PASS/227检查/495Task终态、15唯一Shutdown/Closed和0残留。PASS-OWN-WPF-DEMO，非物理GUI/DPI/picker/Clipboard/Android或任意I/O交错，不关闭TEXT-01；真实ADB控制字符限制保持 |
 | SCRIPT-01 自动化 | 导入有效jxscript、清单/参数→单/双目标运行→步骤/回传→完成 | 无效ZIP/动作/参数、取消2秒内不再执行、重复启动/目标变化/步骤失败隔离 | NOT-RUN |
 | SCRIPT-FORMAT 自动化格式边界 | 实际Load接受合法ZIP的.json后缀与附带资源，导入Tap0、显式调度Tap1；picker只列jxscript/zip | 六非法非ZIP格式中文400/1007且Tap0，I/O/内层JSON/动作/压缩大小保持原错误；仅ZIP构造catch，不覆盖全部损坏归档 | [A08a/AP044](A08_SCRIPT_FORMAT.md)实际red163/169仅六格式红；实现/独立/主仓各169全过，原158不变。PASS-OFFLINE-PACKAGE-BOUNDARY，不代替GUI文件选择、SCRIPT-01实机或完整RPA |
 | SCRIPT-PARAM 参数执行 | V1真实ZIP Load/Save/Load→原Scheduler，Value/默认/覆盖的实际差异动作、A/B隔离及未指定第三目标零动作 | null不回退、类型/范围/字段/版本/Probability拒绝；深快照/旧包/等待取消保持，全局JSON不变 | [A14a1/AP046](A14_SCRIPT_PARAMETER_BINDINGS.md)Core原红170/193保留，作者/独立/主仓各193通过、原169精确保持。仅参数绑定合同，不代表jobId/transport pin竞态、GUI或guest执行已验 |

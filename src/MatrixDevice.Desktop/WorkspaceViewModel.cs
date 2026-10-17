@@ -38,6 +38,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     private string shellInput = "";
     private long shellInputRevision;
     private string textInput = "";
+    private long textInputRevision;
     private string remotePath = "/sdcard/MatrixExchange/";
     private bool transferring;
     private bool showSystemApps;
@@ -176,7 +177,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         get => shellInput;
         set { if (shellInput != value) shellInputRevision++; Set(ref shellInput, value); RefreshCommands(); }
     }
-    public string TextInput { get => textInput; set { Set(ref textInput, value); RefreshCommands(); } }
+    public string TextInput { get => textInput; set { if (textInput != value) textInputRevision++; Set(ref textInput, value); RefreshCommands(); } }
     public string RemotePath { get => remotePath; set => Set(ref remotePath, value); }
     public bool Transferring { get => transferring; private set { Set(ref transferring, value); SyncApiWriteGuard(); RefreshCommands(); Changed(nameof(HasActiveOperations)); } }
     public double OverallProgress => Transfers.Count == 0 ? 0 : Transfers.Average(row => row.Progress);
@@ -467,6 +468,17 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         var row = MainDevice ?? CurrentDevice;
         if (row is null) return Task.CompletedTask;
         return SendInputAsync(new InputSnapshot { SourceSerial = row.Serial, SourceGeneration = row.Info.Generation, Generation = runtime.Input.CurrentGeneration, Kind = InputKind.Key, KeyCode = code, TargetSerials = InputTargets(row.Serial, false) });
+    }
+
+    public Task LoadTextFileAsync(string path)
+    {
+        var revision = textInputRevision;
+        return ExecuteAsync("加载文本", async () =>
+        {
+            var text = await File.ReadAllTextAsync(path);
+            if (textInputRevision != revision) throw new OperationCanceledException("文本草稿已更改，未用旧文件内容覆盖。");
+            TextInput = text;
+        });
     }
 
     public Task SendTextAsync() => ExecuteAsync("发送文本", async () =>

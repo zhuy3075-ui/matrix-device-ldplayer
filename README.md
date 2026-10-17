@@ -24,6 +24,8 @@
 
 终端在执行期间仍可准备下一条命令，成功或失败结束仅清理没有再次编辑的提交版本，保留AB、ABA及同步通知里的新草稿；原命令、设备归属和写入门禁不变。上下键与历史双击回填保持原入口，长命令/来源换行，输出在原只读文本框内滚动，列表保留虚拟化并按像素滚动。独立候选及主仓各235项、MCP演示14项和十二组自有WPF/Demo专项实际通过，覆盖六尺寸、832项检查和同步通知边界；可用`--verify-terminal-workspace --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`运行专项，详见[终端工作区记录](docs/codex/apple-experience/A08_TERMINAL_WORKSPACE.md)。保留测试编译/报告失败、旧产品红、陈旧编译物及最小窗口末字裁剪的原记录；此项不代表物理键鼠、真实ADB终端/文本/文件、DPI、应用GUI安装卸载或最终双实例30分钟均已通过。
 
+文本页加载文件时会保留请求之后新编辑的草稿，包括改后又改回原值的情况；旧读取失效显示停止，不误报替换成功。原粘贴、加载、单/多目标发送及发送后保留草稿的行为不变，三个原动作采用局部44逻辑点击区域。独立候选和主仓各235项、MCP演示14项及15组自有WPF/Demo专项通过，包含六尺寸、227项检查、真实本地文件和Demo节点回读；入口为`--verify-text-workspace --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`，详见[文本工作区记录](docs/codex/apple-experience/A08_TEXT_WORKSPACE.md)。原失败和测量夹具修正均保留；原生文件选择器/剪贴板、物理输入、DPI、真实ADB中文及任意I/O交错仍未验，真实ADB的控制字符限制未改变。
+
 完整文件清单见 `PROJECT_TREE.md`；全部源码文本见 `SOURCE_BUNDLE.md`；对应文件摘要见 `SOURCE_MANIFEST.json`。这三个文件由 `tools/New-SourcePackage.ps1` 生成，源码 ZIP 位于 `artifacts/`。
 
 全面验收与界面重设计正在按[当前计划](plan.md)实施；目标、技术边界、视觉/命名及依赖任务分别见[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[UI规格](docs/UI_SPEC.md)、[任务表](docs/TASKS.md)。当前测试范围见[功能矩阵](docs/codex/apple-experience/TEST_MATRIX.md)、[逐控件目录](docs/codex/apple-experience/CONTROL_CATALOG.md)和[问题清单](docs/codex/apple-experience/DEFECTS.md)，进展见[阶段记录](docs/PROGRESS.md)。已修复主控A/当前B时投屏错目标的代码路径，增加主控身份与进程所有权守卫，见[A02独立离线验收](docs/codex/apple-experience/A02_MAIN_TARGET.md)；真实外部投屏仍待验。这是进行中的工作，149项和三尺寸Demo不代表本轮全功能/实机/窄屏已通过。

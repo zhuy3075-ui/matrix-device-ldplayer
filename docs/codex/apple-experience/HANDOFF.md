@@ -2,7 +2,19 @@
 
 更新：2026-10-17。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 最新执行：A08c终端与双实例只读补验
+## 当前执行：A08d文本工作区
+
+- 前一终端功能确已推c63b0e9af17bcca0d0f1740a114ba930dcec964f，提交后独审过，test49e471保持；不要重做旧终端交付。上一状态答复已轮询Main/session49344自然0并实际读取报告，属于取得终态证据，不是仍有活进程。
+- 规格、全部失败链与完整SHA见[A08d](A08_TEXT_WORKSPACE.md)。本轮只文本加载所有权及原三按钮44/六尺寸，TextCommand原发送不清草稿且action内快照，全文未改。AP073/074文件绑定单独后继，不混本次。
+- 三树均c63 detached。旧生产是原lambda等价提取VM85514998…BBF91/View5BC6148C…1702F，不是未经改动c63；旧red-r01的768额外摘要叶为Ideal/Display测量错误，其它六组32按钮及B/ABA覆盖是真红。仅测试FormattedText构造改实际mode，不改内容/阈值/断言，r02同旧生产7PASS/8纯PRODUCT，原r01及编译/夹具失败全部保留；不重跑。
+- 精确四源：VM C55A101D…E0CD5/72360B，TextView DD314D4A…BDD06/1697B，App A8377232…FABD4F/26563B，新Smoke5AE998FA…5A4E0C/44945B。原235断言和31旧Smoke不变，其余190旧输入保持。Green runner06B2EA68…FC548/合同286EF675…1E774固定；候选Green-r01/session73418自然0且两独审已批准Main，15PASS/227检查/495Task、235/MCP14+13NOTRUN/三拒参四PDB及清理均过。
+- Main精确拷源后写import记录误用NoClobber在首Build前失败，toolChunk8e4a74保持；核旧备份/190/旧255/用户3/11proof后只CreateNew补记录、不重拷。唯一实际Main-r01/session49344自然0：Build child53496/115108ms、专项48232/3101ms；15PASS/227/495终态、15唯一Shutdown/Closed和0窗口/retained，235/MCP14+13、三拒参四PDB/194源255新冻结通过。executionAAC5B69E…2092D0/after197DD7A4…396B2/reportFDCEEFAE…136850；合法重建后不再对照旧255。
+- Main业务/六图和原流/PDB/源与保护实际双独审均过。当前源码已集成且已构建，所有必需exec终态；下一门仅正式文档/完整核包/精确14路径index独审、原private feature单功能普通push和回执后审。实际是否已交付看Git和新`artifacts/text-workspace/push-complete.json`，无回执不先称成功；不得重Build或重跑旧红绿。
+- README、TASKS、矩阵TEXT-WORKSPACE和缺陷AP072/075/076按有限通过更新，TEXT-01完整行仍NOT-RUN。用户配置和两英文PNG不提交，原始证据/依赖/APK留本地；源码包继承82份tracked验收材料，AP021分类开放，不声称净化。Package前预检恰为tracked范围加新Smoke/新报告，最后只三生成文件合法变化。
+- 真实后继需fresh版本/身份/epoch/1、2 Ready及admission，禁止直接整段旧LiveUiAcceptance或CLI core/io-api（旧抖音前置）。VM Shell/下载是Current，Text/上传是Targets，不由同步开关决定。真实ADB拒控制字符，Demo多行不是实机能力。不恢复已停止的官方capture/错误几何分支。
+- 完整GUI/DPI、原生picker/Clipboard、实际终端/文本/文件、应用GUI安装卸载、完整RPA/MCP/抓包和最终双实例30分钟仍开放；当前约13工作块不按局部用例数扣减，完整goal保持active。
+
+## 上轮执行：A08c终端与双实例只读补验
 
 - 起点为已推送ab6c7455179ab55279ffd0aa2d3734c3f52f27dd，test49e471保持；不重做下方A09旧待交付门。当前仅四源：VM9C90C730…A5096、ShellView388AA59E…3239A、App0FD5CCB3…71964、新SmokeBE3BCF44…562AF；其余189原构建输入/旧30Smoke不动，无Host/真实配置/模拟器变更。
 - [A08c报告](A08_TERMINAL_WORKSPACE.md)保留完整原失败链：测试编译、报告字段、有效旧3PASS/9PRODUCT、首候选陈旧PDB前置失败及最小窗口末字红。最终r05夹具不改原断言；先setter通知前版本/方法入口快照，再仅按证据增加Pixel滚动，原绑定/命令/历史/写入门禁/虚拟化保持。AP067至070为本轮记录。

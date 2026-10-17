@@ -14,6 +14,14 @@ public partial class App : Application
         base.OnStartup(e);
         try
         {
+            if (e.Args.Contains("--verify-text-workspace", StringComparer.OrdinalIgnoreCase))
+            {
+                var textDirectory = ValidateTextWorkspaceArguments(e.Args);
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                await MatrixDevice.Desktop.MainWindow.RunTextWorkspaceVerificationAsync(textDirectory, Dispatcher);
+                Shutdown(0);
+                return;
+            }
             if (e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase))
             {
                 ValidateLayoutArguments(e.Args, "--verify-terminal-workspace", "终端工作区");
@@ -234,7 +242,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-settings-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
+            if (e.Args.Contains("--verify-text-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-settings-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(ex);
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -252,6 +260,26 @@ public partial class App : Application
             catch (Exception cleanupError) { Console.Error.WriteLine("启动失败后的资源清理异常：" + cleanupError); }
             finally { Shutdown(1); }
         }
+    }
+
+    private static string ValidateTextWorkspaceArguments(string[] args)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < args.Length; index++)
+        {
+            var key = args[index];
+            if (!new[] { "--verify-text-workspace", "--demo", "--data-dir" }.Contains(key, StringComparer.OrdinalIgnoreCase) || values.ContainsKey(key))
+                throw new ArgumentException("PRECONDITION-FAIL: 文本工作区参数未知、混用或重复：" + key);
+            if (!key.Equals("--data-dir", StringComparison.OrdinalIgnoreCase)) { values.Add(key, null); continue; }
+            if (++index >= args.Length || args[index].StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("PRECONDITION-FAIL: --data-dir 缺少值。");
+            values.Add(key, args[index]);
+        }
+        if (!values.ContainsKey("--demo") || !values.TryGetValue("--data-dir", out var directory) || directory is null || !Path.IsPathFullyQualified(directory))
+            throw new ArgumentException("PRECONDITION-FAIL: 文本工作区必须显式指定 --demo 与 artifacts 下独立绝对 --data-dir。");
+        directory = Path.GetFullPath(directory);
+        if (!directory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || Directory.Exists(directory) || File.Exists(directory))
+            throw new ArgumentException("PRECONDITION-FAIL: 文本工作区必须使用 artifacts 下尚不存在的独立目录：" + directory);
+        return directory;
     }
 
     private static void ValidateLayoutArguments(string[] args, string mode, string context)

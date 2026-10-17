@@ -1,5 +1,13 @@
 # 当前目标阶段记录
 
+## 2026-10-17 / A08d文本工作区
+
+- Goal/Context：上一终端功能已实际推c63b0e9，提交后独审通过；保留完整目标，从当前TextView/FilesView及原VM门禁盘点，不重做旧交付。
+- Decision/Files：先分离文本加载草稿丢失与文件两项绑定问题；后者AP073/074仅登记待复现。独立两源等价提取获审，再用严格Demo入口及新正式TextWorkspaceSmoke对照；不删除三按钮或批量目标，不改变原发送。
+- Verification：旧red-r01保留六尺寸32按钮、B/ABA覆盖及额外768度量假阳性；r02仅修实际FormattingMode，不改内容/阈值/断言，同旧生产7PASS/8纯产品红。独立Green-r01及主仓唯一Main-r01/session49344均自然0，各原235/MCP14+13未验、三拒参/四PDB、15PASS/227检查/495Task终态及15唯一Shutdown/Closed、窗口/retained0。详情见[A08d](codex/apple-experience/A08_TEXT_WORKSPACE.md)。
+- Verification：主仓Build115108ms/专项3101ms，execution AAC5B69E…2092D0、report FDCEEFAE…136850；导入记录误用NoClobber在首Build前失败已单独保留，修记录不重拷源/不重跑。候选和主仓均获业务/六图及原流/PDB/保护双独审通过；后继只文档/核包/index审与原private feature单功能push，以Git和新回执为准。
+- Next/Risks：仅VM/TextView及App/新Smoke四源，原发送/目标/控制字符限制不变；AP073/074文件绑定另验。原生picker/Clipboard、物理GUI/DPI、真实终端/文本/文件、应用GUI、RPA/MCP/抓包和最终双30分钟仍必需，约13块/完整目标active。
+
 ## 2026-10-17 / A08c对照与双实例当前状态
 
 - Goal/Context：上一A09b2已实际推ab6c745，核包/独审/回执完成，不重做旧门；继续完整目标，先核当前应用前置及终端草稿覆盖候选。
