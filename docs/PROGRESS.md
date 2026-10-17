@@ -1,5 +1,14 @@
 # 当前目标阶段记录
 
+## 2026-10-17 / A08c对照与双实例当前状态
+
+- Goal/Context：上一A09b2已实际推ab6c745，核包/独审/回执完成，不重做旧门；继续完整目标，先核当前应用前置及终端草稿覆盖候选。
+- Verification：唯一实机只读session4936自然0，两专用实例各17步骤、七固定shell/38list2及身份链通过；六child/十二raw排空，192输入/255产物/用户3/API5+5原件保持，23目录业务字段和共享owner/注册表采样一致。两台CMFA未观察到、ARM64仅候选；非安装/GUI/主页通过，见[A07](codex/apple-experience/A07_CMFA_APPLICATIONS.md)。非实施者已实读原流及效果独审。
+- Decision/Files：仅VM9C90、ShellView388A及严格App0FD5/新SmokeBE3四源；原row/Trim/写入门禁、命令/历史/绑定保持。实际编辑版本在通知前记录、方法入口捕获，修原历史键监听，长内容换行/有限输出及有证据的Pixel滚动。规格、取舍、全时序见[A08c](codex/apple-experience/A08_TERMINAL_WORKSPACE.md)，AP067至070跟踪。
+- Verification：两次测试编译/报告错误、有效旧红3PASS/9PRODUCT、首候选陈旧PDB前置和390×640末字产品红全部保留；同r05最终独立Green-r03及主仓唯一Main-r01各235、MCP14/13NOTRUN、三拒参四PDB、12PASS/832检查/1615登记Task终态及十二清理。root误判Close已由独审纠正，不加重复关闭；不修改原业务断言取绿。
+- Verification：主仓session37320已自然0，Build115274ms/专项6419ms，execution4763D511…33795、报告85E7DDD3…D351C；全部必要exec终态，无窗口/retained，四源精确/其余189输入保持。独立原流终审及源包/index审为交付门，是否已推原private feature读Git和terminal-workspace/push-complete.json，不合并发布。
+- Next/Risks：本项仅自有WPF/Demo，图是client Render，不是桌面捕获/物理键鼠/DPI。继续真实终端/文本/文件、应用GUI生命周期、其余页面、RPA/MCP/抓包与最终双实例30分钟，约13工作块不按局部用例数扣减；AP042/AP045无新外部条件变化不重跑，AP021历史材料分类仍开放。
+
 ## 2026-10-17 / A09b2接口工作区
 
 - Goal/Context：上一接口启动修复已推29e4037，不重复交付；继续原接口页控件、失败反馈、请求归属与六尺寸正文，保留同一Runtime、五命令和六列，不操作真实设备、代理或账号。

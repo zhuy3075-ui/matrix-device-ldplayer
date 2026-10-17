@@ -14,6 +14,19 @@ public partial class App : Application
         base.OnStartup(e);
         try
         {
+            if (e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase))
+            {
+                ValidateLayoutArguments(e.Args, "--verify-terminal-workspace", "终端工作区");
+                if (e.Args.Any(arg => arg.Equals("--width", StringComparison.OrdinalIgnoreCase) || arg.Equals("--height", StringComparison.OrdinalIgnoreCase) || arg.Equals("--screenshot", StringComparison.OrdinalIgnoreCase)))
+                    throw new ArgumentException("终端工作区验收使用固定六尺寸，不接受尺寸或截图参数。");
+                var terminalIndex = Array.FindIndex(e.Args, arg => arg.Equals("--data-dir", StringComparison.OrdinalIgnoreCase));
+                var terminalDirectory = Path.GetFullPath(e.Args[terminalIndex + 1]);
+                if (Directory.Exists(terminalDirectory) || File.Exists(terminalDirectory)) throw new ArgumentException("终端工作区验收必须使用尚不存在的独立 artifacts 目录。");
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                await MatrixDevice.Desktop.MainWindow.RunTerminalWorkspaceVerificationAsync(terminalDirectory, Dispatcher);
+                Shutdown(0);
+                return;
+            }
             if (e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase))
             {
                 ValidateLayoutArguments(e.Args, "--verify-api-workspace", "接口工作区");
@@ -221,7 +234,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-settings-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
+            if (e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-settings-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(ex);
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;

@@ -36,6 +36,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     private AndroidNode? nodeRoot;
     private NodeRow? selectedNode;
     private string shellInput = "";
+    private long shellInputRevision;
     private string textInput = "";
     private string remotePath = "/sdcard/MatrixExchange/";
     private bool transferring;
@@ -170,7 +171,11 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     public BitmapSource? DebugImage { get => debugImage; private set => Set(ref debugImage, value); }
     public NodeRow? SelectedNode { get => selectedNode; set { Set(ref selectedNode, value); Changed(nameof(NodeProperties)); NodeSelectionChanged?.Invoke(); } }
     public string NodeProperties => SelectedNode is { } row ? JsonSerializer.Serialize(row.Source with { ChildNodeList = [] }, JsonDefaults.Options) : "未选中节点";
-    public string ShellInput { get => shellInput; set { Set(ref shellInput, value); RefreshCommands(); } }
+    public string ShellInput
+    {
+        get => shellInput;
+        set { if (shellInput != value) shellInputRevision++; Set(ref shellInput, value); RefreshCommands(); }
+    }
     public string TextInput { get => textInput; set { Set(ref textInput, value); RefreshCommands(); } }
     public string RemotePath { get => remotePath; set => Set(ref remotePath, value); }
     public bool Transferring { get => transferring; private set { Set(ref transferring, value); SyncApiWriteGuard(); RefreshCommands(); Changed(nameof(HasActiveOperations)); } }
@@ -677,25 +682,29 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         await File.WriteAllBytesAsync(path, memory.ToArray());
     });
 
-    public Task ExecuteShellAsync() => ExecuteAsync("执行 Shell", async () =>
+    public Task ExecuteShellAsync()
     {
-        var row = CurrentDevice ?? throw new InvalidOperationException("未选择设备");
-        var command = ShellInput.Trim();
-        if (command.Length == 0) return;
-        if (ScriptBusy(row.Serial)) throw new DeviceException("设备正在执行脚本");
-        using var write = runtime.Writes.Acquire([row.Serial]);
-        try
+        var revision = shellInputRevision;
+        return ExecuteAsync("执行 Shell", async () =>
         {
-            var output = await runtime.Backend.ShellAsync(row.Serial, command);
-            ShellHistory.Insert(0, new ShellEntry(ShellHistory.Count + 1, DateTime.Now.ToString("HH:mm:ss"), command, output, row.Serial));
-        }
-        catch (Exception ex)
-        {
-            ShellHistory.Insert(0, new ShellEntry(ShellHistory.Count + 1, DateTime.Now.ToString("HH:mm:ss"), command, "执行失败：" + PresentError(ex), row.Serial));
-            throw;
-        }
-        finally { ShellInput = ""; }
-    }, blocksApiWrites: false);
+            var row = CurrentDevice ?? throw new InvalidOperationException("未选择设备");
+            var command = ShellInput.Trim();
+            if (command.Length == 0) return;
+            if (ScriptBusy(row.Serial)) throw new DeviceException("设备正在执行脚本");
+            using var write = runtime.Writes.Acquire([row.Serial]);
+            try
+            {
+                var output = await runtime.Backend.ShellAsync(row.Serial, command);
+                ShellHistory.Insert(0, new ShellEntry(ShellHistory.Count + 1, DateTime.Now.ToString("HH:mm:ss"), command, output, row.Serial));
+            }
+            catch (Exception ex)
+            {
+                ShellHistory.Insert(0, new ShellEntry(ShellHistory.Count + 1, DateTime.Now.ToString("HH:mm:ss"), command, "执行失败：" + PresentError(ex), row.Serial));
+                throw;
+            }
+            finally { if (revision == shellInputRevision) ShellInput = ""; }
+        }, blocksApiWrites: false);
+    }
 
     public Task LoadAppsAsync() => ExecuteAsync("读取应用列表", async () =>
     {

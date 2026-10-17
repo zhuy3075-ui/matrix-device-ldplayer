@@ -22,13 +22,17 @@ public partial class MainWindow
     private FrameworkElement BuildShellPage()
     {
         var page = Page();
-        var toolbar = Toolbar(); var input = BoundInput(nameof(WorkspaceViewModel.ShellInput)); input.Width = 470; input.FontFamily = new FontFamily("Consolas"); input.KeyDown += ShellHistoryKey; toolbar.Children.Add(input); toolbar.Children.Add(Button("\uE768", "执行", ViewModel.ShellCommand));
+        var toolbar = Toolbar(); var input = BoundInput(nameof(WorkspaceViewModel.ShellInput)); input.Width = 470; input.MinHeight = 44; input.FontFamily = new FontFamily("Consolas");
+        input.AddHandler(Keyboard.KeyDownEvent, new KeyEventHandler(ShellHistoryKey), handledEventsToo: true);
+        var execute = Button("\uE768", "执行", ViewModel.ShellCommand); execute.MinHeight = 44; toolbar.Children.Add(input); toolbar.Children.Add(execute);
         DockPanel.SetDock(toolbar, Dock.Top); page.Children.Add(toolbar);
         var history = new ListBox { ItemsSource = ViewModel.ShellHistory, BorderThickness = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 10, 0, 0) };
+        ScrollViewer.SetHorizontalScrollBarVisibility(history, ScrollBarVisibility.Disabled);
+        VirtualizingPanel.SetScrollUnit(history, ScrollUnit.Pixel);
         var panel = new FrameworkElementFactory(typeof(StackPanel)); panel.SetValue(MarginProperty, new Thickness(0, 0, 0, 15));
-        var command = new FrameworkElementFactory(typeof(TextBlock)); command.SetBinding(TextBlock.TextProperty, new Binding(nameof(ShellEntry.Command))); command.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold); command.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Consolas")); panel.AppendChild(command);
-        var time = new FrameworkElementFactory(typeof(TextBlock)); time.SetBinding(TextBlock.TextProperty, new Binding(nameof(ShellEntry.Context))); time.SetValue(TextBlock.ForegroundProperty, Brushes.Gray); panel.AppendChild(time);
-        var output = new FrameworkElementFactory(typeof(TextBox)); output.SetBinding(TextBox.TextProperty, new Binding(nameof(ShellEntry.Output))); output.SetValue(TextBox.IsReadOnlyProperty, true); output.SetValue(TextBox.TextWrappingProperty, TextWrapping.Wrap); output.SetValue(TextBox.AcceptsReturnProperty, true); output.SetValue(FontFamilyProperty, new FontFamily("Consolas")); panel.AppendChild(output); history.ItemTemplate = new DataTemplate { VisualTree = panel };
+        var command = new FrameworkElementFactory(typeof(TextBlock)); command.SetBinding(TextBlock.TextProperty, new Binding(nameof(ShellEntry.Command))); command.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold); command.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Consolas")); command.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap); panel.AppendChild(command);
+        var time = new FrameworkElementFactory(typeof(TextBlock)); time.SetBinding(TextBlock.TextProperty, new Binding(nameof(ShellEntry.Context))); time.SetValue(TextBlock.ForegroundProperty, Brushes.Gray); time.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap); panel.AppendChild(time);
+        var output = new FrameworkElementFactory(typeof(TextBox)); output.SetBinding(TextBox.TextProperty, new Binding(nameof(ShellEntry.Output))); output.SetValue(TextBox.IsReadOnlyProperty, true); output.SetValue(TextBox.TextWrappingProperty, TextWrapping.Wrap); output.SetValue(TextBox.AcceptsReturnProperty, true); output.SetValue(FontFamilyProperty, new FontFamily("Consolas")); output.SetValue(MinHeightProperty, 64d); output.SetValue(MaxHeightProperty, 240d); output.SetValue(TextBox.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto); panel.AppendChild(output); history.ItemTemplate = new DataTemplate { VisualTree = panel };
         history.MouseDoubleClick += (_, _) => { if (history.SelectedItem is ShellEntry entry) ViewModel.ShellInput = entry.Command; }; page.Children.Add(history); return page;
     }
 

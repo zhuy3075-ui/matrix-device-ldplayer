@@ -91,3 +91,25 @@ l01结束时安装保留在专用实例1，原台账`owned=true`、`PENDING-MANU
 五个子进程全终结、自有测试进程0；23实例目录采样字段前后相同（除本地generation）、ADB owner62248/birth/path/hash及transport8、146输入与主配置保持；不是所有实例数据或中间变化的绝对证明。原始步骤、PM、活动、批次进度和ledger在本机`.worktrees/app-preflight-verifier/artifacts/app-preflight-verifier/lifecycle-l01`，均不上传。正式summary SHA `C7F88DD881147EBC8AF58810E68A4D03E6D472584FB75645B4E472EDC74E5CA2`；ledger SHA `0D815ED2C25D0E2388B224EE1A49FB704D473E1982ACB9FACFB9B5B500B19AE6`；独立audit SHA `85BCAC09665F7692DC87E82AA02CBDBD10D0C5F10326C6099E8FFCFCA93007EF`。
 
 AP-003仍开放，AP-036跟踪首次权限页前置；单实例共享停止/卸载只由后续独立c01证明，实例2、双实例同步、实际应用GUI及最终版本双实例30分钟不得由本轮关闭。提交仅正式测试及脱敏报告/清单，不包含APK、target/ledger原件、本机配置、依赖或原始证据，不合并发布。
+
+## ab6基线双实例只读补验
+
+2026-10-17，基线ab6c745、终端新版本构建之前。此前c01的owned=false不能证明本次包状态，也不能重新授权卸载。此次使用当时主仓现有编译物和原正式`--application-preflight`入口，对两台已运行、配置明确授权且名称符合专用范围的实例分别执行一次；没有重新构建，也没有重跑235项来凑本次成绩。
+
+新manifest来自本轮实际目录、授权映射、原生进程出生与真实Ready transport，正式入口再核socket owner epoch、VBox端口归属和连接身份；不按实例编号推算串号。只调用既有SDK和主机只读脚本，不运行外部ADB客户端，不启动/关闭实例、安装/启停/卸载APP、导入台账或处理权限/VPN/代理。已知初始化也会读取getprop、wm size和dumpsys input，严格transport后置门禁之前的只读窗口仍然存在，不能宣称身份变化时零guest读取。
+
+| 用例 | 实例1 | 实例2 | 结论边界 |
+|---|---|---|---|
+| 原正式只读预检 | 17步骤通过，进程自然0/2553ms | 17步骤通过，进程自然0/2577ms | 两台本次真实读取，不是GUI或生命周期 |
+| 启动与SDK | boot=1、SDK34 | boot=1、SDK34 | 该次读取时已就绪，不是冷启动测试 |
+| ABI与native bridge | 广告含arm64-v8a，libhoudini.so | 广告含arm64-v8a，libhoudini.so | NATIVE-ABI-CANDIDATE-NOT-INSTALL-VERIFIED，不证明原生ARM CPU或APK兼容 |
+| 普通及-u全用户包查询 | 均未观察到CMFA | 均未观察到CMFA | 不证明任意磁盘数据绝对不存在，也不授予后续清理所有权 |
+| 安装、启动、停止、卸载、GUI | 全部NOT-RUN | 全部NOT-RUN | 不补签旧l01主页FAIL、AP-036或应用GUI |
+
+外层唯一session4936已由root原句柄确认自然exit0；六个子进程均自然0，十二份原始双流实际摘要/长度匹配，无timeout、kill、清理错误或retained owner。每台七条固定只读shell、38次list2及124条身份记录逐项核对；完整23行目录的采样业务字段（仅排除本地generation）、共享服务epoch/注册目录和两专用原生身份前后一致。该结果只证明这些采样字段，不外推所有数据或中间状态。
+
+独立审查实际核192构建输入、255完整产物、用户三文件和API两阶段各五份原证据均与本轮基线及before/after相同；正式两源PDB checksum与当前源码匹配。四个既有owner函数仅把本轮执行预算300秒派生为240秒，其余Process/原句柄/双流/retained逻辑未改。模式自身180秒取消并非严格墙钟，每子进程240秒外层观察、5秒退出及每流10秒排空，零自动重试。
+
+原始证据仅在独立app-current-readonly树的ignored artifacts/app-current-readonly/live-r01，正式报告不包含target、原生PID/ticks、完整路径或配置原文：execution SHA256为`D83EBC4A10283D1C7AB91495F11B53827531414C97080E0B67A32A4D5611CC8E`，after为`5171FC4A27054D816305B197647B4E43625967CBE87F18FA361BC8CC8442F05A`；实例1 summary为`849E7DE7F1A5275C92E10F86D65ED2BF7802B9930D44870CD354A6636A0BB732`，实例2为`1774D3C983DE96E17B8A970D39D3AC621179CD0B7908D4426C8B3A62AFAF999D`。非实施者已实际核原流、身份、helper派生及保护，限定允许该只读结论，不批准安装/GUI/全目标验收。
+
+本次ab6基线两台安装前置已获得新证据，不外推之后的包状态或后继完整版本；应用GUI、实际安装兼容/主页、双实例应用差异化和最终版本30分钟仍必需。官方Windows GUI观察/输入分支缺少新的外部条件变化，保持AP042/AP045失败及后继NOT-RUN，不重复旧截图或使用外部UIA/Win32/SendInput绕过；继续其它安全真实路径与页面修复。

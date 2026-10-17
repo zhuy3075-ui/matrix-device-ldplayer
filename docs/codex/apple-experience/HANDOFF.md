@@ -2,7 +2,17 @@
 
 更新：2026-10-17。完整目标仍active，未达到全功能、全控件、真实设备、六尺寸和最终稳定性完成门槛；不要调用complete或把离线通过换算为实机通过。
 
-## 最新执行：A09b2接口工作区
+## 最新执行：A08c终端与双实例只读补验
+
+- 起点为已推送ab6c7455179ab55279ffd0aa2d3734c3f52f27dd，test49e471保持；不重做下方A09旧待交付门。当前仅四源：VM9C90C730…A5096、ShellView388AA59E…3239A、App0FD5CCB3…71964、新SmokeBE3BCF44…562AF；其余189原构建输入/旧30Smoke不动，无Host/真实配置/模拟器变更。
+- [A08c报告](A08_TERMINAL_WORKSPACE.md)保留完整原失败链：测试编译、报告字段、有效旧3PASS/9PRODUCT、首候选陈旧PDB前置失败及最小窗口末字红。最终r05夹具不改原断言；先setter通知前版本/方法入口快照，再仅按证据增加Pixel滚动，原绑定/命令/历史/写入门禁/虚拟化保持。AP067至070为本轮记录。
+- 独立Green-r03 session47954及主仓唯一Main-r01 session37320均已自然0，各235/MCP14+13NOTRUN/三拒参四PDB、12PASS/832检查/1615登记Task终态，十二唯一Shutdown/Closed、窗口/retained0。独立候选已获原流与六图审，主仓原件终审及源包/index审为交付门；全部必需exec已终态，勿重Build或重跑旧红。PNG仅client Render，非物理GUI/DPI。
+- 主仓Build115274ms/专项6419ms，execution4763D511C174B433A38EF0121C3554B06004707507F4F8A9E5B59CBD5A233795、报告85E7DDD3F4C89165DFCEC8E86586E3B005C29157EFE68974E0053FB0691D351C。实际source193/完整产物255冻结，user3与API5proof始终保护；正式文档可更新。精确复制源须提高mtime并核实际PDB，不能把旧编译物当新候选通过。
+- ab6基线真实双实例只读补验已获独审，两台各17步，CMFA普通及-u未观察到、ARM64仅候选；见[A07](A07_CMFA_APPLICATIONS.md)，不是后继当前应用状态或安装/GUI/全目标通过。没有台账导入/安装/权限/VPN/代理/外部ADB/共享服务重启，原始身份和原流留ignored。
+- 本轮交付只允许相关四源、README/正式报告与任务、三生成清单，经独审后正常推原private feature；完成与否读Git及`artifacts/terminal-workspace/push-complete.json`，不合并发布或清理worktree。用户配置/两PNG不提交，本轮原始证据不上传，AP021历史材料分类开放。完成代理后继用followup_task触发。
+- 下一步继续真实终端/文本/文件及其余页面、应用GUI生命周期、AP042/AP045、DPI/原生剪贴板、全RPA/MCP/抓包及最终双实例30分钟；约13工作块/完整goal仍active，不因终端局部通过扣整块。没有新的外部条件变化，不重复已停止官方capture/geometry输入分支。
+
+## 上轮执行：A09b2接口工作区
 
 - 上轮已实际提交推送29e4037298f6fac940d52df4cef72c19b6f21166，test49e471保持；旧A09b1“待交付”段落为历史，不重做。当前完整目标继续active。
 - 本轮仅四源：App72ECB、VM2C568、ApiView0760、正式ApiWorkspaceSmoke5AB076，主仓已按raw精确导入，其余188输入及旧29Smoke/原235断言未改；职责、假设、各轮问题与复验命令见[A09b2记录](A09_API_WORKSPACE.md)。没有改Host、真实配置或系统代理。
