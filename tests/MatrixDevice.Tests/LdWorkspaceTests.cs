@@ -19,12 +19,15 @@ public static class LdWorkspaceTests
         test("LD workspace coordinator serializes overlapping batches", OverlappingBatchesAsync);
         test("LD workspace create validates names before console calls", CreateValidationAsync);
         test("LD workspace create confirms one new index and never copies or deletes", CreateAsync);
+        test("LD workspace empty directory creates index zero once without starting it", CreatePrimaryAsync);
         test("LD workspace create retains a nonzero command warning after unique confirmation", CreateReportedFailureAsync);
         test("LD workspace create rejects ambiguous changes without retrying", CreateAmbiguityAsync);
         test("LD workspace create does not swallow cancellation or command timeouts", CreateInterruptionAsync);
         test("LD workspace configure validates all resource values before console calls", ConfigureValidationAsync);
         test("LD workspace configure requires fully stopped and current instances", ConfigurePreconditionsAsync);
         test("LD workspace configure sends only whitelisted resource parameters", ConfigureAsync);
+        test("LD workspace configures a current stopped index zero with the original resource whitelist", ConfigurePrimaryAsync);
+        test("LD workspace explicitly launches index zero once through the original coordinator", LaunchPrimaryAsync);
     }
 
     private static async Task LaunchValidationAsync()
@@ -33,7 +36,7 @@ public static class LdWorkspaceTests
         await using var service = new LdPlayerService(runner);
         var coordinator = new LdLaunchCoordinator(service);
         var resources = 0;
-        foreach (var indices in new[] { Array.Empty<int>(), new[] { 0 }, new[] { 99999 }, new[] { -1 }, new[] { 1, 1 }, new[] { 1, 0 } })
+        foreach (var indices in new[] { Array.Empty<int>(), new[] { -2 }, new[] { 99999 }, new[] { -1 }, new[] { 1, 1 }, new[] { 1, -1 } })
             await Expect(400, () => coordinator.StartAsync(indices, _ => { resources++; return Task.CompletedTask; }));
         Assert(runner.Calls.Count == 0 && resources == 0, "Invalid launch batch reached the console or resource callback.");
     }
@@ -59,7 +62,7 @@ public static class LdWorkspaceTests
         Assert(checkedIndices.SequenceEqual([1, 2]), "Resource estimates were not associated with each target instance.");
         Assert(result.Select(item => item.Index).SequenceEqual([1, 2]) && result.All(item => item.State == "ready"), "Sequential results were incomplete.");
         Assert(progress.Items.Any(item => item.State == "waiting") && result.All(item => item.Message.Contains("ADB", StringComparison.Ordinal)), "Progress incorrectly claimed guest readiness.");
-        Assert(!runner.Calls.Any(call => call.Contains("0") || call[0] is "adb" or "quit" or "quitall"), "Batch touched protected or global operations.");
+        Assert(!runner.Calls.Any(call => call.Contains("0") || call[0] is "adb" or "quit" or "quitall"), "Batch touched an unrequested target or global operation.");
     }
 
     private static async Task ConfirmationValidationAsync()
@@ -236,13 +239,53 @@ public static class LdWorkspaceTests
         Assert(runner.Count("add") == 1, "Nonzero add was blindly retried.");
     }
 
+    private static async Task CreatePrimaryAsync()
+    {
+        foreach (var reportedFailure in new[] { false, true })
+        {
+            var runner = new FakeConsole { AddReportsFailure = reportedFailure }; runner.Instances.Clear();
+            await using var service = new LdPlayerService(runner);
+            var result = await new LdInstanceEditor(runner, service).CreateAsync("空白零号");
+            Assert(result.Instance.Index == 0 && result.Instance.Name == "空白零号" && result.Instance.Generation > 0
+                && result.CommandReportedFailure == reportedFailure, "Empty directory did not confirm its unique new index zero or retain the original command warning.");
+            Assert(result.Message.Contains("未自动启动", StringComparison.Ordinal) && runner.Calls.Select(call => call[0]).SequenceEqual(["list2", "add", "list2"]), "Creation started, configured, retried or issued an unrelated operation.");
+            await Expect(409, () => new LdInstanceEditor(runner, service).CreateAsync("空白零号"));
+            Assert(runner.Count("add") == 1, "Existing index zero was mistaken for an absent target and duplicated.");
+        }
+    }
+
+    private static async Task ConfigurePrimaryAsync()
+    {
+        var runner = new FakeConsole(); runner.Instances.Clear(); runner.Instances.Add(new(0, "Primary"));
+        await using var service = new LdPlayerService(runner);
+        var editor = new LdInstanceEditor(runner, service);
+        var original = (await service.RefreshAsync()).Single();
+        var configuration = new LdInstanceConfiguration(2, 2048, 720, 1280, 240);
+        var result = await editor.ConfigureAsync(0, original.Generation, configuration);
+        Assert(result.Index == 0 && runner.Calls.Single(call => call[0] == "modify").SequenceEqual(["modify", "--index", "0", "--cpu", "2", "--memory", "2048", "--resolution", "720,1280,240"]), "Index zero configuration changed its target or resource whitelist.");
+        runner.Instances[0].Width++;
+        await Expect(409, () => editor.ConfigureAsync(0, original.Generation, configuration));
+        Assert(runner.Count("modify") == 1 && runner.Calls.All(call => call[0] is "list2" or "modify"), "Stale zero generation was configured or configuration launched an instance.");
+    }
+
+    private static async Task LaunchPrimaryAsync()
+    {
+        var runner = new FakeConsole(); runner.Instances.Clear(); runner.Instances.Add(new(0, "Primary"));
+        await using var service = new LdPlayerService(runner);
+        var resources = 0;
+        var result = await Coordinator(service).StartAsync([0], _ => { resources++; return Task.CompletedTask; });
+        Assert(resources == 1 && result.Single().Index == 0 && result.Single().State == "ready"
+            && runner.Calls.Count(call => call.SequenceEqual(["launch", "--index", "0"])) == 1, "Explicit zero launch did not preserve the original resource gate and single command.");
+        Assert(runner.Calls.All(call => call[0] is "list2" or "launch"), "Zero launch copied, removed or used a guest command.");
+    }
+
     private static async Task CreateAmbiguityAsync()
     {
-        var runner = new FakeConsole { AddExtraInstance = true };
+        var runner = new FakeConsole { AddExtraInstance = true }; runner.Instances.Clear();
         await using var service = new LdPlayerService(runner);
         await Expect(409, () => new LdInstanceEditor(runner, service).CreateAsync("B"));
         Assert(runner.Count("add") == 1 && runner.Count("remove") == 0, "Ambiguous creation retried or deleted data.");
-        var wrongNameRunner = new FakeConsole { CreatedNameOverride = "external" };
+        var wrongNameRunner = new FakeConsole { CreatedNameOverride = "external" }; wrongNameRunner.Instances.Clear();
         await using var wrongNameService = new LdPlayerService(wrongNameRunner);
         await Expect(409, () => new LdInstanceEditor(wrongNameRunner, wrongNameService).CreateAsync("B"));
         Assert(wrongNameRunner.Count("add") == 1, "Wrong-name creation was accepted or retried.");
@@ -250,12 +293,12 @@ public static class LdWorkspaceTests
 
     private static async Task CreateInterruptionAsync()
     {
-        var timedOut = new FakeConsole { AddReportsTimeout = true };
+        var timedOut = new FakeConsole { AddReportsTimeout = true }; timedOut.Instances.Clear();
         await using var timeoutService = new LdPlayerService(timedOut);
         await Expect(504, () => new LdInstanceEditor(timedOut, timeoutService).CreateAsync("B"));
         Assert(timedOut.Count("add") == 1 && timedOut.Count("list2") == 1, "Timed out creation issued more CLI commands.");
         using var cancellation = new CancellationTokenSource();
-        var cancelled = new FakeConsole { OnAdd = cancellation.Cancel };
+        var cancelled = new FakeConsole { OnAdd = cancellation.Cancel }; cancelled.Instances.Clear();
         await using var cancelledService = new LdPlayerService(cancelled);
         try { await new LdInstanceEditor(cancelled, cancelledService).CreateAsync("B", cancellation.Token); throw new InvalidOperationException("Create cancellation was ignored."); }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
@@ -270,7 +313,7 @@ public static class LdWorkspaceTests
         var valid = new LdInstanceConfiguration(2, 2048, 720, 1280, 240);
         foreach (var configuration in new[] { valid with { Cpu = 0 }, valid with { Cpu = 6 }, valid with { MemoryMb = 0 }, valid with { MemoryMb = 3072 }, valid with { Width = 0 }, valid with { Height = 100_000 }, valid with { Dpi = 0 } })
             await Expect(400, () => editor.ConfigureAsync(1, 1, configuration));
-        foreach (var index in new[] { 0, -1, 99999 }) await Expect(400, () => editor.ConfigureAsync(index, 1, valid));
+        foreach (var index in new[] { -2, -1, 99999 }) await Expect(400, () => editor.ConfigureAsync(index, 1, valid));
         await Expect(400, () => editor.ConfigureAsync(1, 0, valid));
         Assert(runner.Calls.Count == 0, "Invalid configuration reached the console.");
     }
@@ -367,7 +410,7 @@ public static class LdWorkspaceTests
             }
             else if (args[0] == "add")
             {
-                Instances.Add(new(Instances.Max(item => item.Index) + 1, CreatedNameOverride ?? args[2]));
+                Instances.Add(new(Instances.Count == 0 ? 0 : Instances.Max(item => item.Index) + 1, CreatedNameOverride ?? args[2]));
                 if (AddExtraInstance) Instances.Add(new(Instances.Max(item => item.Index) + 1, "external"));
                 OnAdd?.Invoke();
                 if (AddReportsTimeout) throw new DeviceException("雷电 CLI 超时：命令=add，结果未知", 504, 2000);

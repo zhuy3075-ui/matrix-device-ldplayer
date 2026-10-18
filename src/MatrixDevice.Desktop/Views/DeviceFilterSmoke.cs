@@ -95,7 +95,7 @@ public partial class MainWindow
                 ("单顶层HWND", stopped with { TopWindow = 1 }, null, false, "", "未知"), ("单绑定HWND", stopped with { BindWindow = 1 }, null, false, "", "未知"),
                 ("负顶层HWND", stopped with { TopWindow = -1 }, null, false, "", "未知"), ("负绑定HWND", stopped with { BindWindow = -1 }, null, false, "", "未知"),
                 ("安卓true无PID", stopped with { AndroidStarted = true }, "Ready", false, "", "未知"),
-                ("0保护优先", running with { Index = 0 }, "Ready", true, "已连接", "受保护"), ("99999保护优先", running with { Index = 99999 }, "Ready", true, "", "受保护"),
+                ("0正常连接状态", running with { Index = 0 }, "Ready", true, "已连接", "已连接"), ("99999保护优先", running with { Index = 99999 }, "Ready", true, "", "受保护"),
                 ("已核验连接", running, "Ready", true, "启动失败", "已连接"), ("rawReady未核验", running, "Ready", false, "已连接", "待连接"),
                 ("运行未发现Device", running, null, false, "", "待连接"), ("未知raw", running, "FutureState", false, "已连接", "未知"),
                 ("无实例rawReady未核验", null, "Ready", false, "", "未知"), ("无实例已核验", null, "Ready", true, "已取消", "已连接"),
@@ -156,10 +156,10 @@ public partial class MainWindow
             ("有效运行", running, null, false, "启动失败", "连接", "当前观察为安卓已启动。" + admission, false),
             ("已核验连接", running, device, true, "已取消", "调试", debug, true),
             ("已连接但启动标志矛盾", running with { IsStarting = true }, device, true, "", "调试", debug, true),
-            ("已连接保护编号仍走原调试分支", running with { Index = 0 }, device, true, "", "调试", debug, true),
+            ("已连接0走原调试分支", running with { Index = 0 }, device, true, "", "调试", debug, true),
             ("连接标记但Device为空", running, null, true, "", "接入", "当前状态尚未确认。" + admission, true),
             ("安卓标志但缺PID", running with { VBoxProcessId = 0 }, null, false, "", "接入", "当前状态尚未确认。" + admission, false),
-            ("未连接保护0", stopped with { Index = 0 }, null, false, "", "受保护", protectedDescription, false),
+            ("未连接正常0仍受Demo启动门禁", stopped with { Index = 0 }, null, false, "", "启动", "当前观察为已关闭。" + admission, false),
             ("未连接保护99999", stopped with { Index = 99999 }, null, false, "", "受保护", protectedDescription, false)
         };
         try

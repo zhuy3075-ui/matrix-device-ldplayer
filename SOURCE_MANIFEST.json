@@ -310,6 +310,11 @@
     "Sha256": "8e56306d6df33462bdc5202b4ba45bc5bbc48291ce1a56d1cb1f17c17a1d3f4a"
   },
   {
+    "Path": "docs/codex/primary-instance-creation.md",
+    "Bytes": 8152,
+    "Sha256": "053c91863698b1758ac9dfd3aca90fad703a77344db0157fcdab03c2bb311b9f"
+  },
+  {
     "Path": "docs/codex/realtime-monitoring/goal-prompt.md",
     "Bytes": 2844,
     "Sha256": "bfdd1925e33e7995f9e159f9d041f66a0765e43294f5893a7c9246ba15a8857b"
@@ -1011,8 +1016,8 @@
   },
   {
     "Path": "README.md",
-    "Bytes": 50686,
-    "Sha256": "c32f7664bbfc53f0151944e66cbe722fa1a94cae4901978611cfd91f88949162"
+    "Bytes": 51618,
+    "Sha256": "4766d90a3b1e3aa403ce9f4880a79b940ac3f750d5c4bbf3b2e5f9e9b65d5bb9"
   },
   {
     "Path": "src/MatrixDevice.Cli/MatrixDevice.Cli.csproj",
@@ -1106,13 +1111,13 @@
   },
   {
     "Path": "src/MatrixDevice.Core/LdPlayer/LdInstanceEditor.cs",
-    "Bytes": 7579,
-    "Sha256": "504fcdff738e20d1dafe1d6c0929dc0ff9892ea544703d53cb34fd8bf0aa971b"
+    "Bytes": 7588,
+    "Sha256": "8b83d82ec8b0593147c30379405f8d3c13eac363fc8c253353f9184ed1274b29"
   },
   {
     "Path": "src/MatrixDevice.Core/LdPlayer/LdLaunchCoordinator.cs",
-    "Bytes": 8824,
-    "Sha256": "e1f2bdb3dc116d32b7dbe128f239a7853db68ae6820748be960e31b8a4b43ce2"
+    "Bytes": 8810,
+    "Sha256": "24eb37efa9a5a821165fe767bae531d7ebe67931e5dcba3e335f9831500e44bd"
   },
   {
     "Path": "src/MatrixDevice.Core/LdPlayer/LdPlayerAdbBinding.cs",
@@ -1171,13 +1176,13 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/App.xaml.cs",
-    "Bytes": 31681,
-    "Sha256": "3540828e80fbe28f7380eec6325cd62c276f76e9570abe0223fcb0bd400a3195"
+    "Bytes": 32321,
+    "Sha256": "820b6912b4fdbb995494a56980d64766abb1afc9fb85340f69d1e0a5665d8930"
   },
   {
     "Path": "src/MatrixDevice.Desktop/LdWindowVisibility.cs",
-    "Bytes": 17303,
-    "Sha256": "d57ffddb16601b665eeac0458737087f6e60acadb7676ea3e20797c76b688201"
+    "Bytes": 17329,
+    "Sha256": "3f90be896b1a1104591c725f98a9897082321ce9cbc2642c140c066cec98cbe1"
   },
   {
     "Path": "src/MatrixDevice.Desktop/LocalizationService.cs",
@@ -1241,8 +1246,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/UnifiedDeviceRow.cs",
-    "Bytes": 5903,
-    "Sha256": "5ff28dc153b4432b93adc1b02dbdae04673417fa63517b4024ea918e30a5250a"
+    "Bytes": 5909,
+    "Sha256": "7981f40f0dee63fb1cf1a295152df36558e78cbfcae9d31ee8df3ba8d6a3d304"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/ApiView.cs",
@@ -1316,8 +1321,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/DeviceFilterSmoke.cs",
-    "Bytes": 20492,
-    "Sha256": "14e6878c85fbf76b6f8d62473ef9822da25f530c04a0ffd57e60ef32529cf4df"
+    "Bytes": 20524,
+    "Sha256": "2486fa5eb867d066bc3d6cfb15a86b831180ed6618c87cdbf68b8cdc79a14033"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/DeviceLayoutReportSmoke.cs",
@@ -1351,8 +1356,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/LdPlayerView.cs",
-    "Bytes": 9617,
-    "Sha256": "883458ba140708076b5ab7bce417415ca2de3b7441039c1e574293193c936924"
+    "Bytes": 9622,
+    "Sha256": "b718884a1f0b19e94bd0ea53b3a536568cf1843ecc940a529ceceba1940079e8"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/LdWindowVisibilitySmoke.cs",
@@ -1386,8 +1391,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/MonitorView.cs",
-    "Bytes": 34285,
-    "Sha256": "1281ed71d4e2b06e7f66ed1fde7b6f5edfb449f8f1cf4a78bff988720d39c86f"
+    "Bytes": 34297,
+    "Sha256": "6db27ef3bfc2e454b29bf93f90a9e6c792bae9bf1229dfbf7d2be217040647f2"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/NativeTargetSmoke.cs",
@@ -1521,8 +1526,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UnifiedDeviceActionsSmoke.cs",
-    "Bytes": 24781,
-    "Sha256": "0d25f34f4c697135c47661eae2977a0dc9f4afb7bc254c8e3a2ae22ca2ad0b56"
+    "Bytes": 36589,
+    "Sha256": "b750683a2822c238705741a8cb6395cc0c820e22f5281605c90f5f4e10a319dc"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UnifiedDevicesAcceptance.cs",
@@ -1531,8 +1536,8 @@
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UnifiedDevicesView.cs",
-    "Bytes": 32931,
-    "Sha256": "34246e4bad8b2bb57089bbfd967e673e0b0c2d2cefbacd99ab98a8990522b7c6"
+    "Bytes": 33110,
+    "Sha256": "8a364adc9a4d4e2f8584da4397bf30f9cbae3f387f142881a71ab46d1724b2f9"
   },
   {
     "Path": "src/MatrixDevice.Desktop/Views/UnifiedDeviceTile.cs",
@@ -1656,13 +1661,13 @@
   },
   {
     "Path": "src/MatrixDevice.Host/LdConnectionAdmission.cs",
-    "Bytes": 6542,
-    "Sha256": "81f55ae259ad6956e1303de50a6b218784ce1e027042d269743a0afe37130588"
+    "Bytes": 6628,
+    "Sha256": "815ed06413b603d55d260e9080c7ae47bfd52e30746816c9d16d7689fc5a271b"
   },
   {
     "Path": "src/MatrixDevice.Host/LdPlayer/LdLaunchMemory.cs",
-    "Bytes": 9026,
-    "Sha256": "e10798f1b0ac421f41d34cbe49b10d2e1bb43388e935288d922b1344003b36d2"
+    "Bytes": 9025,
+    "Sha256": "198f18dbba8786db9e223ef593d3396a895bf9f89c4db173201f029e6b134752"
   },
   {
     "Path": "src/MatrixDevice.Host/MatrixDevice.Host.csproj",
@@ -1671,18 +1676,18 @@
   },
   {
     "Path": "src/MatrixDevice.Host/MatrixRuntime.cs",
-    "Bytes": 18325,
-    "Sha256": "60c9232f0d2aefe6c846921422567268ed28c906368a468341a663ead5887553"
+    "Bytes": 18357,
+    "Sha256": "17cf4e1164882aad512a373792c6173622e046e1cd3451bd480e60c80ad2b5b6"
   },
   {
     "Path": "src/MatrixDevice.Host/Monitoring/LdRunningWindow.cs",
-    "Bytes": 6154,
-    "Sha256": "caa932fbaa02b3f9d9caf23e66a41d553b82a1c1a5ae1cf36ac845bc81918839"
+    "Bytes": 6153,
+    "Sha256": "c6e34c525a03b309b472773e6397e9082c8e9f65a030893f47925cc5d6ecf0a4"
   },
   {
     "Path": "src/MatrixDevice.Host/Monitoring/ResourceSampler.cs",
-    "Bytes": 12494,
-    "Sha256": "6876508b80a9e2a904e1293a7b4ecc59af2f3543e543eadc0c6b0c640c4080cf"
+    "Bytes": 12493,
+    "Sha256": "a55f4e7e4f3d59a84aee81f10d3570ec5c2e726643b28f464e08ec46ececca98"
   },
   {
     "Path": "src/MatrixDevice.Host/Monitoring/ScreenVideoSession.cs",
@@ -1846,18 +1851,18 @@
   },
   {
     "Path": "tests/MatrixDevice.Tests/LdLaunchMemoryTests.cs",
-    "Bytes": 17845,
-    "Sha256": "0914718f08d5c73bed8266bed34d5eb4daead1d8fb5b839b285f34937b594bdd"
+    "Bytes": 18716,
+    "Sha256": "173fd42e931c7b72842c7931b7c221de63c90b51c5ea5a20d98a7316dfebe2dd"
   },
   {
     "Path": "tests/MatrixDevice.Tests/LdRunningWindowTests.cs",
-    "Bytes": 6931,
-    "Sha256": "4aec0b4dfa2ec628ae29bc694b7a49954ad31369b614738ddcf8316743872e2d"
+    "Bytes": 6951,
+    "Sha256": "67e823397abcb905353b6fa559d3a83c447eb8ca7daff699d11b3d16405e7d60"
   },
   {
     "Path": "tests/MatrixDevice.Tests/LdWorkspaceTests.cs",
-    "Bytes": 24818,
-    "Sha256": "ae04d55a49321a5d5e97bfe3a501cfc85bf6f7da427880e6129d78f159b313bb"
+    "Bytes": 28461,
+    "Sha256": "6ece55ce21ce2a1e8470ec2bc98ba14d7fcf475c328a7c181e1c37eea15e1874"
   },
   {
     "Path": "tests/MatrixDevice.Tests/LiveAcceptance.cs",
@@ -1871,8 +1876,8 @@
   },
   {
     "Path": "tests/MatrixDevice.Tests/MonitorResourceTests.cs",
-    "Bytes": 14474,
-    "Sha256": "4d45e719ed8488790ae08e47ac887c32ec396f81ac2d5d4a9c01e99a276f3a23"
+    "Bytes": 15508,
+    "Sha256": "975870c5ba5fbc16ff6d2766dc47496c0af852d474675e89681501cdb7ec2ff8"
   },
   {
     "Path": "tests/MatrixDevice.Tests/MultiInstanceAcceptance.cs",
@@ -1886,8 +1891,8 @@
   },
   {
     "Path": "tests/MatrixDevice.Tests/Program.cs",
-    "Bytes": 86265,
-    "Sha256": "231377861eca8ea6ee57cd7e4bb37f6d2ff952ddf72054cb910a7067f175d6c7"
+    "Bytes": 89098,
+    "Sha256": "c9d7a9b3ed9c0df28eae72f35f34db84ea01b1162dfe3754a39aaa33c2d0ebe5"
   },
   {
     "Path": "tests/MatrixDevice.Tests/ScreenVideoTests.cs",

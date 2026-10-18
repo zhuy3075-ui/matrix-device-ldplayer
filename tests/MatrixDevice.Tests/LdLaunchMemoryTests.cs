@@ -10,6 +10,7 @@ internal static class LdLaunchMemoryTests
     public static void Register(Action<string, Func<Task>> test)
     {
         test("LD memory reads only the confirmed literal RAM key and leaves the configuration intact", ReadConfigurationAsync);
+        test("LD memory reads index zero configuration without invoking the console", ReadPrimaryConfigurationAsync);
         test("LD memory reads the same instance current machine RAM without guessing missing settings", MachineConfigurationAsync);
         test("LD memory rejects unsafe ambiguous and unsupported machine XML without leaking configuration", UnknownMachineConfigurationAsync);
         test("LD memory conflicting sources and invalid explicit RAM remain unknown", SourceConflictsAsync);
@@ -54,6 +55,17 @@ internal static class LdLaunchMemoryTests
             Assert(configuration.MemoryMb is null && !string.IsNullOrWhiteSpace(configuration.Warning), "Unknown RAM was guessed instead of warned.");
             Assert(!configuration.Warning!.Contains("PRIVATE_CONFIG_MUST_NOT_APPEAR", StringComparison.Ordinal) && !configuration.Warning.Contains(json, StringComparison.Ordinal), "Configuration contents leaked into its warning.");
         }
+        return Task.CompletedTask;
+    }
+
+    private static Task ReadPrimaryConfigurationAsync()
+    {
+        using var fixture = new MemoryFixture(0);
+        const string json = "{\"advancedSettings.memorySize\":2048}";
+        fixture.Write(json);
+        var configuration = LdLaunchMemory.ReadConfiguration(fixture.ConsolePath, 0);
+        Assert(configuration.MemoryMb == 2048 && configuration.Warning is null, "Normal index zero RAM was rejected.");
+        Assert(File.ReadAllText(fixture.ConfigurationPath) == json && new FileInfo(fixture.ConsolePath).Length == 0, "Index zero read changed configuration or executed the console.");
         return Task.CompletedTask;
     }
 
@@ -128,7 +140,7 @@ internal static class LdLaunchMemoryTests
     {
         using var fixture = new MemoryFixture();
         fixture.Write("{\"advancedSettings.memorySize\":2048}");
-        foreach (var input in new[] { ("", 2), ("ldconsole.exe", 2), (fixture.ConsolePath + '\0', 2), (fixture.ConsolePath, 0), (fixture.ConsolePath, -1), (fixture.ConsolePath, 99999), (fixture.ConsolePath, 1) })
+        foreach (var input in new[] { ("", 2), ("ldconsole.exe", 2), (fixture.ConsolePath + '\0', 2), (fixture.ConsolePath, -2), (fixture.ConsolePath, -1), (fixture.ConsolePath, 99999), (fixture.ConsolePath, 1) })
         {
             var configuration = LdLaunchMemory.ReadConfiguration(input.Item1, input.Item2);
             Assert(configuration.MemoryMb is null && !string.IsNullOrWhiteSpace(configuration.Warning), "Invalid or missing configuration did not remain unknown.");
@@ -211,11 +223,13 @@ internal static class LdLaunchMemoryTests
     private sealed class MemoryFixture : IDisposable
     {
         private readonly string directory = Path.Combine(Path.GetTempPath(), "MatrixDevice.Tests", "LdLaunchMemory", Guid.NewGuid().ToString("N"));
+        private readonly int index;
         public string ConsolePath => Path.Combine(directory, "ldconsole.exe");
-        public string ConfigurationPath => Path.Combine(directory, "vms", "config", "leidian2.config");
-        public string MachinePath => Path.Combine(directory, "vms", "leidian2", "leidian.vbox");
-        public MemoryFixture()
+        public string ConfigurationPath => Path.Combine(directory, "vms", "config", $"leidian{index}.config");
+        public string MachinePath => Path.Combine(directory, "vms", $"leidian{index}", "leidian.vbox");
+        public MemoryFixture(int index = 2)
         {
+            this.index = index;
             Directory.CreateDirectory(Path.GetDirectoryName(ConfigurationPath)!);
             File.WriteAllBytes(ConsolePath, []);
         }

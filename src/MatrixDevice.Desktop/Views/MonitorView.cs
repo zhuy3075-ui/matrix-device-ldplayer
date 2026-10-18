@@ -169,7 +169,7 @@ public partial class MainWindow
                 }
                 tile.Name.Text = row.Name;
                 tile.Subtitle.Text = instance is null ? row.Serial : $"实例 {instance.Index} · {row.Serial}";
-                var eligible = row.Connected && row.Device?.Info.Online == true && instance is { Index: > 0 and < 99999, AndroidStarted: true }
+                var eligible = row.Connected && row.Device?.Info.Online == true && instance is { Index: >= 0 and < 99999, AndroidStarted: true }
                     && runtime.Settings.AdbAllowedSerials.Contains(row.Serial, StringComparer.Ordinal) && LdInstanceConnected(instance.Index);
                 tile.Eligible = eligible;
                 tile.Open.IsEnabled = eligible;
@@ -179,7 +179,7 @@ public partial class MainWindow
                     await tile.StopAsync();
                     if (!Current()) return;
                     if (!eligible) tile.ClearUntrustedFrame();
-                    if (!tile.Failed) tile.State.Text = eligible ? monitorCompact ? "资源监控 · 视频已暂停" : "画面已暂停 · 不在可视区域" : instance?.Index == 0 ? "受保护 · 未监控" : !row.Connected ? "未连接" : "未授权视频";
+                    if (!tile.Failed) tile.State.Text = eligible ? monitorCompact ? "资源监控 · 视频已暂停" : "画面已暂停 · 不在可视区域" : instance?.Index is < 0 or 99999 ? "受保护 · 未监控" : !row.Connected ? "未连接" : "未授权视频";
                     continue;
                 }
                 if (tile.Session is not null || tile.Failed || ViewModel.Demo) continue;

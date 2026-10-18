@@ -72,6 +72,7 @@ MatrixDevice.Reconstructed/
 |   |   |-- list-console/
 |   |   |   |-- LIVE_RECHECK_2026-10-16.md
 |   |   |   +-- REPORT.md
+|   |   |-- primary-instance-creation.md
 |   |   |-- realtime-monitoring/
 |   |   |   |-- goal-prompt.md
 |   |   |   |-- HANDOFF.md

@@ -259,7 +259,7 @@ public sealed class LdWindowVisibility
     }
     private static void ValidateIndex(int index)
     {
-        if (index <= 0 || index == 99999) throw new DeviceException($"窗口隐藏只允许非零独立实例：{index}", 400, 1007);
+        if (index < 0 || index == 99999) throw new DeviceException($"窗口目标必须为有效实例，不能为负数或桌面编号：{index}", 400, 1007);
     }
     private static bool HasExited(int pid)
     {

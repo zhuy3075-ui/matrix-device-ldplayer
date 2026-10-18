@@ -20,7 +20,7 @@ public sealed class UnifiedDeviceRow : ObservableObject
     {
         get
         {
-            if (Index is 0 or 99999) return "受保护";
+            if (Index is < 0 or 99999) return "受保护";
             if (Instance is { } instance)
             {
                 if (instance.IsStarting) return "启动中";
@@ -51,13 +51,13 @@ public sealed class UnifiedDeviceRow : ObservableObject
     public string Dpi => Instance?.Dpi?.ToString() ?? "-";
     public string Generation => Instance?.Generation.ToString() ?? "-";
     public string Binding => Instance is null ? "-" : Connected ? Serial + "（已核验）" : string.IsNullOrWhiteSpace(configuredSerial) ? "尚未绑定" : configuredSerial + "（配置绑定，尚未核验）";
-    public bool CanSelect => Index is not (0 or 99999);
+    public bool CanSelect => Index is not (< 0 or 99999);
     public bool IsSelected
     {
         get => Device?.IsSelected ?? selected;
         set { if (!CanSelect) return; selected = value; if (Device is not null) Device.IsSelected = value; Changed(); }
     }
-    public string PrimaryLabel => Connected && Device is not null ? "调试" : Index is 0 or 99999 ? "受保护"
+    public string PrimaryLabel => Connected && Device is not null ? "调试" : Index is < 0 or 99999 ? "受保护"
         : FilterState == "已关闭" ? "启动" : Instance?.IsStarting == true ? "等待连接"
         : FilterState == "未知" ? "接入" : Instance?.AndroidStarted == true ? "连接" : "接入";
     private const string AdmissionDescription = "重新检查实例；明确关闭时尝试启动，过渡或信息不完整时等待，核验ADB、安卓启动与截图后连接；可能失败或超时。";

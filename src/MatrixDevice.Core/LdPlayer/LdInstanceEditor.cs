@@ -41,7 +41,7 @@ public sealed class LdInstanceEditor(ILdConsoleRunner runner, LdPlayerService se
             }
             var oldIndices = before.Select(instance => instance.Index).ToHashSet();
             var added = after.Where(instance => !oldIndices.Contains(instance.Index)).ToArray();
-            if (added.Length != 1 || added[0].Index <= 0 || added[0].Index == 99999 || added[0].Name != name || before.Any(instance => !after.Any(current => current.Index == instance.Index)))
+            if (added.Length != 1 || added[0].Index < 0 || added[0].Index == 99999 || added[0].Name != name || before.Any(instance => !after.Any(current => current.Index == instance.Index)))
             {
                 var observed = string.Join(", ", added.Select(instance => $"{instance.Index}:{instance.Name}"));
                 throw new DeviceException($"无法唯一确认新建实例：名称={name}，新增目录=[{observed}]；未重试、复制或删除实例，请刷新目录检查。" +
@@ -58,7 +58,7 @@ public sealed class LdInstanceEditor(ILdConsoleRunner runner, LdPlayerService se
     public async Task<LdPlayerCommandResult> ConfigureAsync(int index, long expectedGeneration,
         LdInstanceConfiguration configuration, CancellationToken ct = default)
     {
-        if (index <= 0 || index == 99999) throw new DeviceException($"资源配置不允许实例编号 {index}；原实例 0 与桌面编号受保护。", 400, 1007);
+        if (index < 0 || index == 99999) throw new DeviceException($"资源配置不允许实例编号 {index}；编号必须非负，不能为桌面编号99999。", 400, 1007);
         if (expectedGeneration <= 0) throw new DeviceException("expectedGeneration 必须为正整数。", 400, 1007);
         Validate(configuration);
         await edits.WaitAsync(ct).ConfigureAwait(false);

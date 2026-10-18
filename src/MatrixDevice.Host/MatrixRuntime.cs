@@ -124,7 +124,7 @@ public sealed class MatrixRuntime : IAsyncDisposable
             if (!demo && backend is AdbDeviceBackend identityBackend)
                 api.LdCommandIdentityGuard = async (index, operation, token) =>
                 {
-                    if (index <= 0) throw new DeviceException("原实例0受保护，未发送雷电命令。", 403, 1003);
+                    if (index < 0 || index == 99999) throw new DeviceException("实例编号无效，未发送雷电命令。", 403, 1003);
                     if (operation is "launch" or "quit" or "reboot") return;
                     var serial = api.LdSerialForWriteGuard(index) ?? throw new DeviceException("请先接入并核验该实例。", 403, 1003);
                     await identityBackend.VerifyIdentityAsync(serial, token).ConfigureAwait(false);
@@ -223,7 +223,7 @@ public sealed class MatrixRuntime : IAsyncDisposable
     public IDisposable AcquireLdWrite(int index)
     {
         RequireFrozenConnectionSettings();
-        if (index <= 0) throw new DeviceException("原实例0受保护，未发送雷电命令。", 403, 1003);
+        if (index < 0 || index == 99999) throw new DeviceException("实例编号无效，未发送雷电命令。", 403, 1003);
         var serial = Api.LdSerialForWriteGuard?.Invoke(index);
         return string.IsNullOrWhiteSpace(serial) ? Writes.AcquireAll() : Writes.Acquire([serial]);
     }

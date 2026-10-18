@@ -104,7 +104,7 @@ public partial class MainWindow
     }
 
     private bool CanStartInstances() => !ldBusy && !captureInProgress && !ViewModel.HasActiveOperations && ViewModel.ConnectionReloadAvailable && scanOperation is not { IsCompleted: false };
-    private bool CanActivateUnifiedRow(UnifiedDeviceRow row) => row.Connected ? !ViewModel.Busy : row.Index is > 0 and < 99999 && !ViewModel.Demo && CanStartInstances();
+    private bool CanActivateUnifiedRow(UnifiedDeviceRow row) => row.Connected ? !ViewModel.Busy : row.Index is >= 0 and < 99999 && !ViewModel.Demo && CanStartInstances();
     private async Task ActivateUnifiedRowAsync(UnifiedDeviceRow row)
     {
         try
@@ -142,8 +142,8 @@ public partial class MainWindow
         var section = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
         var feedback = new TextBlock { Foreground = WallMuted, TextWrapping = TextWrapping.Wrap, MinHeight = 19, Margin = new Thickness(0, 0, 0, 4) }; ldFeedback = feedback; launchFeedback.Add(feedback);
         var tools = Toolbar();
-        tools.Children.Add(LaunchButton("\uE768", "启动所选", () => ConnectLdInstancesAsync(unifiedDevices.Where(row => row.IsSelected && !row.Connected && row.Index is > 0 and < 99999).Select(row => row.Index!.Value).ToArray()), () => !ViewModel.Demo && CanStartInstances() && unifiedDevices.Any(row => row.IsSelected && !row.Connected && row.Index is > 0 and < 99999), true));
-        tools.Children.Add(LaunchButton("\uE768", "一键启动全部", StartAllLdInstancesAsync, () => !ViewModel.Demo && CanStartInstances() && unifiedDevices.Any(row => !row.Connected && row.Index is > 0 and < 99999)));
+        tools.Children.Add(LaunchButton("\uE768", "启动所选", () => ConnectLdInstancesAsync(unifiedDevices.Where(row => row.IsSelected && !row.Connected && row.Index is >= 0 and < 99999).Select(row => row.Index!.Value).ToArray()), () => !ViewModel.Demo && CanStartInstances() && unifiedDevices.Any(row => row.IsSelected && !row.Connected && row.Index is >= 0 and < 99999), true));
+        tools.Children.Add(LaunchButton("\uE768", "一键启动全部", StartAllLdInstancesAsync, () => !ViewModel.Demo && CanStartInstances() && unifiedDevices.Any(row => !row.Connected && row.Index is >= 0 and < 99999)));
         tools.Children.Add(BuildInstanceActions());
         var stop = new ActionCommand(() => ldOperationCancellation?.Cancel(), () => ldOperationCancellation is not null);
         launchCancelCommands.Add(stop);
@@ -171,7 +171,7 @@ public partial class MainWindow
         && ViewModel.Runtime.Api.LdSerialForWriteGuard?.Invoke(index) == serial
         && ViewModel.Devices.Any(row => row.Serial == serial && row.Info.Online);
 
-    private string InstanceConnectionState(LdPlayerInstance instance) => instance.Index == 0 && !ViewModel.Demo ? "受保护" : LdInstanceConnected(instance.Index) ? "已连接"
+    private string InstanceConnectionState(LdPlayerInstance instance) => LdInstanceConnected(instance.Index) ? "已连接"
         : instance.IsStarting || (!instance.AndroidStarted && (instance.ProcessId > 0 || instance.VBoxProcessId > 0)) ? "启动中"
         : !instance.AndroidStarted ? "已关闭" : ViewModel.Runtime.Settings.LdSerialBindings.ContainsKey(instance.Index) ? "需重新接入" : "待接入";
 
@@ -272,7 +272,7 @@ public partial class MainWindow
 
     private async Task StartAllLdInstancesAsync()
     {
-        var confirmedInstances = ViewModel.Runtime.LdPlayer?.Instances.Where(item => item.Index > 0 && item.Index != 99999 && !LdInstanceConnected(item.Index)).ToArray() ?? [];
+        var confirmedInstances = ViewModel.Runtime.LdPlayer?.Instances.Where(item => item.Index >= 0 && item.Index != 99999 && !LdInstanceConnected(item.Index)).ToArray() ?? [];
         var indices = confirmedInstances.Select(item => item.Index).ToArray();
         if (indices.Length == 0) throw new DeviceException("没有可启动的独立实例。", 404, 1002);
         await ConnectLdInstancesAsync(indices);
@@ -281,7 +281,7 @@ public partial class MainWindow
     private async Task ConnectLdInstancesAsync(int[] indices, IReadOnlyDictionary<int, string>? expectedSerials = null)
     {
         if (indices.Length == 0) throw new DeviceException("没有待接入的已运行实例。", 404, 1002);
-        if (indices.Any(index => index <= 0 || index == 99999)) throw new DeviceException("实例0受保护，不能自动接入。", 403, 1003);
+        if (indices.Any(index => index < 0 || index == 99999)) throw new DeviceException("实例编号无效或属于桌面编号，不能接入。", 403, 1003);
         var approvedSerials = expectedSerials is null ? null : new Dictionary<int, string>(expectedSerials);
         if (approvedSerials is not null && (approvedSerials.Count != indices.Length || indices.Any(index => !approvedSerials.TryGetValue(index, out var serial) || string.IsNullOrWhiteSpace(serial))))
             throw new DeviceException("验收预批准串号必须与目标实例逐一对应。", 400, 1007);
@@ -448,7 +448,9 @@ public partial class MainWindow
             catch (Exception ex) when (create && ex is not OperationCanceledException)
             { throw new DeviceException($"已创建实例 {target!.Index}：{target.Name}，但配置失败：{ex.Message}。未删除或重复创建，请检查目录。", 409, 1003); }
             ViewModel.Runtime.Log.Write("ld-configure", configured.Message);
-            ldFeedback.Text = $"实例 {target.Index} 已提交资源配置，启动后核验生效情况。";
+            SetLaunchFeedback(create
+                ? $"已创建实例 {target.Index}：{target.Name}，资源配置命令已提交。尚未启动，请点击该行“启动”打开模拟器；连接后核验配置。"
+                : $"实例 {target.Index} 已提交资源配置，启动后核验生效情况。");
         });
     }
 

@@ -16,7 +16,7 @@ public static class LdLaunchMemory
 
     public static LdMemoryConfiguration ReadConfiguration(string consolePath, int index)
     {
-        if (index is <= 0 or >= 99999) return new(null, "实例编号无效，内存配置未知。");
+        if (index is < 0 or >= 99999) return new(null, "实例编号无效，内存配置未知。");
         try
         {
             if (string.IsNullOrWhiteSpace(consolePath) || !Path.IsPathFullyQualified(consolePath) || !File.Exists(consolePath))

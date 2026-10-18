@@ -111,8 +111,11 @@ Test("LD admission applies only unique explicit local proofs and never mutates o
     var proof = new LdConnectionProof(2, "test", 1, "emulator-5558", 2, 123, 456);
     var applied = LdConnectionAdmission.Apply(original, [proof]);
     Check(applied.AdbAllowedSerials.Length == 2 && applied.LdSerialBindings[2] == proof.Serial && !applied.AutoStartApi, "New authorization missing.");
+    var primary = LdConnectionAdmission.Apply(original, [proof with { Index = 0 }]);
+    Check(primary.AdbAllowedSerials.Length == 2 && primary.LdSerialBindings[0] == proof.Serial && primary.LdSerialBindings[1] == "emulator-5556"
+        && !primary.AutoStartApi, "Index zero admission lost the explicit proof or changed prior authorization.");
     Check(original.AdbAllowedSerials.Length == 1 && !original.LdSerialBindings.ContainsKey(2), "Original settings mutated.");
-    foreach (var invalid in new[] { proof with { Index = 0 }, proof with { Serial = "" }, proof with { Serial = "10.0.0.1:5555" }, proof with { Generation = 0 }, proof with { TransportId = 0 } })
+    foreach (var invalid in new[] { proof with { Index = -1 }, proof with { Index = 99999 }, proof with { Serial = "" }, proof with { Serial = "10.0.0.1:5555" }, proof with { Generation = 0 }, proof with { TransportId = 0 } })
         await Throws<DeviceException>(() => { LdConnectionAdmission.Apply(original, [invalid]); return Task.CompletedTask; });
     await Throws<DeviceException>(() => { LdConnectionAdmission.Apply(original, [proof, proof]); return Task.CompletedTask; });
     await Throws<DeviceException>(() => { LdConnectionAdmission.Apply(original, [proof with { Serial = "emulator-5556" }]); return Task.CompletedTask; });
@@ -124,6 +127,24 @@ Test("saved connection path changes require restart before LD workspace edits", 
     runtime.Settings = runtime.Settings with { LdConsolePath = "other-installation.exe" };
     await Throws<DeviceException>(() => { runtime.RequireFrozenConnectionSettings(); return Task.CompletedTask; });
 });
+Test("LD index zero uses the existing all-device write lease and frozen connection guard", async () =>
+{
+    await using var runtime = await MatrixRuntime.CreateAsync(new() { AutoConnect = false, AutoStartApi = false }, Temp(), true);
+    Check(runtime.IsDemo && runtime.Backend is DemoDeviceBackend, "Zero write-lease regression requires the owned Demo runtime.");
+    using (runtime.AcquireLdWrite(0))
+    {
+        DeviceException? conflict = null;
+        try { using var other = runtime.Writes.Acquire(["DEMO-001"]); }
+        catch (DeviceException failure) { conflict = failure; }
+        Check(conflict?.Status == 409, "Zero all-device lease failed to exclude another target writer.");
+    }
+    using (runtime.Writes.Acquire(["DEMO-001"])) { }
+    runtime.Settings = runtime.Settings with { LdConsolePath = "changed-console.exe" };
+    DeviceException? stale = null;
+    try { using var rejected = runtime.AcquireLdWrite(0); }
+    catch (DeviceException failure) { stale = failure; }
+    Check(stale is { Status: 409 } && stale.Message.Contains("连接配置", StringComparison.Ordinal), "Index zero bypassed the frozen connection guard.");
+});
 Test("LD admission cannot replace the confirmed subject while waiting for ADB", async () =>
 {
     var frozen = LdPlayerService.ParseList2("1,Original,1,2,1,123,456,1280,720,240").Single();
@@ -131,6 +152,20 @@ Test("LD admission cannot replace the confirmed subject while waiting for ADB", 
     foreach (var changed in new[] { frozen with { Name = "Replacement" }, frozen with { Generation = frozen.Generation + 1 }, frozen with { VBoxProcessId = 999 } })
         await Throws<DeviceException>(() => { LdConnectionAdmission.RequireExpectedInstances([changed], [1], [frozen]); return Task.CompletedTask; });
     await Throws<DeviceException>(() => { LdConnectionAdmission.RequireExpectedInstances([frozen], [1], []); return Task.CompletedTask; });
+});
+Test("LD admission accepts index zero but rejects its stale confirmation before any ADB request", async () =>
+{
+    await using var server = new FakeAdbServer();
+    Check(IPAddress.IsLoopback(server.Endpoint.Address) && server.Endpoint.Port is > 0 and not 5037, "Admission regression requires the owned dynamic fake server, never shared ADB.");
+    await using var backend = new AdbDeviceBackend(new AppSettings { AdbAllowedSerials = [] }, server.Endpoint);
+    var runner = new ControlledLdRunner { List = "0,original,0,0,0,0,0,360,640,240" };
+    await using var service = new LdPlayerService(runner, true);
+    var frozen = (await service.RefreshAsync()).Single(); runner.List = "0,replacement,0,0,0,0,0,360,640,240";
+    DeviceException? stale = null;
+    try { await LdConnectionAdmission.ResolveAsync(backend, service, [0], [frozen], new Dictionary<int, long>()); }
+    catch (DeviceException failure) { stale = failure; }
+    Check(stale is { Status: 409 } && stale.Message.Contains("确认后", StringComparison.Ordinal), "Zero admission was rejected as an invalid index or bypassed its original confirmation identity.");
+    Check(server.Requests.IsEmpty && runner.Commands.Count == 0, "Stale zero admission reached host/guest ADB or a console write.");
 });
 Test("HTTP admission drain counter includes in-flight SDK identity checks", async () =>
 {

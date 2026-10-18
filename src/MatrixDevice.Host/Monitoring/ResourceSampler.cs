@@ -70,7 +70,7 @@ public sealed class ResourceSampler
             var observedAt = clock.GetUtcNow();
             try
             {
-                if (target.Index <= 0 || target.Index == 99999 || target.Generation <= 0 || target.PlayerPid <= 0 || target.VBoxPid <= 0 || target.PlayerBirth <= 0 || target.VBoxBirth <= 0)
+                if (target.Index < 0 || target.Index == 99999 || target.Generation <= 0 || target.PlayerPid <= 0 || target.VBoxPid <= 0 || target.PlayerBirth <= 0 || target.VBoxBirth <= 0)
                     throw new ArgumentException($"Invalid monitor target: index {target.Index}, generation {target.Generation}, player {target.PlayerPid}/{target.PlayerBirth}, VBox {target.VBoxPid}/{target.VBoxBirth}.");
                 if (target.PlayerPid == target.VBoxPid && target.PlayerBirth != target.VBoxBirth)
                     throw new ArgumentException($"Process {target.PlayerPid} has conflicting expected birth times.");

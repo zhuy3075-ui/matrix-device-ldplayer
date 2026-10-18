@@ -10,8 +10,8 @@ public static class LdConnectionAdmission
 {
     public static async Task<IReadOnlyList<LdConnectionProof>> ResolveAsync(AdbDeviceBackend backend, LdPlayerService service, int[] indices, IReadOnlyList<LdPlayerInstance> expectedInstances, IReadOnlyDictionary<int, long> expectedBirths, CancellationToken ct = default)
     {
-        if (indices.Length == 0 || indices.Any(index => index <= 0 || index == 99999) || indices.Distinct().Count() != indices.Length)
-            throw new DeviceException("请选择不重复的独立雷电实例，受保护实例0不能自动接入。", 400, 1007);
+        if (indices.Length == 0 || indices.Any(index => index < 0 || index == 99999) || indices.Distinct().Count() != indices.Length)
+            throw new DeviceException("请选择不重复的有效雷电实例，编号必须非负且不能为桌面编号99999。", 400, 1007);
         var instances = await service.RefreshAsync(ct).ConfigureAwait(false);
         RequireExpectedInstances(instances, indices, expectedInstances);
         var registered = await backend.ListRegisteredDevicesAsync(ct).ConfigureAwait(false);
@@ -64,7 +64,7 @@ public static class LdConnectionAdmission
 
     public static AppSettings Apply(AppSettings settings, IReadOnlyList<LdConnectionProof> proofs)
     {
-        if (proofs.Count == 0 || proofs.Any(proof => proof.Index <= 0 || proof.Index == 99999 || proof.Generation <= 0 || string.IsNullOrWhiteSpace(proof.Name) || LocalEndpoint(proof.Serial) is null || proof.TransportId == 0 || proof.VBoxPid <= 0 || proof.VBoxBirth <= 0)) throw new DeviceException("接入凭据无效。", 400, 1007);
+        if (proofs.Count == 0 || proofs.Any(proof => proof.Index < 0 || proof.Index == 99999 || proof.Generation <= 0 || string.IsNullOrWhiteSpace(proof.Name) || LocalEndpoint(proof.Serial) is null || proof.TransportId == 0 || proof.VBoxPid <= 0 || proof.VBoxBirth <= 0)) throw new DeviceException("接入凭据无效。", 400, 1007);
         if (proofs.Select(proof => proof.Index).Distinct().Count() != proofs.Count || proofs.Select(proof => proof.Serial).Distinct(StringComparer.Ordinal).Count() != proofs.Count) throw new DeviceException("接入凭据存在重复实例或串号。", 409, 1003);
         var bindings = new Dictionary<int, string>(settings.LdSerialBindings);
         var replaced = proofs.Where(proof => bindings.ContainsKey(proof.Index)).Select(proof => bindings[proof.Index]).ToHashSet(StringComparer.Ordinal);

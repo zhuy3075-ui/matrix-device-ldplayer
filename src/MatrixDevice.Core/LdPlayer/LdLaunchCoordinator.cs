@@ -32,8 +32,8 @@ public sealed class LdLaunchCoordinator
         Func<LdPlayerInstance, CancellationToken, Task> ensureResourceReserve, IProgress<LdLaunchProgress>? progress = null,
         CancellationToken ct = default, IReadOnlyList<LdPlayerInstance>? expectedInstances = null)
     {
-        if (indices is null || indices.Length == 0 || indices.Any(index => index <= 0 || index == 99999) || indices.Distinct().Count() != indices.Length)
-            throw new DeviceException("启动批次必须包含不同的正整数实例编号，不允许原实例 0 或桌面编号 99999。", 400, 1007);
+        if (indices is null || indices.Length == 0 || indices.Any(index => index < 0 || index == 99999) || indices.Distinct().Count() != indices.Length)
+            throw new DeviceException("启动批次必须包含不同的非负整数实例编号，不允许桌面编号99999。", 400, 1007);
         ArgumentNullException.ThrowIfNull(ensureResourceReserve);
         var requested = indices.ToArray();
         var expected = expectedInstances?.ToArray();

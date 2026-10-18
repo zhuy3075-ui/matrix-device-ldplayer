@@ -11,6 +11,7 @@ public static class MonitorResourceTests
         test("monitor process identity failure clears CPU history and never changes targets", IdentityAsync);
         test("monitor restart and counter regression reset the baseline", RestartAsync);
         test("monitor invalid targets never reach process sampling", InvalidTargetsAsync);
+        test("monitor index zero retains process birth verification and samples both exact targets", PrimaryTargetAsync);
         test("monitor sampling failures are unknown instead of zero and recover cold", FailuresAsync);
         test("monitor concurrent calls serialize sampling and baseline updates", ConcurrentAsync);
         test("monitor native sampling reads only the owned current process", OwnedProcessAsync);
@@ -92,12 +93,25 @@ public static class MonitorResourceTests
     {
         var reads = 0;
         var sampler = Create(readProcess: (_, birth) => { reads++; return new(birth, 0, 10); });
-        foreach (var target in new[] { Target with { Index = 0 }, Target with { Index = 99999 }, Target with { Generation = 0 }, Target with { PlayerPid = 0 }, Target with { VBoxBirth = 0 }, Target with { VBoxPid = 11, VBoxBirth = 999 } })
+        foreach (var target in new[] { Target with { Index = -1 }, Target with { Index = 99999 }, Target with { Generation = 0 }, Target with { PlayerPid = 0 }, Target with { VBoxBirth = 0 }, Target with { VBoxPid = 11, VBoxBirth = 999 } })
         {
             var sample = sampler.SampleInstance(target);
             Assert(sample.Error is not null && sample.CpuPercent is null && sample.WorkingSetBytes is null, "Invalid target produced a resource value.");
         }
         Assert(reads == 0, "Invalid or protected target reached the process reader.");
+        return Task.CompletedTask;
+    }
+
+    private static Task PrimaryTargetAsync()
+    {
+        var reads = new List<int>(); var wrongBirth = false;
+        var sampler = Create(readProcess: (pid, birth) => { reads.Add(pid); return new(wrongBirth ? birth + 1 : birth, 0, 10); });
+        var target = Target with { Index = 0 };
+        var sample = sampler.SampleInstance(target);
+        Assert(sample.Error is null && sample.WorkingSetBytes == 20 && sample.CpuPercent is null && reads.SequenceEqual([11, 22]), "Index zero did not sample its exact two verified processes.");
+        reads.Clear(); wrongBirth = true;
+        var rejected = sampler.SampleInstance(target);
+        Assert(rejected.Error is not null && rejected.WorkingSetBytes is null && rejected.CpuPercent is null && reads.SequenceEqual([11]), "Index zero bypassed birth verification or continued after identity failure.");
         return Task.CompletedTask;
     }
 

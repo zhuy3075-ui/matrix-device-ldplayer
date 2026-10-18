@@ -13,6 +13,124 @@ namespace MatrixDevice.Desktop;
 public partial class MainWindow
 {
     private static readonly List<object> deletedDeviceRetainedOwners = [];
+    private static readonly List<object> primaryInstanceRetainedOwners = [];
+
+    internal static async Task RunPrimaryInstanceVerificationAsync(string directory)
+    {
+        if (!Application.Current.Dispatcher.CheckAccess() || Application.Current.Windows.Count != 0 || Application.Current.MainWindow is not null)
+            throw new InvalidOperationException("PRECONDITION-FAIL: primary-instance requires its own STA with no existing window.");
+        Directory.CreateDirectory(directory);
+        MatrixRuntime? runtime = null; WorkspaceViewModel? vm = null; MainWindow? window = null; Task<MatrixRuntime>? creation = null;
+        var tasks = new List<(string Name, Task Task)>(); var checks = new List<object>(); var productFailures = new List<string>();
+        var cleanup = new List<string>(); Exception? error = null; object? observed = null;
+        var closed = false; var shutdownRequests = 0; var ownershipUnresolved = false;
+        Task Track(string name, Task task) { tasks.Add((name, task)); return task; }
+        void Require(bool condition, string message) { if (!condition) throw new InvalidOperationException("FIXTURE: " + message); }
+        void Check(string name, bool passed) { checks.Add(new { name, passed }); if (!passed) productFailures.Add(name); }
+        try
+        {
+            var settings = new AppSettings { AutoConnect = false, AutoStartApi = false, SyncMouse = false, SyncKeyboard = false,
+                AgentBaseUrl = null, AgentSerial = null, AdbPath = "", LdConsolePath = "", AdbAllowedSerials = [], LdSerialBindings = [] };
+            creation = MatrixRuntime.CreateAsync(settings, directory, true); _ = Track("runtime-create", creation);
+            runtime = await creation.WaitAsync(TimeSpan.FromSeconds(15));
+            var service = runtime.LdPlayer ?? throw new InvalidOperationException("FIXTURE: Demo directory service is missing.");
+            Require(runtime.IsDemo && runtime.Backend is DemoDeviceBackend && service.IsDemo, "Only the factory-owned Demo backend and directory may be used.");
+            var runner = typeof(LdPlayerService).GetField("_runner", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(service) as DemoLdConsoleRunner
+                ?? throw new InvalidOperationException("FIXTURE: The actual directory runner must be DemoLdConsoleRunner.");
+            runner.RemoveInstance(1);
+            var initial = service.Instances.Single(instance => instance.Index == 0);
+            await Track("fake-stop-zero", service.ExecuteAsync(0, "quit", new System.Text.Json.Nodes.JsonObject { ["expectedGeneration"] = initial.Generation, ["confirmed"] = true })).WaitAsync(TimeSpan.FromSeconds(10));
+            Require(service.Instances.Count == 1 && service.Instances[0] is { Index: 0, AndroidStarted: false, ProcessId: <= 0, VBoxProcessId: <= 0, TopWindow: 0, BindWindow: 0 }, "The fake directory must contain only a fully stopped zero instance.");
+            vm = new WorkspaceViewModel(runtime, directory, false);
+            await Track("initial-devices", vm.RefreshDevicesAsync()).WaitAsync(TimeSpan.FromSeconds(10));
+            window = new MainWindow(vm) { ShowActivated = false };
+            window.captureTimer.Stop(); window.directoryTimer.Stop(); window.monitorTimer.Stop(); window.closing = true;
+            window.applicationReadPending = false; window.applicationReadTimer?.Stop(); vm.DeviceChanged = null; vm.CurrentDebugReadyChanged = null;
+            window.Closed += (_, _) => closed = true; Application.Current.MainWindow = window;
+            window.UpdateUnifiedDirectory();
+            var layoutSize = new Size(window.Width, window.Height);
+            window.Shell.Measure(layoutSize); window.Shell.Arrange(new Rect(new Point(), layoutSize)); window.Shell.UpdateLayout();
+            var row = window.unifiedDevices.Single(item => item.Index == 0);
+            var cold = service.Instances.Single();
+            var buttons = VisualDescendants<Button>(window.Shell).ToArray();
+            var buttonInventory = buttons.Select(button => new { button.Name, automationName = System.Windows.Automation.AutomationProperties.GetName(button),
+                toolTipType = button.ToolTip?.GetType().FullName, toolTip = button.ToolTip as string }).ToArray();
+            var selectedButtons = buttons.Where(button => System.Windows.Automation.AutomationProperties.GetName(button) == "启动所选").ToArray();
+            var allButtons = buttons.Where(button => System.Windows.Automation.AutomationProperties.GetName(button) == "一键启动全部").ToArray();
+            var menuButtons = buttons.Where(button => button.Name == "InstanceActions").ToArray();
+            Require(selectedButtons.Length == 1 && allButtons.Length == 1 && menuButtons.Length == 1,
+                "Original instance controls must be uniquely realized: " + JsonSerializer.Serialize(buttonInventory, JsonDefaults.Options));
+            var selected = selectedButtons[0].Command
+                ?? throw new InvalidOperationException("FIXTURE: Original selected launch command is missing.");
+            var all = allButtons[0].Command
+                ?? throw new InvalidOperationException("FIXTURE: Original all launch command is missing.");
+            var menu = menuButtons[0].ContextMenu ?? throw new InvalidOperationException("FIXTURE: Original instance menu is missing.");
+            var configure = menu.Items.OfType<MenuItem>().Single(item => item.Header as string == "资源配置").Command;
+            Require(ReferenceEquals(configure, window.ldCommandsByLabel["资源配置"]), "Resource menu must retain its original command object.");
+            Check("zero-row-is-normal-cold-instance", row.State == "已关闭" && row.PrimaryLabel == "启动" && !row.PrimaryDescription.Contains("受保护", StringComparison.Ordinal));
+            Check("zero-row-original-primary-command-enabled", row.PrimaryCommand.CanExecute(null));
+            Check("all-launch-original-scope-includes-only-zero-directory", all.CanExecute(null));
+            row.IsSelected = true;
+            Check("zero-row-can-select-and-retains-original-selection", row.CanSelect && row.IsSelected && window.ldSelection?.Index == 0);
+            Check("selected-launch-original-scope-includes-zero", selected.CanExecute(null));
+            Check("zero-cold-resource-menu-enabled", configure?.CanExecute(null) == true);
+            Check("unconnected-selection-still-blocks-device-writes", vm.Targets().Count == 0 && !vm.CanWriteTargets() && vm.TargetContext == "已选目标包含 1 台未连接设备");
+            row.IsSelected = false;
+            foreach (var invalid in new[] { -1, 99999 })
+            {
+                row.Update(cold with { Index = 1 }, null, false, ""); row.IsSelected = false;
+                row.Update(cold with { Index = invalid }, null, false, ""); row.IsSelected = true;
+                Check("invalid-row-remains-protected-" + invalid, !row.CanSelect && !row.IsSelected && row.State == "受保护" && !row.PrimaryCommand.CanExecute(null));
+                Check("invalid-row-excluded-from-original-launch-scope-" + invalid, !all.CanExecute(null) && !selected.CanExecute(null) && configure?.CanExecute(null) == false);
+            }
+            row.Update(cold with { Index = 1 }, null, false, ""); row.IsSelected = false;
+            window.UpdateUnifiedDirectory();
+            Check("eligibility-checks-do-not-start-zero", service.Instances.Single() == cold && runner.LastArguments?.SequenceEqual(["list2"]) == true);
+            observed = new { row.State, row.PrimaryLabel, row.CanSelect, directoryIndices = service.Instances.Select(instance => instance.Index).ToArray(),
+                originalAllEnabled = all.CanExecute(null), originalSelectedEnabled = selected.CanExecute(null), lastFakeArguments = runner.LastArguments?.ToArray(), buttonInventory };
+        }
+        catch (Exception failure) { error = failure; }
+        finally
+        {
+            if (window is not null)
+            {
+                window.closing = true; window.captureTimer.Stop(); window.directoryTimer.Stop(); window.monitorTimer.Stop(); window.directoryCancellation.Cancel();
+                window.applicationReadPending = false; window.applicationReadTimer?.Stop(); _ = Track("window-stop-monitor", window.StopMonitorAsync());
+                foreach (var operation in new[] { window.directoryOperation, window.captureOperation, window.debugAutoOperation, window.monitorReconcile, window.monitorSampling, window.scanOperation, window.mainGestureOperation })
+                    if (operation is not null && !tasks.Any(item => ReferenceEquals(item.Task, operation))) _ = Track("original-window-operation", operation);
+            }
+            foreach (var item in tasks.ToArray()) try { await item.Task.WaitAsync(TimeSpan.FromSeconds(15)); } catch (Exception failure) { cleanup.Add(item.Name + ": " + failure); }
+            if (runtime is null && creation is { IsCompletedSuccessfully: true }) runtime = creation.Result;
+            if (tasks.All(item => item.Task.IsCompleted) && runtime is not null)
+            {
+                shutdownRequests++;
+                try { await Track("single-owner-shutdown", vm is not null ? vm.ShutdownAsync() : runtime.DisposeAsync().AsTask()).WaitAsync(TimeSpan.FromSeconds(15)); }
+                catch (Exception failure) { cleanup.Add("shutdown: " + failure); ownershipUnresolved = true; }
+                if (!ownershipUnresolved && tasks.All(item => item.Task.IsCompleted) && window is not null)
+                {
+                    try
+                    {
+                        window.AbortStartup(); LocalizationService.Current.LanguageChanged -= window.OnLanguageChanged;
+                        if (!closed || window.IsVisible) cleanup.Add("Owned window did not close.");
+                        if (ReferenceEquals(Application.Current.MainWindow, window)) Application.Current.MainWindow = null;
+                    }
+                    catch (Exception failure) { cleanup.Add("close: " + failure); ownershipUnresolved = true; }
+                }
+            }
+            if (ownershipUnresolved || tasks.Any(item => !item.Task.IsCompleted)) primaryInstanceRetainedOwners.Add(new { runtime, vm, window, creation, tasks });
+        }
+        var passed = error is null && productFailures.Count == 0 && cleanup.Count == 0 && primaryInstanceRetainedOwners.Count == 0
+            && closed && shutdownRequests == 1 && Application.Current.Windows.Count == 0 && Application.Current.MainWindow is null;
+        await File.WriteAllTextAsync(Path.Combine(directory, "primary-instance.json"), JsonSerializer.Serialize(new
+        {
+            status = passed ? "PASS-OWN-WPF-PRIMARY-INSTANCE" : "FAIL", checks, productFailures, error = error?.ToString(), cleanup, observed,
+            tasks = tasks.Select(item => new { item.Name, status = item.Task.Status.ToString(), terminal = item.Task.IsCompleted }).ToArray(),
+            shutdownRequests, closed, retainedOwners = primaryInstanceRetainedOwners.Count, windows = Application.Current.Windows.Count, mainWindowNull = Application.Current.MainWindow is null,
+            scope = "Unshown owned WPF window, non-auto-select VM, factory Demo backend and actual Demo runner. Original command eligibility only; no launch/connect command is executed.",
+            notRun = new[] { "physical GUI", "native creation dialog", "real emulator/ADB", "real creation/configuration/launch", "A07 lifecycle", "full-goal acceptance" }
+        }, JsonDefaults.Options));
+        if (!passed) throw new InvalidOperationException("Primary-instance verification failed; inspect primary-instance.json.", error);
+    }
 
     internal static async Task RunDeletedDeviceVerificationAsync(string directory)
     {

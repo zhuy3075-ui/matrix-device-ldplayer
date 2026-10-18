@@ -17,7 +17,7 @@ public static class LdRunningWindow
         ArgumentNullException.ThrowIfNull(instance);
         ArgumentNullException.ThrowIfNull(requestForeground);
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Showing an existing instance window requires Windows.");
-        if (instance.Index <= 0 || instance.Index >= 99999 || instance.Generation <= 0 || instance.ProcessId <= 0 || instance.TopWindow <= 0 || expectedPlayerBirth <= 0)
+        if (instance.Index < 0 || instance.Index >= 99999 || instance.Generation <= 0 || instance.ProcessId <= 0 || instance.TopWindow <= 0 || expectedPlayerBirth <= 0)
             throw new ArgumentException($"Invalid running window target: index {instance.Index}, generation {instance.Generation}, PID {instance.ProcessId}, window {instance.TopWindow}, birth {expectedPlayerBirth}.");
         if (string.IsNullOrWhiteSpace(expectedInstallDirectory) || !Path.IsPathFullyQualified(expectedInstallDirectory) || !Directory.Exists(expectedInstallDirectory))
             throw new ArgumentException($"The expected installation directory must exist and be absolute: {expectedInstallDirectory}.", nameof(expectedInstallDirectory));

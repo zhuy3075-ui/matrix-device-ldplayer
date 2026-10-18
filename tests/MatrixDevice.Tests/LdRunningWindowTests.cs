@@ -25,7 +25,7 @@ public static class LdRunningWindowTests
         bool Focus(IntPtr _) { calls++; return true; }
         try
         {
-            foreach (var invalid in new[] { instance with { Index = 0 }, instance with { Index = -1 }, instance with { Index = 99999 }, instance with { Index = 100000 }, instance with { Generation = 0 }, instance with { ProcessId = int.MaxValue } })
+            foreach (var invalid in new[] { instance with { Index = -2 }, instance with { Index = -1 }, instance with { Index = 99999 }, instance with { Index = 100000 }, instance with { Generation = 0 }, instance with { ProcessId = int.MaxValue } })
                 ExpectRefusal(() => LdRunningWindow.Show(invalid, install, birth, Focus));
             ExpectRefusal(() => LdRunningWindow.Show(instance, install, birth + 1, Focus));
             ExpectRefusal(() => LdRunningWindow.Show(instance, Path.GetTempPath(), birth, Focus));
@@ -43,7 +43,7 @@ public static class LdRunningWindowTests
         using var process = Process.GetCurrentProcess();
         var birth = process.StartTime.ToUniversalTime().Ticks;
         var install = Path.GetDirectoryName(process.MainModule!.FileName)!;
-        var instance = OwnInstance(window);
+        var instance = OwnInstance(window) with { Index = 0 };
         var calls = 0;
         try
         {
