@@ -62,6 +62,7 @@ MatrixDevice.Reconstructed/
 |   |   |   |-- MCP_DESIGN.md
 |   |   |   |-- MCP_STDIO.md
 |   |   |   +-- MCP_WRITE_OWNERSHIP.md
+|   |   |-- deleted-instance-directory.md
 |   |   |-- device-action-dedup/
 |   |   |   +-- REPORT.md
 |   |   |-- launch-memory-policy/

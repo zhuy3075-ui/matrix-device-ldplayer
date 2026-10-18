@@ -14,6 +14,13 @@ public partial class App : Application
         base.OnStartup(e);
         try
         {
+            if (e.Args.Contains("--verify-deleted-devices", StringComparer.OrdinalIgnoreCase))
+            {
+                var deletedDirectory = ValidateDeletedDevicesArguments(e.Args);
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                await MatrixDevice.Desktop.MainWindow.RunDeletedDeviceVerificationAsync(deletedDirectory);
+                Shutdown(0); return;
+            }
             if (e.Args.Contains("--verify-files-workspace", StringComparer.OrdinalIgnoreCase))
             {
                 var filesDirectory = ValidateFilesWorkspaceArguments(e.Args);
@@ -256,7 +263,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--verify-live-file-terminal", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-files-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-text-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-settings-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
+            if (e.Args.Contains("--verify-deleted-devices", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-file-terminal", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-files-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-text-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-settings-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(ex);
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -274,6 +281,29 @@ public partial class App : Application
             catch (Exception cleanupError) { Console.Error.WriteLine("启动失败后的资源清理异常：" + cleanupError); }
             finally { Shutdown(1); }
         }
+    }
+
+    private static string ValidateDeletedDevicesArguments(string[] args)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < args.Length; index++)
+        {
+            var key = args[index];
+            if (!new[] { "--verify-deleted-devices", "--demo", "--data-dir" }.Contains(key, StringComparer.OrdinalIgnoreCase) || !values.TryAdd(key, null))
+                throw new ArgumentException("PRECONDITION-FAIL: deleted-devices unknown, mixed or duplicate argument: " + key);
+            if (!key.Equals("--data-dir", StringComparison.OrdinalIgnoreCase)) continue;
+            if (++index >= args.Length || args[index].StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("PRECONDITION-FAIL: deleted-devices data-dir value missing.");
+            values[key] = args[index];
+        }
+        if (values.Count != 3 || !values.ContainsKey("--demo") || !values.TryGetValue("--data-dir", out var directory) || directory is null || !Path.IsPathFullyQualified(directory))
+            throw new ArgumentException("PRECONDITION-FAIL: deleted-devices requires explicit --demo and fresh absolute artifacts --data-dir.");
+        directory = Path.GetFullPath(directory);
+        if (!directory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || Directory.Exists(directory) || File.Exists(directory))
+            throw new ArgumentException("PRECONDITION-FAIL: deleted-devices requires a fresh artifacts directory: " + directory);
+        for (var parent = Path.GetDirectoryName(directory); !string.IsNullOrEmpty(parent); parent = Path.GetDirectoryName(parent))
+            if ((Directory.Exists(parent) || File.Exists(parent)) && (File.GetAttributes(parent) & FileAttributes.ReparsePoint) != 0)
+                throw new ArgumentException("PRECONDITION-FAIL: deleted-devices reparse ancestor: " + parent);
+        return directory;
     }
 
     private static string ValidateFilesWorkspaceArguments(string[] args)

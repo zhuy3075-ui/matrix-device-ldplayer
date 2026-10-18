@@ -83,6 +83,7 @@ if (args.Length > 0 && args[0] == "--ldconsole-test-child")
 }
 
 var tests = new List<(string Name, Func<Task> Run)>();
+var directoryConstructionRetainedOwners = new List<object>();
 void Test(string name, Func<Task> run) => tests.Add((name, run));
 Test("window geometry preserves supported compact sizes through normalize save and fresh load", () =>
 {
@@ -184,6 +185,50 @@ async Task Throws<T>(Func<Task> action) where T : Exception
     throw new Exception("Expected " + typeof(T).Name);
 }
 string Temp() { var path = Path.Combine(Path.GetTempPath(), "MatrixDevice.Tests", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(path); return path; }
+async Task<MatrixRuntime> DirectoryRuntime(IDeviceBackend backend, ControlledLdRunner? runner)
+{
+    var owned = new List<(string Name, Func<Task> Dispose)> { ("backend", () => backend.DisposeAsync().AsTask()) };
+    try
+    {
+        var path = Temp();
+        var settings = new AppSettings { LdSerialBindings = new() { [1] = "DEMO-001" } };
+        var catalog = new DeviceCatalog(backend); var writes = new DeviceWriteCoordinator(); var automation = new AutomationService(backend, catalog);
+        var metadata = new CatalogRepository(Path.Combine(path, "db.sqlite3")); owned.Add(("metadata", () => { metadata.Dispose(); return Task.CompletedTask; }));
+        var log = new RollingLog(Path.Combine(path, "logs")); owned.Add(("log", () => log.DisposeAsync().AsTask()));
+        var service = runner is null ? null : new LdPlayerService(runner, true);
+        if (service is not null) owned.Add(("ld-directory", () => service.DisposeAsync().AsTask()));
+        var scripts = new ScriptScheduler(backend, catalog, true, writes); owned.Add(("scripts", () => scripts.DisposeAsync().AsTask()));
+        var input = new InputCoordinator(catalog, backend, writes); owned.Add(("input", () => input.DisposeAsync().AsTask()));
+        var api = new ApiServiceManager(catalog, backend, automation, log, writes) { LdPlayer = service }; owned.Add(("api", () => api.DisposeAsync().AsTask()));
+        return new MatrixRuntime
+        {
+            Backend = backend, Devices = catalog, Writes = writes, Automation = automation, Scripts = scripts, Input = input, Api = api,
+            SettingsStore = new SettingsStore(Path.Combine(path, "AppConfig.json")), Metadata = metadata,
+            Log = log, Settings = settings, FrozenConnectionSettings = settings with { LdSerialBindings = new(settings.LdSerialBindings) },
+            LdPlayer = service, IsDemo = true
+        };
+    }
+    catch (Exception constructionError)
+    {
+        var cleanupErrors = new List<string>();
+        foreach (var resource in owned.AsEnumerable().Reverse())
+        {
+            Task? disposal = null;
+            try { disposal = resource.Dispose(); await disposal.WaitAsync(TimeSpan.FromSeconds(15)); }
+            catch (Exception cleanupError)
+            {
+                cleanupErrors.Add(resource.Name + ": " + cleanupError);
+                directoryConstructionRetainedOwners.Add(new { resources = owned.ToArray(), disposal, cleanupError });
+                break;
+            }
+        }
+        constructionError.Data["partialConstructionCleanup"] = cleanupErrors.ToArray();
+        constructionError.Data["partialConstructionRetainedOwners"] = directoryConstructionRetainedOwners.Count;
+        Console.Error.WriteLine($"DIRECTORY-CONSTRUCTION-FAIL retainedOwners={directoryConstructionRetainedOwners.Count}; cleanupErrors={cleanupErrors.Count}");
+        foreach (var message in cleanupErrors) Console.Error.WriteLine(message);
+        throw;
+    }
+}
 ScriptPackage Package(params ScriptStep[] steps) => new() { Manifest = new() { Id = "test-package", Name = "Test", Version = "1.0" }, Steps = steps.ToList() };
 JsonElement Body(object body) => JsonSerializer.SerializeToElement(body, JsonDefaults.Options);
 int Port() { var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop(); return port; }
@@ -256,6 +301,97 @@ Test("catalog retains offline identity and changes reconnect generation", async 
     await catalog.RefreshAsync(); Check(notifications == 1, "Offline notification repeated without change");
     backend.SetOnline("DEMO-001", true); await catalog.RefreshAsync();
     Check(catalog.GetRequired("DEMO-001").Generation > before.Generation + 1, "Reconnect retained old generation");
+});
+Test("runtime hides deleted bound offline LD devices without deleting catalog identities", async () =>
+{
+    var backend = new DemoDeviceBackend(); backend.SetOnline("DEMO-001", false); backend.SetOnline("DEMO-002", false);
+    var runner = new ControlledLdRunner { List = "1,bound,0,0,0,0,0,360,640,240" };
+    await using var runtime = await DirectoryRuntime(backend, runner);
+    await runtime.RefreshAsync(); await runtime.RefreshLdPlayerAsync();
+    Check(runtime.GetDevices().Count == 2, "A stopped but existing LD instance disappeared.");
+    var catalog = runtime.Devices.Snapshot.ToArray();
+    runner.List = ""; await runtime.RefreshLdPlayerAsync();
+    Check(runtime.GetDevices().Select(device => device.Serial).SequenceEqual(["DEMO-002"]), "Deleted LD offline identity remained visible or ordinary offline identity disappeared.");
+    Check(runtime.Devices.Snapshot.SequenceEqual(catalog), "Projection changed catalog identity or generation.");
+    Check(runtime.FrozenConnectionSettings.LdSerialBindings[1] == "DEMO-001", "Projection removed the frozen authorization.");
+    runner.List = "not-a-list2-row"; await Throws<DeviceException>(() => runtime.RefreshLdPlayerAsync());
+    Check(runtime.GetDevices().Select(device => device.Serial).SequenceEqual(["DEMO-002"]), "Failed query resurrected an identity already confirmed deleted.");
+    using (var cancellation = new CancellationTokenSource())
+    {
+        cancellation.Cancel(); await Throws<OperationCanceledException>(() => runtime.RefreshLdPlayerAsync(cancellation.Token));
+        Check(runtime.GetDevices().Select(device => device.Serial).SequenceEqual(["DEMO-002"]), "Cancelled query resurrected an identity already confirmed deleted.");
+    }
+    Check(runtime.Devices.Snapshot.SequenceEqual(catalog), "Failed or cancelled query changed catalog identity or generation.");
+    runner.List = "1,bound,0,0,0,0,0,360,640,240"; await runtime.RefreshLdPlayerAsync();
+    Check(runtime.GetDevices().Count == 2, "A stopped instance did not become visible after returning to the directory.");
+    Check(runner.Commands.Count == 0, "Directory projection issued a console write.");
+});
+Test("runtime retains offline devices before a successful LD snapshot or without LD", async () =>
+{
+    foreach (var configured in new[] { false, true })
+    {
+        var backend = new DemoDeviceBackend(); backend.SetOnline("DEMO-001", false); backend.SetOnline("DEMO-002", false);
+        var runner = configured ? new ControlledLdRunner { List = "not-a-list2-row" } : null;
+        await using var runtime = await DirectoryRuntime(backend, runner);
+        await runtime.RefreshAsync();
+        Check(runtime.GetDevices().Count == 2, "Uninitialized or unconfigured LD was treated as an authoritative empty directory.");
+        if (configured)
+        {
+            await Throws<DeviceException>(() => runtime.RefreshLdPlayerAsync());
+            Check(runtime.LdPlayerError is not null && runtime.GetDevices().Count == 2, "Failed first directory query removed offline identities.");
+            using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+            await Throws<OperationCanceledException>(() => runtime.RefreshLdPlayerAsync(cancellation.Token));
+            Check(runtime.GetDevices().Count == 2, "Cancelled first directory query was treated as a successful empty snapshot.");
+            Check(runner!.Commands.Count == 0, "Failed directory lookup issued a console write.");
+        }
+    }
+});
+Test("runtime preserves stopped LD and ordinary offline devices after a directory failure", async () =>
+{
+    var backend = new DemoDeviceBackend(); backend.SetOnline("DEMO-001", false); backend.SetOnline("DEMO-002", false);
+    var runner = new ControlledLdRunner { List = "1,bound,0,0,0,0,0,360,640,240" };
+    await using var runtime = await DirectoryRuntime(backend, runner);
+    await runtime.RefreshAsync(); await runtime.RefreshLdPlayerAsync();
+    var instances = runtime.LdPlayer!.Instances.ToArray(); var devices = runtime.GetDevices().ToArray();
+    runner.List = "not-a-list2-row"; await Throws<DeviceException>(() => runtime.RefreshLdPlayerAsync());
+    Check(runtime.LdPlayerError is not null && runtime.LdPlayer.Instances.SequenceEqual(instances), "Directory failure replaced the last successful snapshot.");
+    Check(runtime.GetDevices().SequenceEqual(devices), "Directory failure pruned an offline device.");
+    Check(runner.Commands.Count == 0, "Directory failure issued a console write.");
+});
+Test("runtime keeps non-Offline LD diagnostics and ordinary offline devices with an empty directory", async () =>
+{
+    foreach (var state in new[] { "Ready", "Unauthorized", "Error", "Discovered", "Failed", "Unknown" })
+    {
+        var backend = new KeyGateBackend { DiscoveryState = state }; backend.Devices.SetOnline("DEMO-002", false);
+        var runner = new ControlledLdRunner { List = "" };
+        await using var runtime = await DirectoryRuntime(backend, runner);
+        await runtime.RefreshAsync(); await runtime.RefreshLdPlayerAsync();
+        Check(runtime.GetDevices().Select(device => device.Serial).SequenceEqual(["DEMO-001", "DEMO-002"]), "Empty LD directory hid a diagnostic or ordinary offline device: " + state);
+        Check(runtime.GetDevices().Single(device => device.Serial == "DEMO-001").State == state, "Diagnostic retention did not cover the actual requested catalog state: " + state);
+        Check(runner.Commands.Count == 0, "Diagnostic retention issued a console write.");
+    }
+});
+Test("runtime deletion projection uses frozen LD bindings instead of unsaved connection changes", async () =>
+{
+    var backend = new DemoDeviceBackend(); backend.SetOnline("DEMO-001", false); backend.SetOnline("DEMO-002", false);
+    var runner = new ControlledLdRunner { List = "" };
+    await using var runtime = await DirectoryRuntime(backend, runner);
+    await runtime.RefreshAsync(); await runtime.RefreshLdPlayerAsync();
+    runtime.Settings = runtime.Settings with { LdSerialBindings = new() { [1] = "DEMO-002" } };
+    Check(runtime.GetDevices().Select(device => device.Serial).SequenceEqual(["DEMO-002"]), "Mutable settings were mistaken for the runtime's frozen LD ownership.");
+    Check(runtime.Settings.LdSerialBindings[1] == "DEMO-002" && runtime.FrozenConnectionSettings.LdSerialBindings[1] == "DEMO-001", "Projection changed either settings snapshot.");
+    Check(runtime.Devices.Snapshot.Count == 2 && runner.Commands.Count == 0, "Projection removed catalog data or sent a console write.");
+});
+Test("runtime factory initial LD snapshot retires absent bound offline identities", async () =>
+{
+    await using var runtime = await MatrixRuntime.CreateAsync(new() { AutoConnect = false, AutoStartApi = false, LdSerialBindings = new() { [99] = "DEMO-001" } }, Temp(), true);
+    Check(runtime.IsDemo && runtime.Backend is DemoDeviceBackend && runtime.LdPlayer is not null && runtime.LdPlayer.Instances.Count > 0
+        && runtime.LdPlayer.Instances.All(instance => instance.Index != 99), "Factory did not create the expected owned Demo directory.");
+    ((DemoDeviceBackend)runtime.Backend).SetOnline("DEMO-001", false);
+    await runtime.RefreshAsync();
+    Check(runtime.GetDevices().Select(device => device.Serial).SequenceEqual(["DEMO-002"]), "Factory's initial successful LD snapshot was not used without a manual LD refresh.");
+    Check(runtime.Devices.Snapshot.Count == 2 && runtime.Devices.Snapshot.Single(device => device.Serial == "DEMO-001").State == "Offline"
+        && runtime.FrozenConnectionSettings.LdSerialBindings[99] == "DEMO-001", "Factory projection removed catalog data or frozen authorization.");
 });
 Test("sync excludes duplicate source and commits one action per device", async () =>
 {
@@ -946,13 +1082,17 @@ sealed class GatedLdRunner : ILdConsoleRunner
     }
 }
 
-sealed class KeyGateBackend : IDeviceBackend
+sealed class KeyGateBackend : IDeviceBackend, IIdentityPinnedDeviceBackend
 {
     public DemoDeviceBackend Devices { get; } = new();
+    public string? DiscoveryState { get; init; }
+    public IIdentityPinnedDeviceCommands BindIdentity(DeviceCatalog catalog) => Devices.BindIdentity(catalog);
     public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public ConcurrentBag<string> Actions { get; } = [];
-    public Task<IReadOnlyList<DeviceInfo>> DiscoverAsync(CancellationToken ct = default) => Devices.DiscoverAsync(ct);
+    public Task<IReadOnlyList<DeviceInfo>> DiscoverAsync(CancellationToken ct = default) => DiscoveryState is null ? Devices.DiscoverAsync(ct) : DiscoverStateAsync(ct);
+    private async Task<IReadOnlyList<DeviceInfo>> DiscoverStateAsync(CancellationToken ct)
+        => (await Devices.DiscoverAsync(ct)).Select(device => device.Serial == "DEMO-001" ? device with { State = DiscoveryState! } : device).ToArray();
     public async Task KeyEventAsync(string serial, int code, CancellationToken ct = default)
     { if (code == 4) { Entered.SetResult(); await Release.Task.WaitAsync(ct); } Actions.Add(serial + ":key:" + code); }
     public Task TextAsync(string serial, string text, CancellationToken ct = default) { Actions.Add(serial + ":text:" + text); return Task.CompletedTask; }

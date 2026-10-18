@@ -188,7 +188,13 @@ public partial class MainWindow
         deadline.CancelAfter(TimeSpan.FromSeconds(20));
         try
         {
-            if (ViewModel.Runtime.LdPlayer is not null) await ViewModel.Runtime.RefreshLdPlayerAsync(deadline.Token);
+            if (ViewModel.Runtime.LdPlayer is { } service)
+            {
+                var hadInstances = service.Instances.Count > 0;
+                await ViewModel.Runtime.RefreshLdPlayerAsync(deadline.Token);
+                await ViewModel.ApplyCachedDeviceSnapshotAsync();
+                if (hadInstances && service.Instances.Count == 0) SetLaunchFeedback("本机实例已清空，设备目录已更新。");
+            }
             UpdateLdPlayerRows();
             if (DateTimeOffset.UtcNow - lastGuestDiscovery >= TimeSpan.FromSeconds(15))
             {

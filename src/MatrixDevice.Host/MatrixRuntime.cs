@@ -5,6 +5,7 @@ namespace MatrixDevice.Host;
 
 public sealed class MatrixRuntime : IAsyncDisposable
 {
+    private volatile bool hasLdPlayerSnapshot;
     public required IDeviceBackend Backend { get; init; }
     public required DeviceCatalog Devices { get; init; }
     public required ScriptScheduler Scripts { get; init; }
@@ -113,7 +114,7 @@ public sealed class MatrixRuntime : IAsyncDisposable
         }
         if (ldPlayer is not null)
         {
-            try { await ldPlayer.RefreshAsync(ct); }
+            try { await ldPlayer.RefreshAsync(ct); runtime.hasLdPlayerSnapshot = true; }
             catch (OperationCanceledException) { throw; }
             catch (Exception e) { runtime.LdPlayerError = e.Message; log.Write("ldplayer-discovery-error", e.Message); }
             var writeBindings = new Dictionary<int, (string Serial, long Generation)>();
@@ -229,14 +230,28 @@ public sealed class MatrixRuntime : IAsyncDisposable
     public async Task RefreshLdPlayerAsync(CancellationToken ct = default)
     {
         if (LdPlayer is null) throw new DeviceException("请先配置雷电命令行程序路径，并重新启动本程序", 503, 2001);
-        try { await LdPlayer.RefreshAsync(ct); LdPlayerError = null; }
+        try { await LdPlayer.RefreshAsync(ct); hasLdPlayerSnapshot = true; LdPlayerError = null; }
         catch (Exception e) { LdPlayerError = e.Message; throw; }
     }
-    public IReadOnlyList<DeviceInfo> GetDevices() => Devices.Snapshot.Select(device =>
+    public IReadOnlyList<DeviceInfo> GetDevices()
     {
-        var metadata = Metadata.GetMetadata(device.Serial);
-        return device with { Name = string.IsNullOrWhiteSpace(metadata.Name) ? device.Name : metadata.Name, GroupId = metadata.GroupId };
-    }).ToArray();
+        var devices = Devices.Snapshot;
+        if (hasLdPlayerSnapshot && LdPlayer is not null)
+        {
+            var indices = LdPlayer.Instances.Select(instance => instance.Index).ToHashSet();
+            var removedSerials = FrozenConnectionSettings.LdSerialBindings
+                .GroupBy(binding => binding.Value, StringComparer.Ordinal)
+                .Where(group => group.Count() == 1 && !indices.Contains(group.Single().Key))
+                .Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+            // Keep identity history internally, but do not publish deleted LD instances as ordinary offline devices.
+            devices = devices.Where(device => device.State != "Offline" || !removedSerials.Contains(device.Serial)).ToArray();
+        }
+        return devices.Select(device =>
+        {
+            var metadata = Metadata.GetMetadata(device.Serial);
+            return device with { Name = string.IsNullOrWhiteSpace(metadata.Name) ? device.Name : metadata.Name, GroupId = metadata.GroupId };
+        }).ToArray();
+    }
     public async Task StartApisAsync(CancellationToken ct = default)
     {
         var settings = Settings;

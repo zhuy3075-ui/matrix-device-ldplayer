@@ -250,7 +250,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         await ApplyCachedDeviceSnapshotAsync();
     }
 
-    private async Task ApplyCachedDeviceSnapshotAsync()
+    internal async Task ApplyCachedDeviceSnapshotAsync()
     {
         var rows = runtime.GetDevices();
         foreach (var info in rows)

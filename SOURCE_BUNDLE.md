@@ -4509,6 +4509,13 @@ public partial class App : Application
         base.OnStartup(e);
         try
         {
+            if (e.Args.Contains("--verify-deleted-devices", StringComparer.OrdinalIgnoreCase))
+            {
+                var deletedDirectory = ValidateDeletedDevicesArguments(e.Args);
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                await MatrixDevice.Desktop.MainWindow.RunDeletedDeviceVerificationAsync(deletedDirectory);
+                Shutdown(0); return;
+            }
             if (e.Args.Contains("--verify-files-workspace", StringComparer.OrdinalIgnoreCase))
             {
                 var filesDirectory = ValidateFilesWorkspaceArguments(e.Args);
@@ -4751,7 +4758,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            if (e.Args.Contains("--verify-live-file-terminal", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-files-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-text-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-settings-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
+            if (e.Args.Contains("--verify-deleted-devices", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-file-terminal", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-files-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-text-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-terminal-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-api-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-settings-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-write-ownership", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--probe-workspace-client", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-script-workspace", StringComparer.OrdinalIgnoreCase) || e.Args.Contains("--verify-live-dual-sync", StringComparer.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(ex);
                 ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -4769,6 +4776,29 @@ public partial class App : Application
             catch (Exception cleanupError) { Console.Error.WriteLine("启动失败后的资源清理异常：" + cleanupError); }
             finally { Shutdown(1); }
         }
+    }
+
+    private static string ValidateDeletedDevicesArguments(string[] args)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < args.Length; index++)
+        {
+            var key = args[index];
+            if (!new[] { "--verify-deleted-devices", "--demo", "--data-dir" }.Contains(key, StringComparer.OrdinalIgnoreCase) || !values.TryAdd(key, null))
+                throw new ArgumentException("PRECONDITION-FAIL: deleted-devices unknown, mixed or duplicate argument: " + key);
+            if (!key.Equals("--data-dir", StringComparison.OrdinalIgnoreCase)) continue;
+            if (++index >= args.Length || args[index].StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("PRECONDITION-FAIL: deleted-devices data-dir value missing.");
+            values[key] = args[index];
+        }
+        if (values.Count != 3 || !values.ContainsKey("--demo") || !values.TryGetValue("--data-dir", out var directory) || directory is null || !Path.IsPathFullyQualified(directory))
+            throw new ArgumentException("PRECONDITION-FAIL: deleted-devices requires explicit --demo and fresh absolute artifacts --data-dir.");
+        directory = Path.GetFullPath(directory);
+        if (!directory.Contains(Path.DirectorySeparatorChar + "artifacts" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || Directory.Exists(directory) || File.Exists(directory))
+            throw new ArgumentException("PRECONDITION-FAIL: deleted-devices requires a fresh artifacts directory: " + directory);
+        for (var parent = Path.GetDirectoryName(directory); !string.IsNullOrEmpty(parent); parent = Path.GetDirectoryName(parent))
+            if ((Directory.Exists(parent) || File.Exists(parent)) && (File.GetAttributes(parent) & FileAttributes.ReparsePoint) != 0)
+                throw new ArgumentException("PRECONDITION-FAIL: deleted-devices reparse ancestor: " + parent);
+        return directory;
     }
 
     private static string ValidateFilesWorkspaceArguments(string[] args)
@@ -23429,14 +23459,167 @@ public partial class MainWindow
 
 ```csharp
 using System.IO;
+using System.Reflection;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using MatrixDevice.Core;
+using MatrixDevice.Features;
+using MatrixDevice.Host;
 
 namespace MatrixDevice.Desktop;
 
 public partial class MainWindow
 {
+    private static readonly List<object> deletedDeviceRetainedOwners = [];
+
+    internal static async Task RunDeletedDeviceVerificationAsync(string directory)
+    {
+        if (!Application.Current.Dispatcher.CheckAccess() || Application.Current.Windows.Count != 0 || Application.Current.MainWindow is not null)
+            throw new InvalidOperationException("PRECONDITION-FAIL: deleted-devices requires its own STA with no existing window.");
+        Directory.CreateDirectory(directory);
+        MatrixRuntime? runtime = null; WorkspaceViewModel? vm = null; MainWindow? window = null;
+        var tasks = new List<(string Name, Task Task)>(); var checks = new List<object>(); var productFailures = new List<string>();
+        var cleanup = new List<string>(); Exception? error = null; object? before = null; object? after = null;
+        var closed = false; var shutdownRequests = 0; var console = new DeletedDevicesConsole(); var ownershipUnresolved = false;
+        var backend = new DemoDeviceBackend();
+        var constructionOwners = new List<(string Name, Func<Task> Dispose)> { ("backend", () => backend.DisposeAsync().AsTask()) };
+        Task Track(string name, Task task) { tasks.Add((name, task)); return task; }
+        void Require(bool condition, string message) { if (!condition) throw new InvalidOperationException("FIXTURE: " + message); }
+        void Check(string name, bool passed) { checks.Add(new { name, passed }); if (!passed) productFailures.Add(name); }
+        try
+        {
+            backend.SetOnline("DEMO-002", false);
+            var settings = new AppSettings { AutoConnect = false, AutoStartApi = false, SyncMouse = false, SyncKeyboard = false,
+                AgentBaseUrl = null, AgentSerial = null, AdbPath = "", LdConsolePath = "", LdSerialBindings = new() { [1] = "DEMO-001" } };
+            var catalog = new DeviceCatalog(backend); var writes = new DeviceWriteCoordinator();
+            var automation = new AutomationService(backend, catalog);
+            var metadata = new CatalogRepository(Path.Combine(directory, "db.sqlite3")); constructionOwners.Add(("metadata", () => { metadata.Dispose(); return Task.CompletedTask; }));
+            var log = new RollingLog(Path.Combine(directory, "logs")); constructionOwners.Add(("log", () => log.DisposeAsync().AsTask()));
+            var service = new LdPlayerService(console, true); constructionOwners.Add(("ld-directory", () => service.DisposeAsync().AsTask()));
+            var scripts = new ScriptScheduler(backend, catalog, true, writes); constructionOwners.Add(("scripts", () => scripts.DisposeAsync().AsTask()));
+            var input = new InputCoordinator(catalog, backend, writes); constructionOwners.Add(("input", () => input.DisposeAsync().AsTask()));
+            var api = new ApiServiceManager(catalog, backend, automation, log, writes) { LdPlayer = service }; constructionOwners.Add(("api", () => api.DisposeAsync().AsTask()));
+            runtime = new MatrixRuntime
+            {
+                Backend = backend, Devices = catalog, Writes = writes, Automation = automation, Scripts = scripts, Input = input, Api = api,
+                SettingsStore = new SettingsStore(Path.Combine(directory, "AppConfig.json")), Metadata = metadata,
+                Log = log, Settings = settings, FrozenConnectionSettings = settings with { LdSerialBindings = new(settings.LdSerialBindings) }, LdPlayer = service, IsDemo = true
+            };
+            constructionOwners.Clear();
+            Require(runtime.IsDemo && runtime.Backend is DemoDeviceBackend, "Only the owned Demo backend may be constructed.");
+            vm = new WorkspaceViewModel(runtime, directory, false);
+            await Track("initial-devices", vm.RefreshDevicesAsync()).WaitAsync(TimeSpan.FromSeconds(10));
+            await Track("initial-directory", runtime.RefreshLdPlayerAsync()).WaitAsync(TimeSpan.FromSeconds(10));
+            var bound = vm.Devices.Single(row => row.Serial == "DEMO-001"); var ordinary = vm.Devices.Single(row => row.Serial == "DEMO-002");
+            bound.IsSelected = true;
+            await Track("original-set-main", vm.SetMainAsync(bound)).WaitAsync(TimeSpan.FromSeconds(10));
+            Require(vm.MainDevice == bound && vm.CurrentDevice == bound && bound.Info.Online, "Original main/current setup failed.");
+            backend.SetOnline("DEMO-001", false);
+            await Track("offline-catalog", runtime.RefreshAsync()).WaitAsync(TimeSpan.FromSeconds(10));
+            // Invoke the same method on both private-red and internal-green production sources.
+            var apply = typeof(WorkspaceViewModel).GetMethod("ApplyCachedDeviceSnapshotAsync", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException("FIXTURE: Original cached snapshot method is missing.");
+            await Track("original-apply-cached", (Task)(apply.Invoke(vm, null) ?? throw new InvalidOperationException("FIXTURE: Cached snapshot returned no Task."))).WaitAsync(TimeSpan.FromSeconds(10));
+            Require(!bound.Info.Online && !ordinary.Info.Online && vm.MainDevice == bound && vm.CurrentDevice == bound && vm.Targets().SequenceEqual([bound]), "Stale offline selection was not established.");
+            window = new MainWindow(vm) { ShowActivated = false };
+            window.captureTimer.Stop(); window.directoryTimer.Stop(); window.monitorTimer.Stop(); window.closing = true;
+            window.applicationReadPending = false; window.applicationReadTimer?.Stop(); vm.DeviceChanged = null; vm.CurrentDebugReadyChanged = null;
+            window.Closed += (_, _) => closed = true; Application.Current.MainWindow = window;
+            window.UpdateUnifiedDirectory();
+            Require(window.unifiedDevices.Count == 2 && window.unifiedDevices.Single(row => row.Index == 1).Device == bound && window.deviceSummaries.Count > 0, "Original LD and ordinary rows were not established.");
+            window.unifiedDevices.Single(row => row.Index == 1).IsSelected = true;
+            Require(bound.IsSelected && window.unifiedDevices.Single(row => row.Index == 1).IsSelected && vm.CurrentDevice == bound && vm.MainDevice == bound
+                && vm.Targets().Count == 0 && vm.TargetContext == "已选目标包含 1 台未连接设备", "Stale offline selection must exist and remain gated after owned directory setup.");
+            before = new { devices = vm.Devices.Select(row => row.Serial).ToArray(), keys = window.unifiedDevices.Select(row => row.Key).ToArray(), current = vm.CurrentDevice?.Serial, main = vm.MainDevice?.Serial, targets = vm.Targets().Select(row => row.Serial).ToArray() };
+            var originalCatalog = runtime.Devices.Snapshot.ToArray();
+            console.List = ""; window.lastGuestDiscovery = DateTimeOffset.UtcNow.AddHours(1);
+            window.SetLaunchFeedback("已启动并连接 1 台设备。");
+            await Track("original-directory-refresh", window.RefreshDirectoryCoreAsync()).WaitAsync(TimeSpan.FromSeconds(10));
+            Check("successful-empty-ld-directory", runtime.LdPlayerError is null && service.Instances.Count == 0);
+            Check("deleted-offline-bound-row-removed", !vm.Devices.Contains(bound));
+            Check("ordinary-offline-row-reference-preserved", vm.Devices.Count == 1 && ReferenceEquals(vm.Devices[0], ordinary) && !ordinary.Info.Online);
+            Check("old-current-cleared", vm.CurrentDevice is null);
+            Check("old-main-cleared", vm.MainDevice is null);
+            Check("old-target-selection-cleared", vm.Targets().Count == 0 && vm.Devices.All(row => !row.IsSelected));
+            Check("unified-directory-has-only-ordinary-row", window.unifiedDevices.Count == 1 && window.unifiedDevices[0].Instance is null && ReferenceEquals(window.unifiedDevices[0].Device, ordinary) && !window.unifiedDevices[0].IsSelected);
+            Check("summary-reports-zero-local-instances", window.deviceSummaries.All(summary => summary.Text.StartsWith("本机 0 台", StringComparison.Ordinal)));
+            Check("old-connected-success-feedback-cleared", !window.ldFeedback.Text.Contains("已启动并连接", StringComparison.Ordinal) && !window.ldFeedback.Text.StartsWith("自动更新失败：", StringComparison.Ordinal));
+            Check("catalog-identities-and-generations-unchanged", runtime.Devices.Snapshot.SequenceEqual(originalCatalog));
+            Check("frozen-binding-not-deleted", runtime.FrozenConnectionSettings.LdSerialBindings[1] == "DEMO-001" && runtime.Settings.LdSerialBindings[1] == "DEMO-001");
+            Check("fake-console-only-list2", console.Calls.Count == 2 && console.Calls.All(call => call.SequenceEqual(["list2"])));
+            after = new { devices = vm.Devices.Select(row => row.Serial).ToArray(), keys = window.unifiedDevices.Select(row => row.Key).ToArray(), current = vm.CurrentDevice?.Serial, main = vm.MainDevice?.Serial, targets = vm.Targets().Select(row => row.Serial).ToArray(), feedback = window.ldFeedback.Text };
+        }
+        catch (Exception failure) { error = failure; }
+        finally
+        {
+            if (window is not null)
+            {
+                window.closing = true; window.captureTimer.Stop(); window.directoryTimer.Stop(); window.monitorTimer.Stop(); window.directoryCancellation.Cancel();
+                window.applicationReadPending = false; window.applicationReadTimer?.Stop();
+                _ = Track("window-stop-monitor", window.StopMonitorAsync());
+                foreach (var operation in new[] { window.directoryOperation, window.captureOperation, window.debugAutoOperation, window.monitorReconcile, window.monitorSampling, window.scanOperation, window.mainGestureOperation })
+                    if (operation is not null && !tasks.Any(item => ReferenceEquals(item.Task, operation))) _ = Track("original-window-operation", operation);
+            }
+            foreach (var item in tasks.ToArray()) try { await item.Task.WaitAsync(TimeSpan.FromSeconds(15)); } catch (Exception failure) { cleanup.Add(item.Name + ": " + failure); }
+            if (tasks.All(item => item.Task.IsCompleted))
+            {
+                shutdownRequests++;
+                if (runtime is null)
+                {
+                    foreach (var resource in constructionOwners.AsEnumerable().Reverse())
+                    {
+                        try { await Track("partial-construction-" + resource.Name, resource.Dispose()).WaitAsync(TimeSpan.FromSeconds(15)); }
+                        catch (Exception failure) { cleanup.Add(resource.Name + ": " + failure); ownershipUnresolved = true; break; }
+                    }
+                }
+                else
+                {
+                    try
+                    {
+                        var shutdown = vm is not null ? vm.ShutdownAsync() : runtime.DisposeAsync().AsTask();
+                        await Track("single-owner-shutdown", shutdown).WaitAsync(TimeSpan.FromSeconds(15));
+                    }
+                    catch (Exception failure) { cleanup.Add("shutdown: " + failure); ownershipUnresolved = true; }
+                }
+                if (!ownershipUnresolved && tasks.All(item => item.Task.IsCompleted) && window is not null)
+                {
+                    try
+                    {
+                        window.AbortStartup(); LocalizationService.Current.LanguageChanged -= window.OnLanguageChanged;
+                        if (!closed || window.IsVisible) cleanup.Add("Owned window did not close.");
+                        if (ReferenceEquals(Application.Current.MainWindow, window)) Application.Current.MainWindow = null;
+                    }
+                    catch (Exception failure) { cleanup.Add("close: " + failure); }
+                }
+            }
+            if (ownershipUnresolved || tasks.Any(item => !item.Task.IsCompleted)) deletedDeviceRetainedOwners.Add(new { runtime, vm, window, tasks, resources = constructionOwners.ToArray() });
+        }
+        var passed = error is null && productFailures.Count == 0 && cleanup.Count == 0 && deletedDeviceRetainedOwners.Count == 0 && closed && shutdownRequests == 1 && Application.Current.Windows.Count == 0 && Application.Current.MainWindow is null;
+        await File.WriteAllTextAsync(Path.Combine(directory, "deleted-devices.json"), JsonSerializer.Serialize(new
+        {
+            status = passed ? "PASS-OWN-WPF-DELETED-DEVICES" : "FAIL", checks, productFailures, error = error?.ToString(), cleanup, before, after,
+            tasks = tasks.Select(item => new { item.Name, status = item.Task.Status.ToString(), terminal = item.Task.IsCompleted }).ToArray(),
+            shutdownRequests, closed, retainedOwners = deletedDeviceRetainedOwners.Count, windows = Application.Current.Windows.Count, mainWindowNull = Application.Current.MainWindow is null,
+            scope = "Unshown owned WPF window, real non-auto-select VM and Demo backend. Original cached projection and directory refresh; no native GUI, real LD/ADB, emulator mutation or A07 lifecycle.",
+            notRun = new[] { "physical GUI", "real emulator/ADB", "native input", "A07 lifecycle", "full-goal acceptance" }
+        }, JsonDefaults.Options));
+        if (!passed) throw new InvalidOperationException("Deleted-devices verification failed; inspect deleted-devices.json.", error);
+    }
+
+    private sealed class DeletedDevicesConsole : ILdConsoleRunner
+    {
+        internal string List = "1,bound-demo,0,0,0,0,0,360,640,240";
+        internal List<string[]> Calls { get; } = [];
+        public Task<string> RunAsync(IReadOnlyList<string> arguments, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested(); Calls.Add(arguments.ToArray());
+            if (!arguments.SequenceEqual(["list2"])) throw new InvalidOperationException("Only fake list2 is permitted.");
+            return Task.FromResult(List);
+        }
+    }
+
     private async Task VerifyUnifiedDeviceActionsAsync(string? screenshot)
     {
         if (!ViewModel.Demo) throw new InvalidOperationException("统一实例操作验收仅限演示模式。");
@@ -23864,7 +24047,13 @@ public partial class MainWindow
         deadline.CancelAfter(TimeSpan.FromSeconds(20));
         try
         {
-            if (ViewModel.Runtime.LdPlayer is not null) await ViewModel.Runtime.RefreshLdPlayerAsync(deadline.Token);
+            if (ViewModel.Runtime.LdPlayer is { } service)
+            {
+                var hadInstances = service.Instances.Count > 0;
+                await ViewModel.Runtime.RefreshLdPlayerAsync(deadline.Token);
+                await ViewModel.ApplyCachedDeviceSnapshotAsync();
+                if (hadInstances && service.Instances.Count == 0) SetLaunchFeedback("本机实例已清空，设备目录已更新。");
+            }
             UpdateLdPlayerRows();
             if (DateTimeOffset.UtcNow - lastGuestDiscovery >= TimeSpan.FromSeconds(15))
             {
@@ -25571,7 +25760,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         await ApplyCachedDeviceSnapshotAsync();
     }
 
-    private async Task ApplyCachedDeviceSnapshotAsync()
+    internal async Task ApplyCachedDeviceSnapshotAsync()
     {
         var rows = runtime.GetDevices();
         foreach (var info in rows)
@@ -29337,6 +29526,7 @@ namespace MatrixDevice.Host;
 
 public sealed class MatrixRuntime : IAsyncDisposable
 {
+    private volatile bool hasLdPlayerSnapshot;
     public required IDeviceBackend Backend { get; init; }
     public required DeviceCatalog Devices { get; init; }
     public required ScriptScheduler Scripts { get; init; }
@@ -29445,7 +29635,7 @@ public sealed class MatrixRuntime : IAsyncDisposable
         }
         if (ldPlayer is not null)
         {
-            try { await ldPlayer.RefreshAsync(ct); }
+            try { await ldPlayer.RefreshAsync(ct); runtime.hasLdPlayerSnapshot = true; }
             catch (OperationCanceledException) { throw; }
             catch (Exception e) { runtime.LdPlayerError = e.Message; log.Write("ldplayer-discovery-error", e.Message); }
             var writeBindings = new Dictionary<int, (string Serial, long Generation)>();
@@ -29561,14 +29751,28 @@ public sealed class MatrixRuntime : IAsyncDisposable
     public async Task RefreshLdPlayerAsync(CancellationToken ct = default)
     {
         if (LdPlayer is null) throw new DeviceException("请先配置雷电命令行程序路径，并重新启动本程序", 503, 2001);
-        try { await LdPlayer.RefreshAsync(ct); LdPlayerError = null; }
+        try { await LdPlayer.RefreshAsync(ct); hasLdPlayerSnapshot = true; LdPlayerError = null; }
         catch (Exception e) { LdPlayerError = e.Message; throw; }
     }
-    public IReadOnlyList<DeviceInfo> GetDevices() => Devices.Snapshot.Select(device =>
+    public IReadOnlyList<DeviceInfo> GetDevices()
     {
-        var metadata = Metadata.GetMetadata(device.Serial);
-        return device with { Name = string.IsNullOrWhiteSpace(metadata.Name) ? device.Name : metadata.Name, GroupId = metadata.GroupId };
-    }).ToArray();
+        var devices = Devices.Snapshot;
+        if (hasLdPlayerSnapshot && LdPlayer is not null)
+        {
+            var indices = LdPlayer.Instances.Select(instance => instance.Index).ToHashSet();
+            var removedSerials = FrozenConnectionSettings.LdSerialBindings
+                .GroupBy(binding => binding.Value, StringComparer.Ordinal)
+                .Where(group => group.Count() == 1 && !indices.Contains(group.Single().Key))
+                .Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+            // Keep identity history internally, but do not publish deleted LD instances as ordinary offline devices.
+            devices = devices.Where(device => device.State != "Offline" || !removedSerials.Contains(device.Serial)).ToArray();
+        }
+        return devices.Select(device =>
+        {
+            var metadata = Metadata.GetMetadata(device.Serial);
+            return device with { Name = string.IsNullOrWhiteSpace(metadata.Name) ? device.Name : metadata.Name, GroupId = metadata.GroupId };
+        }).ToArray();
+    }
     public async Task StartApisAsync(CancellationToken ct = default)
     {
         var settings = Settings;
@@ -38948,6 +39152,7 @@ if (args.Length > 0 && args[0] == "--ldconsole-test-child")
 }
 
 var tests = new List<(string Name, Func<Task> Run)>();
+var directoryConstructionRetainedOwners = new List<object>();
 void Test(string name, Func<Task> run) => tests.Add((name, run));
 Test("window geometry preserves supported compact sizes through normalize save and fresh load", () =>
 {
@@ -39049,6 +39254,50 @@ async Task Throws<T>(Func<Task> action) where T : Exception
     throw new Exception("Expected " + typeof(T).Name);
 }
 string Temp() { var path = Path.Combine(Path.GetTempPath(), "MatrixDevice.Tests", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(path); return path; }
+async Task<MatrixRuntime> DirectoryRuntime(IDeviceBackend backend, ControlledLdRunner? runner)
+{
+    var owned = new List<(string Name, Func<Task> Dispose)> { ("backend", () => backend.DisposeAsync().AsTask()) };
+    try
+    {
+        var path = Temp();
+        var settings = new AppSettings { LdSerialBindings = new() { [1] = "DEMO-001" } };
+        var catalog = new DeviceCatalog(backend); var writes = new DeviceWriteCoordinator(); var automation = new AutomationService(backend, catalog);
+        var metadata = new CatalogRepository(Path.Combine(path, "db.sqlite3")); owned.Add(("metadata", () => { metadata.Dispose(); return Task.CompletedTask; }));
+        var log = new RollingLog(Path.Combine(path, "logs")); owned.Add(("log", () => log.DisposeAsync().AsTask()));
+        var service = runner is null ? null : new LdPlayerService(runner, true);
+        if (service is not null) owned.Add(("ld-directory", () => service.DisposeAsync().AsTask()));
+        var scripts = new ScriptScheduler(backend, catalog, true, writes); owned.Add(("scripts", () => scripts.DisposeAsync().AsTask()));
+        var input = new InputCoordinator(catalog, backend, writes); owned.Add(("input", () => input.DisposeAsync().AsTask()));
+        var api = new ApiServiceManager(catalog, backend, automation, log, writes) { LdPlayer = service }; owned.Add(("api", () => api.DisposeAsync().AsTask()));
+        return new MatrixRuntime
+        {
+            Backend = backend, Devices = catalog, Writes = writes, Automation = automation, Scripts = scripts, Input = input, Api = api,
+            SettingsStore = new SettingsStore(Path.Combine(path, "AppConfig.json")), Metadata = metadata,
+            Log = log, Settings = settings, FrozenConnectionSettings = settings with { LdSerialBindings = new(settings.LdSerialBindings) },
+            LdPlayer = service, IsDemo = true
+        };
+    }
+    catch (Exception constructionError)
+    {
+        var cleanupErrors = new List<string>();
+        foreach (var resource in owned.AsEnumerable().Reverse())
+        {
+            Task? disposal = null;
+            try { disposal = resource.Dispose(); await disposal.WaitAsync(TimeSpan.FromSeconds(15)); }
+            catch (Exception cleanupError)
+            {
+                cleanupErrors.Add(resource.Name + ": " + cleanupError);
+                directoryConstructionRetainedOwners.Add(new { resources = owned.ToArray(), disposal, cleanupError });
+                break;
+            }
+        }
+        constructionError.Data["partialConstructionCleanup"] = cleanupErrors.ToArray();
+        constructionError.Data["partialConstructionRetainedOwners"] = directoryConstructionRetainedOwners.Count;
+        Console.Error.WriteLine($"DIRECTORY-CONSTRUCTION-FAIL retainedOwners={directoryConstructionRetainedOwners.Count}; cleanupErrors={cleanupErrors.Count}");
+        foreach (var message in cleanupErrors) Console.Error.WriteLine(message);
+        throw;
+    }
+}
 ScriptPackage Package(params ScriptStep[] steps) => new() { Manifest = new() { Id = "test-package", Name = "Test", Version = "1.0" }, Steps = steps.ToList() };
 JsonElement Body(object body) => JsonSerializer.SerializeToElement(body, JsonDefaults.Options);
 int Port() { var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop(); return port; }
@@ -39121,6 +39370,97 @@ Test("catalog retains offline identity and changes reconnect generation", async 
     await catalog.RefreshAsync(); Check(notifications == 1, "Offline notification repeated without change");
     backend.SetOnline("DEMO-001", true); await catalog.RefreshAsync();
     Check(catalog.GetRequired("DEMO-001").Generation > before.Generation + 1, "Reconnect retained old generation");
+});
+Test("runtime hides deleted bound offline LD devices without deleting catalog identities", async () =>
+{
+    var backend = new DemoDeviceBackend(); backend.SetOnline("DEMO-001", false); backend.SetOnline("DEMO-002", false);
+    var runner = new ControlledLdRunner { List = "1,bound,0,0,0,0,0,360,640,240" };
+    await using var runtime = await DirectoryRuntime(backend, runner);
+    await runtime.RefreshAsync(); await runtime.RefreshLdPlayerAsync();
+    Check(runtime.GetDevices().Count == 2, "A stopped but existing LD instance disappeared.");
+    var catalog = runtime.Devices.Snapshot.ToArray();
+    runner.List = ""; await runtime.RefreshLdPlayerAsync();
+    Check(runtime.GetDevices().Select(device => device.Serial).SequenceEqual(["DEMO-002"]), "Deleted LD offline identity remained visible or ordinary offline identity disappeared.");
+    Check(runtime.Devices.Snapshot.SequenceEqual(catalog), "Projection changed catalog identity or generation.");
+    Check(runtime.FrozenConnectionSettings.LdSerialBindings[1] == "DEMO-001", "Projection removed the frozen authorization.");
+    runner.List = "not-a-list2-row"; await Throws<DeviceException>(() => runtime.RefreshLdPlayerAsync());
+    Check(runtime.GetDevices().Select(device => device.Serial).SequenceEqual(["DEMO-002"]), "Failed query resurrected an identity already confirmed deleted.");
+    using (var cancellation = new CancellationTokenSource())
+    {
+        cancellation.Cancel(); await Throws<OperationCanceledException>(() => runtime.RefreshLdPlayerAsync(cancellation.Token));
+        Check(runtime.GetDevices().Select(device => device.Serial).SequenceEqual(["DEMO-002"]), "Cancelled query resurrected an identity already confirmed deleted.");
+    }
+    Check(runtime.Devices.Snapshot.SequenceEqual(catalog), "Failed or cancelled query changed catalog identity or generation.");
+    runner.List = "1,bound,0,0,0,0,0,360,640,240"; await runtime.RefreshLdPlayerAsync();
+    Check(runtime.GetDevices().Count == 2, "A stopped instance did not become visible after returning to the directory.");
+    Check(runner.Commands.Count == 0, "Directory projection issued a console write.");
+});
+Test("runtime retains offline devices before a successful LD snapshot or without LD", async () =>
+{
+    foreach (var configured in new[] { false, true })
+    {
+        var backend = new DemoDeviceBackend(); backend.SetOnline("DEMO-001", false); backend.SetOnline("DEMO-002", false);
+        var runner = configured ? new ControlledLdRunner { List = "not-a-list2-row" } : null;
+        await using var runtime = await DirectoryRuntime(backend, runner);
+        await runtime.RefreshAsync();
+        Check(runtime.GetDevices().Count == 2, "Uninitialized or unconfigured LD was treated as an authoritative empty directory.");
+        if (configured)
+        {
+            await Throws<DeviceException>(() => runtime.RefreshLdPlayerAsync());
+            Check(runtime.LdPlayerError is not null && runtime.GetDevices().Count == 2, "Failed first directory query removed offline identities.");
+            using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+            await Throws<OperationCanceledException>(() => runtime.RefreshLdPlayerAsync(cancellation.Token));
+            Check(runtime.GetDevices().Count == 2, "Cancelled first directory query was treated as a successful empty snapshot.");
+            Check(runner!.Commands.Count == 0, "Failed directory lookup issued a console write.");
+        }
+    }
+});
+Test("runtime preserves stopped LD and ordinary offline devices after a directory failure", async () =>
+{
+    var backend = new DemoDeviceBackend(); backend.SetOnline("DEMO-001", false); backend.SetOnline("DEMO-002", false);
+    var runner = new ControlledLdRunner { List = "1,bound,0,0,0,0,0,360,640,240" };
+    await using var runtime = await DirectoryRuntime(backend, runner);
+    await runtime.RefreshAsync(); await runtime.RefreshLdPlayerAsync();
+    var instances = runtime.LdPlayer!.Instances.ToArray(); var devices = runtime.GetDevices().ToArray();
+    runner.List = "not-a-list2-row"; await Throws<DeviceException>(() => runtime.RefreshLdPlayerAsync());
+    Check(runtime.LdPlayerError is not null && runtime.LdPlayer.Instances.SequenceEqual(instances), "Directory failure replaced the last successful snapshot.");
+    Check(runtime.GetDevices().SequenceEqual(devices), "Directory failure pruned an offline device.");
+    Check(runner.Commands.Count == 0, "Directory failure issued a console write.");
+});
+Test("runtime keeps non-Offline LD diagnostics and ordinary offline devices with an empty directory", async () =>
+{
+    foreach (var state in new[] { "Ready", "Unauthorized", "Error", "Discovered", "Failed", "Unknown" })
+    {
+        var backend = new KeyGateBackend { DiscoveryState = state }; backend.Devices.SetOnline("DEMO-002", false);
+        var runner = new ControlledLdRunner { List = "" };
+        await using var runtime = await DirectoryRuntime(backend, runner);
+        await runtime.RefreshAsync(); await runtime.RefreshLdPlayerAsync();
+        Check(runtime.GetDevices().Select(device => device.Serial).SequenceEqual(["DEMO-001", "DEMO-002"]), "Empty LD directory hid a diagnostic or ordinary offline device: " + state);
+        Check(runtime.GetDevices().Single(device => device.Serial == "DEMO-001").State == state, "Diagnostic retention did not cover the actual requested catalog state: " + state);
+        Check(runner.Commands.Count == 0, "Diagnostic retention issued a console write.");
+    }
+});
+Test("runtime deletion projection uses frozen LD bindings instead of unsaved connection changes", async () =>
+{
+    var backend = new DemoDeviceBackend(); backend.SetOnline("DEMO-001", false); backend.SetOnline("DEMO-002", false);
+    var runner = new ControlledLdRunner { List = "" };
+    await using var runtime = await DirectoryRuntime(backend, runner);
+    await runtime.RefreshAsync(); await runtime.RefreshLdPlayerAsync();
+    runtime.Settings = runtime.Settings with { LdSerialBindings = new() { [1] = "DEMO-002" } };
+    Check(runtime.GetDevices().Select(device => device.Serial).SequenceEqual(["DEMO-002"]), "Mutable settings were mistaken for the runtime's frozen LD ownership.");
+    Check(runtime.Settings.LdSerialBindings[1] == "DEMO-002" && runtime.FrozenConnectionSettings.LdSerialBindings[1] == "DEMO-001", "Projection changed either settings snapshot.");
+    Check(runtime.Devices.Snapshot.Count == 2 && runner.Commands.Count == 0, "Projection removed catalog data or sent a console write.");
+});
+Test("runtime factory initial LD snapshot retires absent bound offline identities", async () =>
+{
+    await using var runtime = await MatrixRuntime.CreateAsync(new() { AutoConnect = false, AutoStartApi = false, LdSerialBindings = new() { [99] = "DEMO-001" } }, Temp(), true);
+    Check(runtime.IsDemo && runtime.Backend is DemoDeviceBackend && runtime.LdPlayer is not null && runtime.LdPlayer.Instances.Count > 0
+        && runtime.LdPlayer.Instances.All(instance => instance.Index != 99), "Factory did not create the expected owned Demo directory.");
+    ((DemoDeviceBackend)runtime.Backend).SetOnline("DEMO-001", false);
+    await runtime.RefreshAsync();
+    Check(runtime.GetDevices().Select(device => device.Serial).SequenceEqual(["DEMO-002"]), "Factory's initial successful LD snapshot was not used without a manual LD refresh.");
+    Check(runtime.Devices.Snapshot.Count == 2 && runtime.Devices.Snapshot.Single(device => device.Serial == "DEMO-001").State == "Offline"
+        && runtime.FrozenConnectionSettings.LdSerialBindings[99] == "DEMO-001", "Factory projection removed catalog data or frozen authorization.");
 });
 Test("sync excludes duplicate source and commits one action per device", async () =>
 {
@@ -39811,13 +40151,17 @@ sealed class GatedLdRunner : ILdConsoleRunner
     }
 }
 
-sealed class KeyGateBackend : IDeviceBackend
+sealed class KeyGateBackend : IDeviceBackend, IIdentityPinnedDeviceBackend
 {
     public DemoDeviceBackend Devices { get; } = new();
+    public string? DiscoveryState { get; init; }
+    public IIdentityPinnedDeviceCommands BindIdentity(DeviceCatalog catalog) => Devices.BindIdentity(catalog);
     public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public ConcurrentBag<string> Actions { get; } = [];
-    public Task<IReadOnlyList<DeviceInfo>> DiscoverAsync(CancellationToken ct = default) => Devices.DiscoverAsync(ct);
+    public Task<IReadOnlyList<DeviceInfo>> DiscoverAsync(CancellationToken ct = default) => DiscoveryState is null ? Devices.DiscoverAsync(ct) : DiscoverStateAsync(ct);
+    private async Task<IReadOnlyList<DeviceInfo>> DiscoverStateAsync(CancellationToken ct)
+        => (await Devices.DiscoverAsync(ct)).Select(device => device.Serial == "DEMO-001" ? device with { State = DiscoveryState! } : device).ToArray();
     public async Task KeyEventAsync(string serial, int code, CancellationToken ct = default)
     { if (code == 4) { Entered.SetResult(); await Release.Task.WaitAsync(ct); } Actions.Add(serial + ":key:" + code); }
     public Task TextAsync(string serial, string text, CancellationToken ct = default) { Actions.Add(serial + ":text:" + text); return Task.CompletedTask; }
