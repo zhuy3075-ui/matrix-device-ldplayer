@@ -1,221 +1,209 @@
-# 矩阵设备文档还原工程
+# 矩阵设备
 
-依据 `docs/reference/` 的 11 份文档独立编写的 C# 工程。界面统一简体中文，增加雷电实例管理及官方命令行适配。覆盖设备目录、截图墙与群控、节点调试、Shell、应用与文件、脚本、两类 HTTP API、配置、SQLite 元数据、诊断。原始源码、私有手机 JAR、完整视频握手、商业登录与 ROM 功能不在文档中，不能逐字节恢复。
+面向 Windows 的 Android / 雷电模拟器管理与调试工作台，采用 C#、.NET 10 和 WPF，默认使用简体中文。将实例接入、画面监看、界面节点、应用、文件和自动化操作集中到一个桌面程序中。
 
-新版桌面采用侧栏导航和浅色中性主题，12页显示名为设备、监控、界面检查、截屏、终端、应用、文件、文本、自动化、接口、工具、设置，内部Tag和功能保持原值。共享字体、状态/焦点、中文可访问名称与120ms局部反馈已通过[独立阶段验收](docs/codex/apple-experience/A03_APPEARANCE.md)。[公共响应式阶段](docs/codex/apple-experience/A04_RESPONSIVE_SHELL.md)已统一最低外窗390×640，六尺寸验证导航抽屉、公共字段和指定自有弹窗；固定页面正文、触控完整信息、真实DPI与实机仍待后续，不宣称全页小屏已完成。所有页面已移除搜索栏、“当前设备”摘要及分组筛选；需要单设备命令的页面保留可交互的“单设备目标”选择。设备管理固定列表，实时多画面使用独立“监控”，不会删除已有分组元数据。最新布局与验证边界见[列表控制台精简](docs/codex/list-console/REPORT.md)，历史四项布局见[控制台调整报告](docs/codex/unified-console-ui/REPORT.md)。构建后可运行 `./tools/Start-Desktop.ps1 -Demo` 查看演示界面；真实模式不加Demo，雷电路径仍需显式配置。
+本仓库用于**正式版本的源码发布**，默认分支为 `main`；`test` 保留历史备份，`codex/unified-device-access` 保留开发历史。工程依据参考文档独立编写，**不是雷电官方产品，也不是原商业软件的源码或完整替代品**。发布范围和已知限制见下文，不以正式发布名义将未验收项目标为通过。
 
-设备管理使用一个侧栏入口和一份统一列表，关闭、启动中、待连接和已连接实例同屏显示。已移除“全部设备/高级管理”、视图切换、实例目标下拉及重复的“启动并连接/接入已运行实例”。表头复选框统一全选与取消选择，不删除设备；启动所选和行内启动自动判断是否需要冷启动，已运行实例只连接。“实例操作”的资源配置、关闭、重启仅操作列表中唯一勾选的有效实例，多选或空选不回退到高亮行/旧目标。新建空白实例保留直达，旧隐藏窗口恢复放在实例菜单，取消启动只在启动任务进行时显示。
+[功能介绍](#功能介绍) · [界面介绍](#界面介绍) · [快速开始](#快速开始) · [真实设备接入](#真实设备接入) · [验证与限制](#验证与限制)
 
-“启动所选”包含被状态筛选隐藏的已勾选实例；“一键启动全部”包含全部尚未连接的可接入实例，不受当前状态筛选限制。两者排除受保护实例，已运行的仅连接；按钮禁用时仍可查看范围提示。顶部“更多”只放网络连接和立即更新目录，与“实例操作”职责不同。
+## 功能介绍
 
-雷电多开器中删除实例后，成功的自动目录更新会移除其唯一绑定串号的旧离线展示，同时清理旧选择、单设备目标及主控引用，不再把已删除实例当成普通离线设备。仍存在但关闭的实例、普通USB/TCP离线设备和非Offline诊断状态保留；读取失败或取消不等于空目录。内部身份历史、连接代次、元数据和授权配置不删除，普通设备接口监听也不会因此自动停止。复现、验证及限制见[删除实例目录同步](docs/codex/deleted-instance-directory.md)。本轮只修此缺陷，此前全面验收目标仍按用户要求暂停。
+| 页面 | 主要功能 | 交互与边界 |
+| --- | --- | --- |
+| **设备** | 统一列出本地雷电实例与设备，查看状态、型号、品牌、Android 版本、序列号、分辨率；单台、所选或全部启动接入 | 固定列表、自动更新；关闭实例先启动，运行实例只连接；新建空白实例不自动开机 |
+| **监控** | 卡片内直接观看已连接设备的视频；资源列表展示主机和实例 CPU、内存、短期趋势 | 无需放大卡片；需要视频组件；暂停、切页和移出可见区域释放对应视频会话，不关闭模拟器 |
+| **界面检查** | 读取截图和 UI 节点树，查看属性与边界，导出 JSON，辅助元素定位 | 截图与节点绑定设备身份，拒绝迟到结果覆盖；动态页面可能无法生成节点 |
+| **截屏** | 读取屏幕、缩放、取色、裁剪、导出 PNG | 定位截图与实时视频分开，视频帧不会覆盖正在检查的坐标 |
+| **终端** | 对指定设备执行 Android Shell，查看输出、命令历史 | 结果保留设备归属；执行期间可准备新草稿；不是电脑端通用 Shell |
+| **应用** | 按模拟器读取安装列表，多选 APK 安装，勾选应用卸载；更多菜单提供启动、停止、清数据 | 独立选择目标、操作确认、逐项进度和错误；系统应用有保护，卸载和清数据不可撤销 |
+| **文件** | 上传、下载、传输队列、停止、重试，可选择上传 APK 后安装 | 每项任务保留设备与路径；停止不撤销已完成操作 |
+| **文本** | 编辑、粘贴、载入文件，向单台或所选设备发送文字 | 加载期间保留新草稿；雷电中文输入需要明确有效的实例绑定 |
+| **自动化** | 导入 `.jxscript` / `.zip`，设置参数，查看逐设备任务、日志和结果，按任务取消 | 支持已定义的应用启动、等待、点击、滑动及参数绑定；不执行任意 Python / JavaScript，不是通用 RPA |
+| **接口** | 普通 HTTP、Automator、逐设备接口启停，页面内请求与响应调试 | 默认不自动启动；受控本机集成，没有生产级鉴权，不应暴露到公网 |
+| **工具** | 解析代理配置、导出无凭据 JSON、核验 root，确认后应用并核验时区 | 时区操作需要 root；代理运行器和私有 ROM 路由规则未恢复，不提供代理连接 |
+| **设置** | 雷电命令行、设备授权与绑定、视频组件、接口端口、窗口参数 | 连接路径变更通常需重启；未实现的硬件解码等参数保持禁用 |
 
-状态筛选仅影响设备列表显示，不改主控、群控勾选或监控范围。详情仅保留独立设备选择、状态和改名，不再有第二套群控/隐藏全局筛选；改名原样保留旧分组元数据。表头选中当前列表可勾选行，取消会清除全部选择（含被筛选隐藏的项）；“启动所选”包括隐藏勾选，“一键启动全部”面向完整目录。状态列显示实际字段分类，原始状态和操作阶段在提示中保留；启动中动作称“等待连接”，不确定状态称“接入”，提示说明重新检查、条件启动、等待和可能失败，不表示自动修复或必然连接。详见[A05a隔离报告](docs/codex/apple-experience/A05_DEVICE_STATE.md)与[操作文案修复](docs/codex/apple-experience/A05_DEVICE_LABELS.md)，不等于真实视频连续性或启动效果已验。
+### 实例与群控
 
-设备页窄窗口固定勾选和操作两列，原14项信息仍可横向滚动，其它信息列保留调宽；行内动作、主控按键和同步开关使用44逻辑命中区。主控按实际工作区在侧栏与同区域展开间切换，返回入口固定，正文和投屏末端可自然滚到；缩放、离页、失活或拖出画面取消未完成手势，不重设主控、当前设备或勾选。返回保留可实现的滚动位置，新的滚轮操作不被旧恢复任务覆盖。六尺寸独立Demo验收和实测边界见[设备与主控适配报告](docs/codex/apple-experience/A05_DEVICE_RESPONSIVE.md)；不代表其它页面手机正文、物理输入、自动定时调度、真实DPI或实机均已通过。
+- **一个设备入口**：关闭、启动中、待连接和已连接实例同屏管理，不再拆成“全部设备 / 高级管理”，没有搜索、分组筛选或设备卡片模式。
+- **一键启动**：行内启动、启动所选、一键启动全部共享接入流程，显示进度，可停止后续。仅检测到明确内存不足时确认；资源未知不等于不足，也不保证启动成功。
+- **实例操作**：新建空白实例；对唯一勾选实例配置 CPU、内存、分辨率、DPI，或关闭、重启。配置要求完全退出；编号 `0` 正常可用，负数和内部哨兵拒绝。
+- **主控与同步**：“控制”打开嵌入面板。同步点击滑动只复制该面板手势；同步按键只复制程序内主页、返回、任务、音量键，目标是明确勾选的其他设备。不是物理键盘镜像，也不监听雷电原生窗口。
+- **目录一致性**：成功更新雷电目录后移除已删除实例的旧离线展示，清理相关选择；读取失败不当作空目录，不删除内部身份历史或授权配置。
+- **窗口行为**：已移除后台隐藏启动，启动按雷电默认方式显示窗口。监控卡片可请求显示经进程身份核验的既有雷电窗口，再用鼠标键盘操作。
 
-已删除重复的实例快捷表单：应用安装、卸载、启停统一到“应用”，文字发送使用“文本”。已连接行的“控制”打开列表旁主控面板，保留主页、返回、任务、音量和投屏，关闭面板归还列表宽度。“同步点击滑动”只复制主控嵌入画面的手势；“同步按键”只复制程序内主页/返回/任务/音量键，二者目标都是列表明确勾选的其他设备，不监听雷电原生窗口，也不等于物理键盘镜像或文字广播。含未连接目标时拒绝同步。各独立页面选择不暗中互相授权。历史入口去重见[上轮报告](docs/codex/device-action-dedup/REPORT.md)。模拟器数量不等同于可控设备数量；官方能力、限制和删除建议见[统一管理调研](docs/testing/unified-devices/OFFICIAL-RESEARCH.md)，窗口行为变更见[一键启动报告](docs/testing/one-click-start/REPORT.md)。
+## 界面介绍
 
-[真实双实例补验](docs/codex/apple-experience/A13_DUAL_INSTANCE_SYNC.md)已取得专用实例1/2的14项VM-SDK实际效果有限通过：主控A/当前B、两同步开关四种组合的点击/滑动/主页，以及取消勾选后的隔离反例，均由节点和PNG复核。原业务路径未改，不用分别发送两次命令冒充同步。外层脚本误读成功报告省略的null字段，原outer1保留；离线2正例/6拒例报告合同复验通过，不称原外层整轮通过。正式入口`--verify-live-dual-sync`只接受已核定的两台专用实例、固定雷电身份与新鲜manifest，不是任意设备测试入口；默认构建不会触发真实设备。主仓原209项、十一严格早拒、旧VM9与十二自有WPF案例及清理获独审通过，构建3警告/0错误。完整物理GUI、文字输入、当前应用页安装卸载和最终双实例30分钟仍待，不由这14项代替。
+以下 7 张图片于 **2026-10-22** 从本机已构建程序的独立 **Demo 工作区**生成，是真实 WPF 界面渲染截图，不是设计稿。设备、包名和节点均为演示数据，**不代表真实模拟器、物理点击或性能验收**。来源与文件摘要见 [截图说明](docs/images/README.md)。
 
-设置页保留原21输入、4复选框和7按钮，按正文宽度单/双列重排，长JSON在输入框内滚动；原保存命令先校验实际绑定、投屏范围与HTTP/HTTPS地址，成功后同一编辑器回填合并值。明确修改窗体尺寸按轴应用，普通保存不重置手动调整的窗口；旧关闭路径仍保留。独立与主仓各原225项及16组自有WPF/Demo专项通过，覆盖六尺寸、错误纠正、写入故障、外部修改连续保存、尺寸与原正常关闭、运行中自有API端口保护；可用`--verify-settings-workspace --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`运行专项。见[设置工作区报告](docs/codex/apple-experience/A09_SETTINGS_WORKSPACE.md)，原失败保持；额外超宽前置未建立、最大化、原生选择器、真实DPI/外部GUI/实机及最终30分钟仍未验，不宣称全部设置集成路径完成。
+### 设备列表
 
-双网关启动现在共享一次生命周期锁，失败仅撤回本次新建监听，不再停止之前已运行的网关或设备接口；原有端口冲突与取消错误保留。独立及主仓各235项通过（原225与新增10），并验证实际HTTP、端口保留、占用监听和重试；MCP Demo14通过、13项未验仍保留。见[接口启动记录](docs/codex/apple-experience/A09_API_STARTUP.md)。这是同Runtime、自有loopback的限域结果，不代表中途取消、回滚释放故障、全部并发交错、API页面GUI或真实设备验收完成。
+左侧统一导航，正文集中显示实例状态与操作。勾选用于批量启动或群控，状态筛选只影响显示；横向滚动可查看其余字段。
 
-接口页保留原五个动作及六列表格，明确“停止全部接口”与按目标停止设备接口的职责；只有设备接口运行且未选中设备时仍能全停，全部目标已有接口时禁用重复启用。部分设备启用失败后如实刷新已成功设备的地址和数量。请求结果标注实际接口、端口和请求；参数、设备协议目标或实际端点变化后，旧在途结果不会回填，同端点目录刷新则保留合法结果。页面宽屏并列、窄屏上下滚读，长字段可查看完整提示。独立及主仓各235项和十二组自有WPF/Demo专项通过，含六尺寸、实际HTTP与五种在途变化；入口为`--verify-api-workspace --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`，详见[接口工作区记录](docs/codex/apple-experience/A09_API_WORKSPACE.md)。这是逻辑控件与本机接口验收，不代表物理GUI、DPI、实机、传输门或最终双实例30分钟均已通过。
+![设备页：统一实例列表、状态筛选、一键启动入口，Demo 数据](docs/images/devices.png)
 
-终端在执行期间仍可准备下一条命令，成功或失败结束仅清理没有再次编辑的提交版本，保留AB、ABA及同步通知里的新草稿；原命令、设备归属和写入门禁不变。上下键与历史双击回填保持原入口，长命令/来源换行，输出在原只读文本框内滚动，列表保留虚拟化并按像素滚动。独立候选及主仓各235项、MCP演示14项和十二组自有WPF/Demo专项实际通过，覆盖六尺寸、832项检查和同步通知边界；可用`--verify-terminal-workspace --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`运行专项，详见[终端工作区记录](docs/codex/apple-experience/A08_TERMINAL_WORKSPACE.md)。保留测试编译/报告失败、旧产品红、陈旧编译物及最小窗口末字裁剪的原记录；此项不代表物理键鼠、真实ADB终端/文本/文件、DPI、应用GUI安装卸载或最终双实例30分钟均已通过。
+### 多画面监控
 
-文本页加载文件时会保留请求之后新编辑的草稿，包括改后又改回原值的情况；旧读取失效显示停止，不误报替换成功。原粘贴、加载、单/多目标发送及发送后保留草稿的行为不变，三个原动作采用局部44逻辑点击区域。独立候选和主仓各235项、MCP演示14项及15组自有WPF/Demo专项通过，包含六尺寸、227项检查、真实本地文件和Demo节点回读；入口为`--verify-text-workspace --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`，详见[文本工作区记录](docs/codex/apple-experience/A08_TEXT_WORKSPACE.md)。原失败和测量夹具修正均保留；原生文件选择器/剪贴板、物理输入、DPI、真实ADB中文及任意I/O交错仍未验，真实ADB的控制字符限制未改变。
+画面墙直接观察各设备页面，资源列表查看资源变化。**此 Demo 图未连接真实视频，画面区为“未授权视频”，资源为“未知”；仅展示布局，不是实时视频效果截图，也没有伪造帧率或资源值。**
 
-文件页在添加上传/下载任务后即时更新总进度，下载成功后更新同一行的本地大小，不需切页或手动刷新。保留原路径、五个动作、上传后安装开关与七列队列；动作使用局部44逻辑命中区域，长值可通过原绑定提示查看。独立候选及主仓各原235项、MCP演示14项及15组自有WPF/Demo专项通过并获独审，包含六尺寸、326项检查、真实本地文件字节回读和原队列取消/重试。入口为`--verify-files-workspace --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`，详见[文件工作区记录](docs/codex/apple-experience/A08_FILES_WORKSPACE.md)。这不代表真实模拟器、原生选择器、上传APK后安装、物理GUI/DPI或最终双实例30分钟已验收。
+![监控页：双设备卡片布局，Demo 未授权视频状态](docs/images/monitor.png)
 
-专用实例1/2已通过[真实终端与文件往返补验](docs/codex/apple-experience/A08_LIVE_FILE_TERMINAL.md)：四条原终端历史、两上传/两下载，以及32769/65537字节的异源文件回读分别匹配，两个本次独占临时目录最终清理。六个原命令Task与44个已登记任务终态，无串设备、残留或共享ADB重启。严格入口`--verify-live-file-terminal`只接受已核定的两台Ready专用实例和fresh manifest，禁止启动，不是任意设备操作入口，默认构建不会触发实机。三测试源精确集成主仓后，原235项、MCP演示14项/13项未验、23项合成早拒及三源PDB/新255产物冻结已通过独审，仍有既有编译警告。保留PDB字段顺序和Size显示格式两次测试脚本误判的原失败；只读报告续验不重复设备写入、不改写原outer1。该结果仅为VM-SDK路径，不代表物理GUI、原生文件选择器、中文输入、APK安装卸载、取消重试、重连或最终双实例30分钟均通过。
+### 界面检查
 
-完整文件清单见 `PROJECT_TREE.md`；全部源码文本见 `SOURCE_BUNDLE.md`；对应文件摘要见 `SOURCE_MANIFEST.json`。这三个文件由 `tools/New-SourcePackage.ps1` 生成，源码 ZIP 位于 `artifacts/`。
+左侧截图、中间节点树、右侧属性，用于确认元素和自动化坐标。`SIMULATED DEVICE` 是程序生成的演示手机画面。
 
-全面验收与界面重设计正在按[当前计划](plan.md)实施；目标、技术边界、视觉/命名及依赖任务分别见[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[UI规格](docs/UI_SPEC.md)、[任务表](docs/TASKS.md)。当前测试范围见[功能矩阵](docs/codex/apple-experience/TEST_MATRIX.md)、[逐控件目录](docs/codex/apple-experience/CONTROL_CATALOG.md)和[问题清单](docs/codex/apple-experience/DEFECTS.md)，进展见[阶段记录](docs/PROGRESS.md)。已修复主控A/当前B时投屏错目标的代码路径，增加主控身份与进程所有权守卫，见[A02独立离线验收](docs/codex/apple-experience/A02_MAIN_TARGET.md)；真实外部投屏仍待验。这是进行中的工作，149项和三尺寸Demo不代表本轮全功能/实机/窄屏已通过。
+![界面检查页：Demo 截图、节点树、属性面板](docs/images/inspector.png)
 
-2026-10-16新增任务R11-R14/A13-A16已纳入上述文档：继续全功能/双实例/安装卸载/最终30分钟验收，并完善终控台RPA闭环、群控MCP接入及指定模拟器抓包。最近[真实实例复核](docs/codex/list-console/LIVE_RECHECK_2026-10-16.md)为实例1冷启动及8项限域Live通过，不是全控件通过。现有脚本为受限ZIP格式，新增MCP入口当前仅显式Demo，真实群控MCP与完整抓包会话尚未完成；[抓包初步调研](docs/codex/automation-expansion/CAPTURE_RESEARCH.md)已比较方案，POC未运行，不把规划当实现。
+### 应用管理
 
-自动化导入选择器现在只列出`.jxscript/.zip`。加载器对ZIP构造阶段识别出的非归档格式给出中文400/1007错误，不执行顶层JSON、Python或JavaScript；合法ZIP按内容读取，即使后缀为`.json`或包含合法附带资源也保持兼容。I/O、归档内JSON、动作验证及原限额保持原边界，不能把这项修改称为所有损坏ZIP的统一处理。实现方、独立方和主仓各169项通过，包含合法包实际Demo点击和非法内容零点击；[格式边界报告](docs/codex/apple-experience/A08_SCRIPT_FORMAT.md)保留原红测。GUI文件对话框实开、真实设备和完整RPA闭环仍待验收。
+左侧独立勾选目标，右侧保留应用所属设备、序列号、包名和版本，底部逐项反馈结果。安装时选 APK 并确认目标；卸载时勾选应用行并确认数据损失。
 
-Windows数据库长路径初始化已按原位置修复，不搬移数据或关闭事务。独立及主仓正式回归均158/158，实际CLI的251/252/253/300字符普通路径均通过；迁移备份、未来版本拒绝与文件释放也有回归，见[长路径报告](docs/codex/apple-experience/A13_SQLITE_PATH.md)。完整GUI的输入源问题、真实双实例同步、新版应用页安装卸载和最终双实例30分钟仍待，不由本项离线结果替代。
+![应用页：选择两台 Demo 设备读取应用，显示逐项完成记录](docs/images/applications.png)
 
-## 构建与运行
+<details>
+<summary>自动化、接口与设置截图</summary>
 
-需要 Windows 10/11、[.NET SDK 10.0.402](https://dotnet.microsoft.com/en-us/download/dotnet/10.0)。依赖固定于项目文件与 `packages.lock.json`，NuGet 源位于 `NuGet.Config`。本工作区已有通过官方 SHA-512 校验的便携 SDK，路径为上级 `.tools/dotnet/dotnet.exe`。
+**自动化**：导入脚本包后切换参数、运行记录、日志、结果；图中仅导入基础示例，未执行真实设备任务。
 
-从工程目录运行：
+![自动化页：基础脚本包的参数工作区](docs/images/automation.png)
+
+**接口**：左侧管理设备接口，右侧编辑请求与查看响应。图中服务未启动，没有实际请求结果。
+
+![接口页：网关控制、设备列表、本机请求调试](docs/images/api.png)
+
+**设置**：连接、视频组件与窗体参数分区展示。图中没有真实路径、授权串号或账号配置。
+
+![设置页：连接、视频、窗体配置，未实现项禁用](docs/images/settings.png)
+
+</details>
+
+## 快速开始
+
+### 运行环境
+
+- Windows 10 / 11；WPF 程序不能直接在 Linux、macOS 运行。
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)，`global.json` 固定 `10.0.402`，允许同系列更新补丁。
+- PowerShell 7、Git，以及首次还原 NuGet 依赖所需网络。
+- 真实模式另需自行安装雷电；视频组件、APK、便携 SDK 和本机配置不随源码分发。
 
 ```powershell
-./tools/Build.ps1 -Verify
-../.tools/dotnet/dotnet.exe ./src/MatrixDevice.Desktop/bin/Release/net10.0-windows/MatrixDevice.Desktop.dll --demo
+git clone --branch main https://github.com/zhuy3075-ui/matrix-device-ldplayer.git
+cd matrix-device-ldplayer
+./tools/Build.ps1
+./tools/Start-Desktop.ps1 -Demo
 ```
 
-在其他电脑上可把第二行的 SDK 路径换成 `dotnet`。真实模式去掉 `--demo`，配置雷电命令行路径并重启，在“设备”点击行内“启动”，或勾选后点击“启动所选”；“一键启动全部”处理全部未连接的有效实例，包括编号0。一次点击会启动关闭实例、核验实际ADB连接与安卓启动/截图，成功才保存接入并加入群控，不再弹普通启动确认框、不强制跳页；阶段进度、失败与取消留在原页面。已经运行的实例只核验连接，不重复启动。编号0是正常模拟器索引，不再按号码永久锁定；负数与桌面哨兵99999仍拒绝。AI本轮测试不会实际操作0，不能将产品允许用户管理0等同额外测试授权。关闭、重启、新建与资源配置仍保留必要确认。
+Demo 不连接真实 ADB，可先浏览界面、读取演示节点和应用、体验脚本包。真实启动或视频操作在 Demo 中不可用，不代表真实设备已经连接。仓库暂未提供发布安装包。
 
-“新建空白实例”仅创建并提交资源配置，不会自动开机；完成后点击该行“启动”。空目录首次新建的0也适用，不需要再建一台占位。创建前后核对唯一同名新实例，只提交一次add，结果未知或歧义时停止，不重复创建、删除或复制。现有0若已由旧版生成，也不需再次新建，按正常行操作；旧版报错那次未执行后续资源配置，升级不自动补写，需要原设置时请在“实例操作→资源配置”重新保存。新规则及验证见[编号0创建闭环](docs/codex/primary-instance-creation.md)，历史文档中的原0限制是当时测试边界；接口权限与实际未验范围以本报告为准。
+使用自行安装的便携 SDK 时，可显式指定路径（请替换为实际位置）：
 
-已移除“后台启动”开关及启动时自动隐藏窗口的逻辑。“启动”、 “启动所选”和“一键启动全部”均按雷电默认方式显示窗口，不主动隐藏或最小化，也不强制抢占前台。为兼容旧版，保留带PID、进程出生时刻、安装目录和窗口标记核验的隐藏窗口恢复记录处理；恢复失败仍保留记录并提示，不关闭模拟器。实时监控及显式打开既有窗口不受影响。
+```powershell
+./tools/Build.ps1 -DotnetPath 'C:\Tools\dotnet\dotnet.exe'
+```
 
-连接变更前需停止本程序的API、脚本、文件传输及网络扫描，等待请求排空；雷电/ADB路径等手工配置保存后仍需重启，不能混用新路径与旧运行时。高级串号JSON和索引绑定保留给明确知道真实串号的用户，不按端口公式授信。本程序直接连接现有5037服务，不执行adb.exe、不创建/kill服务；服务进程变化或协议不兼容会拒绝继续。无需原产品DLL、账号或数据库，未授权时不查询guest、不伪造在线设备。
+## 真实设备接入
 
-实例目录每5秒自动更新，已授权设备状态最多每15秒查询一次。列表没有自动截图开关，也不后台轮转截取全部设备；只有设备管理页激活且主控面板可见时，每5秒自动刷新该主控，单轮有20秒预算，打开面板也尝试取首帧。多设备实时视频仍在“监控”，不把定时截图当视频。旧刷新/扫描按钮已移除，网络连接与应急目录更新收在顶部可点击的“更多”菜单；设置齿轮仅进入设置，不再依赖右键。
+1. 正常启动雷电，确认其既有 ADB 服务可用。本程序连接已有服务，不运行外部 `adb.exe`，不主动创建、停止或重启共享 ADB。
+2. 运行 `./tools/Start-Desktop.ps1`，在“设置”指定实际雷电命令行文件（`ldconsole.exe` / `dnconsole.exe`），保存后重启。
+3. 在“设备”点击行内启动，或勾选后“启动所选”。已运行实例仅连接；关闭实例先开机，再等待连接和截图核验。后台发现不会自动启动或授权全部实例。
+4. 接入后按任务进入“控制”“监控”“界面检查”“应用”等页面。不同页面的选择不会暗中互相授权。
+5. 新建空白实例只创建并提交配置，**需要再点该行启动**。资源不足、超时、ADB 服务变化或身份不符会如实失败，不按编号推测串号或端口授信。
 
-界面检查、截屏和后台截图已分开校验请求来源、设备身份与当前检查修订号：切换设备或重新连接后，迟到结果不能覆盖新设备的截图/节点；身份仍有效的后台源缓存可以保留。旧任务的错误按原设备写入本机日志，当前目标已变更时不挂到新设备上；后端取消与内部身份过期分别处理，保留正常取消和失败恢复。49项受控Demo/STA专项及验证边界见[A06a报告](docs/codex/apple-experience/A06_DEBUG_PUBLICATION.md)，不代表真实ADB、自动首载、生产定时器或全部实机路径已验收；完整目标仍在进行。
+也可以指定自己的独立配置目录，不要直接复制他人的授权配置：
 
-已完成的截图和节点也分别保留来源身份：新Ready传输、几何或重连代次不再沿用旧检查，返回缓存、保存PNG/JSON和取色前重新核验VM行与实际目录。当前检查与后台较新行截图独立，不因合法后台新帧清掉同身份旧节点；稳定改名不反复清理。明确Offline且传输/几何不变、仅较来源增加一代的内容可作为本地只读历史查看和导出，不放宽新读取或输入；新身份或已经失效清除的内容不得复活。此资格只核消费时最新快照，不追溯VM未同步的完整中间状态。基线红、诊断纠正及独立/主仓验收范围见[A06c1报告](docs/codex/apple-experience/A06_COMPLETED_CACHE.md)；同行换代补载见下文，原生保存模态、未完成裁剪和真实runtime热换仍分项验收。
+```powershell
+./tools/Start-Desktop.ps1 -DataDirectory 'C:\MatrixWorkspace\my-devices'
+```
 
-界面检查的自动首载现会保留暂时忙碌期间的加载意图：普通操作、传输或脚本结束后自动读取最终选择的设备，连续切换也不会丢失待办；已有节点不重复加载，离页/关闭不新增读取，失败不无限重试。16项真实窗口事件专项、独立三桌面/六公共布局及主仓复验见[A06b1报告](docs/codex/apple-experience/A06_AUTOMATIC_LOADING.md)。这是隔离Demo后端验证，不是Android实机或生产定时器通过；默认Demo仍不自动读取，只有正式验收自有窗口具有临时许可。
+默认数据根目录为 `%LOCALAPPDATA%\MatrixDevice.Reconstructed\`，Demo 与真实模式分离，保存本工程配置、SQLite 元数据和日志，不读取旧商业产品账号或数据库。
 
-同一行设备重新Ready、传输或几何换代后，完整VM目录接纳也会自动补载当前图和节点；metadata稳定刷新不重读，明确离线历史不主动读取。正在运行的操作结束后只补最终身份，在途旧结果仍拒绝；已经被本次实际读取覆盖的待办同步消费，失败或取消后不因同身份轮询无限重试。新19项独立窗口场景、三桌面/六公共布局和主仓执行状态见[A06c2报告](docs/codex/apple-experience/A06_RECONNECT_LOADING.md)。不扩大为Catalog-only任意变化、Android、全部控件或完整目标已验收。
+### 视频与资源监控
 
-界面检查按实际正文宽度重排：宽屏三栏，中等窗口为左画面、右侧节点与属性上下排列，窄屏通过等宽的“画面 / 节点 / 属性”切换原内容。缩放与切换不重新截图、重建树或改变设备目标；属性阅读位置保留，新滚动、选区或节点文本会取消旧恢复。四个工具和树头选择区采用44逻辑命中，树展开箭头仍待后续专项，不宣称全部控件均已触控优化。六尺寸及11项受控Demo场景见[节点正文适配报告](docs/codex/apple-experience/A06_NODE_RESPONSIVE.md)；物理输入、真实DPI、Android及原生导出对话框仍另验。
+在“设置”配置以下组件并重启：
 
-截屏正文也按可用宽度重排：宽屏画面与色值并排，窄屏使用“画面 / 色值”切换，保留同一图像、缩放、已完成裁剪、颜色列表和选择状态，不因重排重新读取设备。原四工具、操作模式及缩放整体采用44逻辑高度；长坐标、十六进制色值和RGB可通过表内横向滚动完整阅读，不承诺三列同时可见。六尺寸10项专项、独立三桌面/六公共布局和主仓复验见[截屏正文适配报告](docs/codex/apple-experience/A06_SCREENSHOT_RESPONSIVE.md)；实际指针前置后的合成取色路由不等于物理点击，真实DPI、Android、原生保存、剪贴板和未完成裁剪仍另验。
+| 配置 | 要求 |
+| --- | --- |
+| 监控视频组件 | 官方 [scrcpy-server v3.3.4](https://github.com/Genymobile/scrcpy/releases/tag/v3.3.4)，SHA-256：`8588238c9a5a00aa542906b6ec7e6d5541d9ffb9b5d0f6e1bc0e365e2303079e`，不能任意替换版本 |
+| 监控 FFmpeg | 本机已有 `ffmpeg.exe`；路径留空仅查找 PATH 中已安装程序 |
 
-“一键启动全部”逐台等待，仅在实例RAM已知且当前可用物理内存或可用提交额度严格低于该RAM时，才弹出资源不足确认。配置缺失/冲突、读取或采样失败、高负载，以及仅低于512 MiB进程开销/1024 MiB系统预留等估算余量，都只在页面提示，不弹窗，也不冒充资源充足。RAM优先读取实例设置，缺少该字段时只读同编号虚拟机当前配置；两个有效来源冲突则显示未知，不猜默认值。每次冷启动重新采样，检查不是雷电官方最低要求，也不保证启动成功。已运行实例只连接，不额外检查冷启动内存；取消仍停止后续，不关闭已启动实例。最新实现与验证见[启动资源确认修复](docs/codex/launch-resource-confirmation/REPORT.md)，旧策略记录保留在[历史内存报告](docs/codex/launch-memory-policy/REPORT.md)。
+画面最大边 320 像素，源端上限 10 帧/秒、1 Mbit/s，UI 最多每秒呈现 8 次并丢弃旧帧。静止页面可能不产生新帧，视频到帧率不是游戏 FPS。资源约每 2 秒采样，保留本次会话最多 15 分钟趋势；实例工作集是 Player 与虚拟机进程工作集之和，不是 Android 可用内存。GPU、网络、磁盘和应用 FPS 未接入。
 
-仅本次用户点击的目标可经过真实身份检查后保存授权，后台自动发现不启动或授权。勾选中含未连接实例时，批量应用、传输、脚本与同步输入拒绝执行，避免落到旧的当前设备或悄悄只操作部分设备。
+此视频链路不启用音频、控制、剪贴板或亮屏；独立 `scrcpy.exe` 投屏与监控视频是两套链路，见 [工程记录](ENGINEERING_NOTES.md#实时监控)。
 
-“新建空白实例”和“资源配置”使用官方`add/modify`，只开放CPU、内存、分辨率和DPI；配置要求实例所有进程/窗口完全退出，命令返回不代表实际资源已核验。复制涉及账号/应用数据，本轮仅调研；删除不可逆，不开放一键删除。Android版本、小磁盘、节能等高级GUI选项没有稳定公开CLI保证，不伪造支持。
+## 接口与脚本
+
+| 入口 | 当前能力 |
+| --- | --- |
+| 普通 HTTP | 默认 `http://localhost:8080/`；`GET /health`、`GET /devices` |
+| 逐设备 HTTP | 页面显式启动的 `8001..8999` 端口；设备信息、Shell、点击、滑动、文字、应用启停 |
+| Automator | 默认 `http://127.0.0.1:17171/`；路由见 [API 参考](docs/reference/API.md) 和源码 `AutomationService.Routes` |
+| MCP stdio | 当前仅显式 Demo 联调：能力查询、设备列表、脚本导入与任务管理；**不能连接真实雷电** |
+
+启动演示接口（选择非默认端口降低冲突概率）：
 
 ```powershell
 dotnet ./src/MatrixDevice.Cli/bin/Release/net10.0/MatrixDevice.Cli.dll --demo --serve --basic-port 18080 --automator-port 17172
 ```
 
-CLI默认真实模式；`--demo`显式模拟，`--serial`授权唯一设备，`--data`独立目录。旧`--adb`字段兼容保留，不运行该二进制。`--serve`启动网关、在线设备端口和发现轮询；Ctrl+C清理本程序资源。
-
-雷电无需配置 ADB 即可查询和控制实例。桌面启动可加 `--ldconsole 'E:\leidian\LDPlayer14\ldconsole.exe'`，或者在设置中配置路径并重启。独立只读查询不会构造 ADB 后端：
+在另一终端读取演示状态：
 
 ```powershell
-../.tools/dotnet/dotnet.exe ./src/MatrixDevice.Cli/bin/Release/net10.0/MatrixDevice.Cli.dll --ldconsole 'E:\leidian\LDPlayer14\ldconsole.exe' --ldplayer-list
+Invoke-RestMethod http://localhost:18080/health
+Invoke-RestMethod http://localhost:18080/devices
 ```
 
-官方提供本机 CLI 和 ADB，不是官方 REST 服务；本工程将允许的 CLI 动作封装成本机 HTTP。接口字段、功能矩阵和当前本机限制见 [雷电接入说明](docs/LDPLAYER_INTEGRATION.md)。不得自动替换现有共享 ADB 服务，也不要把同一实例的两条串号同时纳入群控。
+`.jxscript` 是含 `manifest.json`、`script.json` 的 ZIP。可导入 [基础示例](examples/basic-example.jxscript)，在专用设备确认包名和坐标后运行；取消不撤回已发送动作。详见 [参数绑定](docs/codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)、[MCP 设计](docs/codex/automation-expansion/MCP_DESIGN.md)。
 
-当前 Windows 缺少完整 CET 支持，SDK 编译器 apphost 会启动失败。`Build.ps1` 通过未修改的 `dotnet exec csc.dll` 托管入口编译；本工程 apphost 设置 `CETCompat=false`，只影响本工程程序，不修改系统设置或 SDK 二进制。更新环境后可按需恢复默认属性。[微软 CET 说明](https://learn.microsoft.com/en-us/dotnet/core/compatibility/interop/9.0/cet-support)
-
-## 模块
-
-| 项目 | 职责 |
-|---|---|
-| MatrixDevice.Core | 设备/节点契约、雷电 CLI/列表兼容/实例代次与命令校验、ADB 后端、逐设备队列、输入协调、PNG、视频/触摸编码、手机 HTTP 客户端、网络发现 |
-| MatrixDevice.Features | 脚本包与调度、27 条自动化动作、节点搜索/等待、调试上下文、应用/传输、剪贴板边界、代理配置、应用备份格式与操作 |
-| MatrixDevice.Host | 双网关/逐设备监听、配置合并恢复、SQLite、日志、运行时资源整合 |
-| MatrixDevice.Desktop | WPF 页面、ViewModel、截图/取色/裁剪、脚本参数、独立子系统状态、原生 scrcpy 窗口 |
-| MatrixDevice.Cli | 无界面枚举与本机 API 服务 |
-| MatrixDevice.Mcp | 官方SDK stdio六工具、可信Demo授权、冻结脚本导入与逐目标作业；真实模式拒绝 |
-| MatrixDevice.Tests | 默认离线/协议/文件/竞争/loopback验证；显式--live-acceptance读取冻结目标回执才进入独立实例测试 |
-| MatrixDevice.Mcp.Tests | 官方SDK客户端通过真实OS管道验证Demo工具、Schema、防重、取消、限额与退出；不等于GUI或实机 |
-
-## 应用管理
-
-左侧“应用”使用独立的模拟器勾选列表，不自动继承主控或群控目标。选择已接入在线实例后自动读取应用，右侧按“模拟器串号 + 包名”展示独立行，可切换是否显示系统应用。名称或版本未取得时如实显示，不承诺APK图标和标签解析。
-
-模拟器名称仅作为展示信息：同一串号、连接代次和transport下改名，已有应用行与勾选保持，名称即时更新，合法启停、确认和在途结果不再被误拒绝；换连接、离线或明确目标变化仍拒绝。此项已获独立离线验收；早先A07a主仓完整GUI在旧截屏坐标前置失败，该轮新应用专项未执行，原记录保留于[应用名称与身份报告](docs/codex/apple-experience/A07_APPLICATION_IDENTITY.md)。后续A07b1复验曾实际通过该10例及完整演示流程，但不解释间歇输入源问题的成因。
-
-应用目标勾选后的自动读取会保留脚本、文件传输或普通忙碌期间的待办，结束后只读取最终明确选择；清空目标即取消，离页不读取、返回再恢复，关闭后不排新读取，读取失败不无限重试。脚本只阻塞它所在的所选设备，不把另一设备的脚本当全局锁。原350ms调度、连接身份和活动门禁保持。A07b1阶段独立及主仓各12例/310检查、150项离线测试和完整1000演示通过，见[应用自动读取报告](docs/codex/apple-experience/A07_APPLICATION_PENDING.md)。
-
-API请求全部结束也会唤醒已有应用读取待办，不再依赖手动刷新；并发请求只释放一个时仍等待，实际读取前重核全部门禁，窗口关闭或目标清空不再读取。A07b2保留原版12例中8条真实失败，修复版独立及主仓各14例/496检查、原158项及完整12页演示通过，见[接口排空报告](docs/codex/apple-experience/A07_API_DRAIN.md)。这是自有Demo/真实loopback HTTP验证，不代表真实双实例、原生安装卸载界面、小屏正文或长期稳定性通过。
-
-应用正文现按实际可用宽度排列：宽窗保留目标、应用及任务表，窄窗使用同区域的“目标 / 应用 / 任务”切换，进度与“停止后续”持续可见。原表、勾选、排序和批次对象不因重排而重建；全部列保留水平滚读，长字段可通过完整提示阅读。局部动作采用44逻辑命中区，不整页缩放。
-
-本阶段独立及主仓应用正文各12项通过，含六尺寸三表首中末/全部列和单窄窗150%字形压力；后者使用自有控件本地字号覆盖，不是系统DPI或字体绑定保真验收。原Smoke调用链及12页、共享壳层六尺寸已通过；另立补验在设备指针前置和报告保存处失败，余11格未执行，不能宣称全GUI通过。原失败、诊断修正及主仓核验结果见[应用正文报告](docs/codex/apple-experience/A07_APPLICATION_RESPONSIVE.md)和[测量诊断记录](docs/codex/apple-experience/A07_TOOLTIP_DIAGNOSTICS.md)。真实双实例、当前安装卸载界面及最终30分钟仍待。
-
-离线画面诊断有独立 `--diagnose-offline-geometry --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY --width 390 --height 640` 入口，必须使用尚不存在的artifacts目录，不接受`--screenshot`，不请求激活或操作指针/真实模拟器。它依次执行14类[报告出口契约](docs/codex/apple-experience/AP041_REPORT_RELIABILITY.md)、[正文无障碍](docs/codex/apple-experience/AP042_WORKSPACE_ACCESSIBILITY.md)、[应用摘要](docs/codex/apple-experience/AP040_APPLICATION_FEEDBACK.md)和[原几何诊断](docs/codex/apple-experience/AP041_OFFLINE_DIAGNOSTICS.md)。`device-layout.json`仅局部编码非有限值为`{value:null,finite:false,kind:...}`，有限JSON、FAIL、原异常与全局严格JSON保持。历史阶段曾通过原158项、报告契约和几何诊断；最新复核止于AP042产品失败，后续未执行。报告契约自身故意注入的8条预期stderr与这次AP042失败是不同结果，不得混作无故障。完整GUI、双实例和最终长期稳定性缺口保持。
-
-工作区容器使用保留原视觉样式的标准Pane无障碍peer；原无头Tab的UIA SelectionPattern/ItemContainer不再提供，侧栏导航保持。历史阶段的自有WPF设备/应用往返曾通过；最新[A14a1旧链复核](docs/codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)却在AP042再次真实失败：根节点146→146→146，三个应用owner缺失、旧owner残留111，其后摘要与几何未执行，当前不承诺正文往返已恢复。[受控官方观察](docs/codex/apple-experience/AP043_SKY_AB.md)曾证旧48个总节点止空Tab、新200个总节点含设备正文，但导航点击仍报输入几何错误、无后置状态；原null与根因保持开放。真实GUI安装卸载、双实例同步和最终30分钟仍未验收。
-
-同一离线诊断入口现增加[原位子树记录](docs/codex/apple-experience/AP042_PEER_CACHE_DIAGNOSTICS.md)，不改变原查询、断言或等待。独立与主仓各193项、无窗参数VM4通过，但原页面诊断仍PRODUCT-FAIL；日志确认实际视觉切页后公开子树未更新，不证明唯一根因或产品已修复。该记录不替代真实GUI或模拟器验收。
-
-另有仅供受控测试的 `--probe-workspace-client --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY --nonce 32_HEX_DIGITS --arm client|control --width 390 --height 640` 入口。它先写ready、异步等待严格身份匹配的release，再执行原正文契约；不会自动运行官方客户端或操作模拟器。外部协作协议和[实际双臂结果](docs/codex/apple-experience/AP042_CLIENT_OBSERVATION.md)表明两组均过、时差约102ms，但control也出现自动化状态变化，不能归因显式读取、关闭原失败或称全GUI验收。常规启动路径不变。
-
-新增受限的CMFA实机测试入口，仅供固定摘要、已验证专用实例与新证据目录使用，不限制正式应用页的通用APK选择。独立及主仓158项回归通过；实例1真实共享安装、精确2.11.35.Meta/211035及启动进程成立，但首次权限页挡住主页，原流程如实FAIL。后续另立[本轮owned停止/卸载验证](docs/codex/apple-experience/A07_OWNED_CLEANUP.md)，实际两个包进程停止、安装保留后再卸载，普通及含保留记录查询和列表均缺包，51步骤通过。当前测试安装已移除、原APK保留，未再安装/启动或授权VPN/权限，也未改原FAIL；详见[首轮记录](docs/codex/apple-experience/A07_CMFA_APPLICATIONS.md)。这些是共享后端证据，当前GUI、双实例同步及最终30分钟仍待，默认离线测试不触发实机入口。
-
-安装支持多选APK，确认全部目标与文件后逐项执行；卸载仅针对实际勾选的应用行，确认串号、包名和不可撤销的数据损失，执行前重新检查系统应用，执行后刷新列表核验对应包已移除。底部显示逐项状态、实际任务进度与失败原因；“停止后续”不回滚或中断已经提交的操作。更多菜单保留启动、停止和清数据，清数据仍需确认。确认后目标、运行时、连接代次或transport变化会拒绝执行，不回退到旧设备。
-
-安装暂未解析本地APK包名，因此显示“安装命令完成、列表已刷新、包名未核验”，不冒充精确安装验收；启动、停止和清数据的命令完成也不等于其运行效果已核验。批次摘要现在仅在确有非零未核验安装项时显示安装专属计数，读取、等待、取消或空集合不再出现误导性的“安装命令完成 0”；进度、完成、失败和取消数量保持，见[摘要红绿验证](docs/codex/apple-experience/AP040_APPLICATION_FEEDBACK.md)。此前A07离线阶段仅验证批次及界面，未对真实应用执行安装、卸载或清数据。
-
-## API 与脚本
-
-普通网关默认 `http://localhost:8080/`，GET `/health`、`/devices`。每设备 8001..8999 由 API 面板显式启动；GET `/device` 和 POST `/shell`、`/tap`、`/swipe`、`/text`、`/app/start`、`/app/stop`。成功为 `{ok:true,data:...}`，失败 `{ok:false,message:...}`。普通 swipe 使用 `DurationMs`，非正值归一为 300。
-
-Automator 默认 `http://127.0.0.1:17171/`，路径允许 `/api/` 前缀。所有 27 条 POST 都包含 `serial`，响应 `{code:0,message:"ok",data:...}`。具体路由与字段以 `docs/reference/API.md` 第4节和源码 `AutomationService.Routes` 为准，swipe 使用 `steps`/`stepMs`。错误映射和本次差异见 `docs/ASSUMPTIONS.md`。
-
-`.jxscript` 是包含 `manifest.json` 和 `script.json` 的 ZIP。`examples/basic-example.jxscript` 可直接导入，对应可编辑文件在 `examples/basic/`；支持 `launchapp/launch`、`wait/sleep`、`click`、`swipe`。在专用设备上确认坐标后运行；取消表示结束，不能续跑。默认拒绝未知动作。参数与 Probability 的证据边界见假设表。
-
-新脚本可显式声明 `executionContract: {"version":1,"bindings":[{"stepIndex":0,"field":"value","parameterKey":"targetApp"}]}`，绑定步骤的完整 `value` 或等待动作的 `durationMs`。取值优先级为显式覆盖、参数Value、DefaultValue；显式null不回退，类型、范围或绑定无效时在运行前拒绝。新契约不接受Probability；未声明契约的旧包保持原字面量执行。格式、兼容与实际验证范围见[参数绑定](docs/codex/apple-experience/A14_SCRIPT_PARAMETER_BINDINGS.md)。
-
-`examples/parameterized/`是参数化包的两个JSON源文件，不是可直接导入的普通JSON。可运行 `Compress-Archive -Path ./examples/parameterized/*.json -DestinationPath ./artifacts/parameterized-example.zip` 生成ZIP，在自动化页导入，参数JSON字符串应保留引号，例如 `"com.android.settings"`。`--verify-script-parameters --demo --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`运行原四项参数与新增五项任务的无窗VM业务专项，不读用户配置；它不代表GUI点击、真实模拟器、完整RPA/MCP或抓包验收。
-
-自动化页新增[逐目标运行记录](docs/codex/apple-experience/A14_SCRIPT_JOBS.md)：每台被接纳设备有独立JobId，冻结目录代次和ADB transport；队列出队及实际发送命令前重新核验，不因切换设备勾选或重连把旧任务发往新身份。“取消此任务”只取消选中记录，“停止所选设备”仍按当前设备勾选；已完成任务编号不能取消后来的新运行。记录保留100条终态及全部活动任务，每任务500条日志；真实启动返回文本最多16KiB，有明确截断标记。取消不会撤回已完成或已发送的设备动作，历史不跨运行时/重启持久化。独立及主仓各209项、原4/新5 VM案例已通过，最终构建有1条测试CS9124警告、0错误；真实模拟器与完整GUI仍按原矩阵另验，不将本项当完整脚本闭环完成。
-
-[自动化工作区](docs/codex/apple-experience/A08_SCRIPT_WORKSPACE.md)将原控件整合为参数、运行记录、日志、结果四个视图，保留全部参数/记录字段；取消所选任务在运行记录标题旁，仍按JobId执行。长说明与目标有界滚动，结果全文独立读取，活动日志增量发布不再清空同任务的选中项。独立与主仓原209项、VM9及十二组实际自有WPF/Demo案例通过，覆盖六尺寸、控件编辑后执行、非法JSON零接纳、取消隔离及500日志尾窗。可用`--demo --verify-script-workspace --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`运行此独立专项；它不操作真实模拟器，也不代表原生选择器、物理键鼠、DPI或完整GUI已通过，原失败与实机待办保持。
-
-## MCP接入
-
-`MatrixDevice.Mcp`使用固定`ModelContextProtocol 2.2.0`，协议`2025-11-25`。当前支持`matrix.capabilities`、`matrix.devices.list`、`matrix.scripts.import`、`matrix.jobs.start`、`matrix.jobs.get`、`matrix.jobs.cancel`；复用原脚本包、参数绑定和Scheduler，不执行任意Python、JavaScript或Shell。接口详见[契约](docs/codex/automation-expansion/MCP_DESIGN.md)与[执行记录](docs/codex/automation-expansion/MCP_STDIO.md)。
-
-当前仅供Demo开发联调，不能连接真实雷电。由支持stdio的客户端创建进程并重定向stdin/stdout，程序为本机`dotnet.exe`，按独立参数传入下列值，而不是拼接Shell命令：
+## 项目结构
 
 ```text
-ABS_PROJECT\src\MatrixDevice.Mcp\bin\Release\net10.0\MatrixDevice.Mcp.dll
---demo
---data-dir ABS_EXISTING_PARENT\FRESH_UNIQUE_DIRECTORY
---policy ABS_PROJECT\examples\mcp-demo-policy.json
---import-root ABS_PROJECT\examples
+src/
+  MatrixDevice.Core/       设备模型、契约、状态与基础能力
+  MatrixDevice.Features/   脚本包、自动化、输入与传输
+  MatrixDevice.Host/       ADB/雷电适配、HTTP、监控、持久化
+  MatrixDevice.Desktop/    WPF 桌面界面与工作区
+  MatrixDevice.Cli/        命令行与演示服务
+  MatrixDevice.Mcp/        受限 Demo MCP stdio
+tests/                    正式回归与专项验收代码
+examples/                 脚本源文件、示例包与 Demo 策略
+tools/                    构建、启动与源码归档工具
+docs/reference/           原始开发参考文档
+docs/codex/               设计、缺陷、阶段验收与交接
+docs/testing/             历史实机与专项报告
+docs/images/              本 README 的 Demo 界面截图
 ```
 
-将`ABS_PROJECT`等替换为本机盘符开头的规范绝对路径，使用反斜杠，不使用UNC、正斜杠、末尾分隔符或点路径段；导入根与策略文件须已存在、不能经过重解析点，数据目录须每次使用新的不存在路径、父目录已存在，且不能位于导入根内。不能直接在交互终端启动，也不能用固定数据目录配置自动重连。样例策略仅授权`DEMO-001`和`DEMO-002`，不读取Desktop配置、不开HTTP/ADB、不授权真实设备；工具参数不能扩大策略权限。这个fresh目录限制是当前开发入口边界，不是完整持久化客户端方案。
+[完整目录](PROJECT_TREE.md) · [源码文本快照](SOURCE_BUNDLE.md) · [归档摘要](SOURCE_MANIFEST.json)。三者对应既有源码归档快照，不是当前 Git 提交的实时校验清单；当前文件以 Git 为准。
 
-先读取capabilities和设备身份，再以epoch、脚本SHA和冻结身份提交任务；业务重试使用原operationId与完全相同参数，并使用新的JSON-RPC id。每连接RPC id不可复用、字符串最多1024 UTF-8字节，最多65536个id；超过会断开并清理自有任务，不自动重放。单帧1MiB、业务参数64KiB、冻结归档16MiB、引用16个、staging64MiB及operation ledger100项均有明确边界。取消不撤销已发送动作，结果不会跨进程保存。
+## 验证与限制
 
-独立专项及主仓精确集成后的一次复验均实际完成14组顶层Demo用例、14个真实OS-stdio会话及12个严格拒绝子例，并获独审有限通过；主仓原209项另计通过，构建3项既有警告、0错误。客户端使用官方`StreamClientTransport`连接外部进程真实管道，不是内存模拟；旧`StdioClientTransport`退出兼容失败仍保留。另13类压力/竞争/兼容与真实设备覆盖仍NOT-RUN，完整MCP、GUI、抓包和最终稳定性没有因此完成，详见[主仓实际记录](docs/codex/automation-expansion/MCP_STDIO.md#主仓集成门)。
+```powershell
+./tools/Build.ps1 -Verify
+```
 
-标准Runtime工厂创建的工作区现在共享[设备写入占用](docs/codex/automation-expansion/MCP_WRITE_OWNERSHIP.md)：脚本、输入、HTTP和桌面写操作在实际执行前原子取得目标，冲突返回409/1003；同一输入组完成后再放行后续输入，上传至自动安装之间不释放。取消会等待原动作返回，不把取消请求当作已经停止。明确目标的文本/传输不会全局阻断其他设备API；工作区全局busy和原读取门禁仍保留。它不是外部ADB沙箱，不协调另一进程或运行时换代，也没有因此启用真实MCP。
+该入口编译并运行正式离线回归、独立计数的 MCP Demo 专项，**不自动开始真实模拟器压力测试或安装卸载**。本次 README 更新仅生成和检查 Demo 截图、链接、公开范围，不重启已暂停的全面测试。
 
-本阶段独立与主仓离线225项（旧209加16并发用例）、MCP Demo14、无窗VM5及三严格拒参均通过并获独审，构建3条既有警告、0错误，全部原失败保留。`--demo --verify-write-ownership --data-dir ABSOLUTE_FRESH_ARTIFACTS_DIRECTORY`只运行自有演示后端与本机HTTP，不创建窗口、不读取用户配置、不操作真实模拟器；其中假APK只用于Demo，不能当真实安装或GUI验收证据。
+| 范围 | 已有证据与限制 |
+| --- | --- |
+| 编号 0 修复 | 离线 248 项通过，另有主实例与删除残留 WPF 专项；真实编号 0 创建、配置、启动未由该轮验证，见 [报告](docs/codex/primary-instance-creation.md) |
+| 双实例同步 | 专用实例 1 / 2 的 14 项限域效果验证，非完整物理 GUI，见 [报告](docs/codex/apple-experience/A13_DUAL_INSTANCE_SYNC.md) |
+| 终端与文件 | 原命令链与上传下载字节往返的限域实机验证，见 [报告](docs/codex/apple-experience/A08_LIVE_FILE_TERMINAL.md) |
+| 视频 | 专用实例 1 / 2 双路约 192 秒专项，不能据此声称 4 / 23 路或长时稳定性通过，见 [报告](docs/testing/realtime-monitoring/REPORT.md) |
+| 应用、GUI、稳定性 | 当前应用页真实安装卸载闭环、完整物理 GUI、最终双实例 30 分钟仍有未完成或失败项；旧后端有限证据不替代页面验收 |
 
-## 数据与设备边界
+尚未提供：一键删除 / 复制实例、后台隐藏启动、任意 Android 版本创建、完整 RPA、真实设备 MCP、完整 HTTP Toolkit 抓包验收、商业登录授权及私有 ROM 能力。历史文档或旧截图可能保留已经移除的入口。
 
-默认数据位于 `%LOCALAPPDATA%/MatrixDevice.Reconstructed/`；桌面 demo 与真实模式使用分离子目录。配置主文件/备份、SQLite 和日志均为本工程所有，不读取 CODEBRAIN 或旧产品数据。SQLite 使用新的 schema version=1；没有原产品密码或迁移兼容承诺。
+[验证方法](docs/VERIFICATION.md) · [覆盖表](docs/COVERAGE.md) · [假设与差异](docs/ASSUMPTIONS.md) · [已知问题](docs/testing/DEFECTS.md) · [完整工程记录](ENGINEERING_NOTES.md)
 
-主控面板使用实际截图，ADB群控将完成的手势转换为tap/swipe。原有投屏入口通过用户提供的独立 `scrcpy.exe`，只附着本工程启动且核验PID/开始时间的窗口；它与新监控视频链路分开。原私有视频流只还原已定义包编码，未实现未知握手。不得以截图刷新验收原产品实时视频、音频或20台解码性能。
+## 安全与公开范围
 
-## 实时监控
+- 仅操作自己拥有或明确授权的设备；卸载、清数据、重启前确认目标。内部身份核验不协调其他外部 ADB 客户端。
+- HTTP 没有生产级鉴权，仅在可信本机环境显式启用；不要开放公网或做公网端口映射。Demo MCP 不是远程真实群控服务。
+- 本次不上传本机授权配置、APK、SDK、厂商二进制、`bin/obj`、原始实机证据。历史报告中的本机环境和测试记录不是可直接复用的授权配置。
+- 不提交 `.env`、密钥、账号数据或真实应用隐私截图。公开会暴露既有分支及提交历史，包括作者信息；本次不改写历史。
 
-接入并核验独立雷电实例后，点击左侧“监控”：默认只显示已连接设备，每个可见卡片自动播放视频，不需要选中或放大。画面最大边320像素，源端上限10帧/秒、1 Mbit/s，UI最多8次/秒呈现并丢弃未显示的旧帧。“资源列表”暂停视频、保留资源采样；暂停、切页、滚出视口及退出都会释放对应视频会话，不关闭模拟器。静止页面可能不产生新帧，时间戳与等待状态独立显示；视频到帧率不是应用或游戏FPS。
+## 许可与来源
 
-在“设置”指定`监控视频组件`和`监控 FFmpeg`后重启。视频组件固定为[官方scrcpy-server v3.3.4](https://github.com/Genymobile/scrcpy/releases/tag/v3.3.4)，SHA256为`8588238c9a5a00aa542906b6ec7e6d5541d9ffb9b5d0f6e1bc0e365e2303079e`；从[官方发布附件](https://github.com/Genymobile/scrcpy/releases/download/v3.3.4/scrcpy-server-v3.3.4)单独取得，不能用任意版本替换。FFmpeg路径留空时只查找PATH中的已安装`ffmpeg.exe`。两项二进制不随源码包分发。
+当前仓库**未指定开源许可证**。公开可见不代表授予任意复制、修改、商用或再分发许可；使用与分发前请联系维护者明确授权。
 
-新链路只使用已有、经身份核验的ADB服务，经独立socket推送并启动唯一临时官方server，读取H.264后交自有FFmpeg解码；不运行外部ADB客户端、不建立共享forward、不启用音频、控制、剪贴板或亮屏。仅清理本次会话的临时文件/经nonce、PID出生证明核验的自身进程。若清理不能确认，同一后端拒绝该设备再次启动视频，需先人工核查，不能靠重开程序绕过；该阻断不是跨进程持久锁。
-
-主机CPU/物理内存与每实例CPU/工作集约2秒采样一次，缓存当前会话最多15分钟趋势。实例CPU按全机逻辑核归一，工作集为Player+VBox进程求和、包含共享页，不是安卓可用内存；GPU、网络、磁盘和应用FPS尚未接入。首个CPU样本/权限不足/进程更换显示未知，不伪造0。多处理器组机器的整机采样保守报告未知。
-
-单击卡片仅改变监看详情，不改变主控、操作目标或节点。双击卡片或点击右上角窗口图标，核验现有进程/窗口后请求显示对应雷电窗口，可在那里用鼠标键盘操作；不启动关闭实例，正常索引0同样须通过进程身份校验。节点调试首次进入或切设备时自动读取定位用的截图和节点，视频帧不会覆盖节点坐标。历史专项验证与限制见[监控报告](docs/testing/realtime-monitoring/REPORT.md)，本轮编号0规则见上文，未增加实机0测试授权。
-
-监控页头自然换行，卡片和资源图按真实内容视口宽度适配，打开窗口/重试动作采用44逻辑命中区；长主机信息、摘要和选卡详情可在有界区域滚动读取。视频保留180高和等比显示，避免自动滚动条与卡高相互影响；图表重排只使用已有历史，不追加采样或重建视频。六尺寸Demo专项已获独立离线布局验收，原测试首败及边界见[监控正文适配](docs/codex/apple-experience/A05_MONITOR_RESPONSIVE.md)，不替代当前冻结版本真实视频、物理输入或DPI验收。
-
-2026-10-15限定验收：专用实例1/2的R5实机11项通过，包括双路连续192.401秒、全部目录45.503秒、隐藏窗口后收新帧、暂停恢复及离页清理；根离线137/137。此结论不代表4/23路或长时稳定性已通过。可用`./tools/Start-Desktop.ps1 -DataDirectory '已明确配置授权的绝对目录' -Monitor`直接打开监控页；不自动启动模拟器或授权其它实例。
-
-手机 agent 可通过 `AgentSerial` + `AgentBaseUrl` 显式绑定一台设备，用于已定义节点文本/服务请求。不配置时不会部署未知 JAR，也不会把一个 URL 用于所有 serial。私有 ROM SIM、代理部署规则和剪贴板协议会明确返回不支持。
-
-中文全局输入：仅对同时列入授权串号及唯一`LdSerialBindings`的运行实例使用雷电call.input，并先验证现有ADB代次。普通ASCII走ADB。LD绑定的所有ADB操作及SDK应用/输入入口都核验冻结的实例身份，变化后需在设备管理重新接入；ADB服务进程变化必须重启本程序，不自动接受新服务。节点指定set-text仍需兼容agent，不冒充节点输入已实现。动态视频页uiautomator可能不生成快照，界面明确报错并清空旧节点。
-
-## 验证与交付
-
-`tools/Build.ps1 -Verify`构建八个项目，先执行225项（原209加16共同写入回归），再执行独立计数的14组MCP Demo专项；MCP仍标`PASS-LIMITED`，13类NOT-RUN不计通过。启动前输出`MCP_EVIDENCE_RELATIVE=`及本次唯一证据目录，只有专项exit0才输出`MCP_DEMO_VERIFIED_RELATIVE=`；失败不自动重试或删除证据。普通`Build.ps1`仅编译，不启动测试或真实设备。这个入口只是测试编排，不保证被外部强制结束时完成清理，独立验收另有有界进程与原流审计。`--smoke --screenshot ABSOLUTE_PATH`自动使用Demo渲染各页面后退出；真实设备验收步骤见`docs/VERIFICATION.md`。文档逐项覆盖见`docs/COVERAGE.md`，缺失/矛盾处理见`docs/ASSUMPTIONS.md`。
-
-截屏输入验收保留原定位与命中断言，新增有限OS/WPF坐标和输入源诊断。本轮独立正式150项通过，但完整GUI在输入前置失败；三个快照已确认活动鼠标源缺失，成因未定，不是坐标算法或实机修复通过。原始失败、采样范围及未执行项见[输入诊断报告](docs/codex/apple-experience/AP033_INPUT_DIAGNOSTICS.md)。
-
-本轮计划与实机日志见[测试计划](plan.md)、[阶段记录](docs/testing/TEST_LOG.md)、[缺陷账本](docs/testing/DEFECTS.md)。原始截图/节点/响应位于私有artifacts/acceptance，不进入公开源码包；离线、实机、拒绝路径和未实现能力分别标记。
-
-历史单实例验收结论见[独立实例报告](docs/testing/REPORT.md)，本轮多实例结论以[专项报告](docs/testing/multi-instance/REPORT.md)为准。本机可双击`tools/Start-VerifiedDesktop.cmd`或在PowerShell 7运行对应`.ps1`，使用保留的测试实例1及本机独立配置；不调用原实例0。源码包不分发该授权配置，换电脑须显式重新确认。
-
-多实例任务另见[多实例计划](docs/testing/multi-instance/PLAN.md)、[测试记录](docs/testing/multi-instance/TEST_LOG.md)和[报告](docs/testing/multi-instance/REPORT.md)。显式测试入口为Tests.dll `--multi-acceptance spec.json prepare|workload|diagnose 绝对证据目录`，只允许非零独立目标、唯一串号、实际进程绑定及资源预留；diagnose仅收集授权guest的活动/窗口/进程及节点截图，不操作原0。型号测试只走冷态官方CLI，不开放通用身份修改HTTP。HTTP Toolkit安全/许可未确认时直连轮不计抓包。
-
-本机多实例桌面入口为`tools/Start-MultiVerifiedDesktop.cmd`，只读取私有`data/multi-verified`内已明确授权的非零独立实例配置；它不启动/关闭模拟器，程序会在启动时重新核验实际绑定。默认API/输入同步关闭。359MB测试APK使用300秒命令超时；专项驱动另有45秒UI预算，不能把这个预算误认为桌面所有控件已获得同样的期限。私有配置不进源码ZIP。
-
-依赖来源：[AdvancedSharpAdbClient](https://www.nuget.org/packages/AdvancedSharpAdbClient/3.6.16)、[Microsoft.Data.Sqlite](https://www.nuget.org/packages/Microsoft.Data.Sqlite/10.0.12)、[SkiaSharp](https://www.nuget.org/packages/SkiaSharp/4.153.1)。不复制厂商二进制。
+第三方依赖遵循各自许可证。雷电、Android、scrcpy、FFmpeg 等名称和商标属于各自权利人，兼容实现不构成官方背书。不分发 APK、雷电二进制或原商业软件私有组件。
