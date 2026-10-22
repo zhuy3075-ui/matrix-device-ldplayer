@@ -6,6 +6,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="App.xaml.cs" Condition="'$(EnableTestSupport)' == 'true'" />
+    <Compile Include="../../tests/MatrixDevice.Desktop.Support/**/*.cs" Link="TestSupport/%(RecursiveDir)%(Filename)%(Extension)" Condition="'$(EnableTestSupport)' == 'true'" />
     <ProjectReference Include="../MatrixDevice.Host/MatrixDevice.Host.csproj" />
   </ItemGroup>
 </Project>

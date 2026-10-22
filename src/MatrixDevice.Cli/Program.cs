@@ -2,7 +2,10 @@ using System.Text.Json;
 using MatrixDevice.Core;
 using MatrixDevice.Host;
 
-var allowed = new HashSet<string> { "--demo", "--serve", "--data", "--adb", "--serial", "--ldconsole", "--ldplayer-list", "--basic-port", "--automator-port", "--help" };
+var allowed = new HashSet<string> { "--serve", "--data", "--adb", "--serial", "--ldconsole", "--ldplayer-list", "--basic-port", "--automator-port", "--help" };
+#if MATRIX_TEST_SUPPORT
+allowed.Add("--demo");
+#endif
 var values = new Dictionary<string, string?>();
 for (var i = 0; i < args.Length; i++)
 {
@@ -13,7 +16,7 @@ for (var i = 0; i < args.Length; i++)
 }
 if (values.ContainsKey("--help"))
 {
-    Console.WriteLine("MatrixDevice.Cli [--demo] [--serve] [--data 路径] [--serial 授权串号] [--ldconsole 绝对路径] [--ldplayer-list] [--basic-port 端口] [--automator-port 端口]");
+    Console.WriteLine("MatrixDevice.Cli [--serve] [--data 路径] [--serial 授权串号] [--ldconsole 绝对路径] [--ldplayer-list] [--basic-port 端口] [--automator-port 端口]");
     return;
 }
 var directory = Path.GetFullPath(values.GetValueOrDefault("--data") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MatrixDevice.Reconstructed"));
@@ -29,8 +32,12 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
 if (values.ContainsKey("--ldplayer-list"))
 {
     // Read-only mode must never construct the ADB backend or invoke an ADB client.
+#if MATRIX_TEST_SUPPORT
     await using var service = new LdPlayerService(values.ContainsKey("--demo")
         ? new DemoLdConsoleRunner() : new LdConsoleRunner(settings.LdConsolePath, settings.CommandTimeoutSeconds), values.ContainsKey("--demo"));
+#else
+    await using var service = new LdPlayerService(new LdConsoleRunner(settings.LdConsolePath, settings.CommandTimeoutSeconds));
+#endif
     await service.RefreshAsync(cancellation.Token);
     Console.WriteLine(JsonSerializer.Serialize(service.Instances, JsonDefaults.Options));
     return;

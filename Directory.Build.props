@@ -7,5 +7,6 @@
     <Deterministic>true</Deterministic>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <CETCompat>false</CETCompat>
+    <DefineConstants Condition="'$(EnableTestSupport)' == 'true'">$(DefineConstants);MATRIX_TEST_SUPPORT</DefineConstants>
   </PropertyGroup>
 </Project>

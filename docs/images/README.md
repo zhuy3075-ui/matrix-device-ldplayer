@@ -1,23 +1,21 @@
-# 界面截图说明
+# 正式界面截图
 
-日期：2026-10-22。截图来自本机已构建的 WPF 程序，使用独立 Demo Runtime、新建配置目录和实际页面控件渲染，客户区尺寸均为 1424 × 861。不是 HTML 预览或手绘设计图。
+日期：2026-10-22。以下 7 张图由无测试支撑的正式 WPF 构建渲染，客户区均为 1424 × 861。使用新建、未配置的真实 Runtime：`IsDemo=false`、`AdbDeviceBackend`、设备 0 台、无雷电路径、无授权串号、API 关闭。不读取用户旧配置、不连接设备、不载入脚本或应用，不制造节点、画面、资源或任务。
 
-生成时仅发现演示设备、读取演示截图/节点/应用、导入仓库基础脚本示例，没有执行脚本，没有启动接口或连接真实模拟器。监控仅显示未授权视频的实际 Demo 状态，没有加入伪造视频、资源值或 FPS；设置不含本机授权配置。Demo 与真实模式的接入限制可能不同。
+为避免说明图片触发设备访问，独立截图工具在创建窗口后、首次定时触发前停止了目录和截图定时器，只切换已有页面并调用页面自身的 `SaveRender`。未替换后端、控件、文案或图片内容，不将此次渲染作为自动刷新、物理 GUI、实机、视频或性能验收。窗口按原关闭流程退出，结果为 0。旧演示截图已被替换，`docs/verification/` 的 66 张历史图片已从当前树删除，Git 历史不改写。
 
-图片均由当前页面自身的 `SaveRender` 保存，展示客户区而不含操作系统标题栏。未裁剪、合成或替换控件；不代表真实鼠标键盘、DPI 或实机性能验收。当前截图所用 `MatrixDevice.Desktop.dll` SHA-256：
+截图所用正式 `MatrixDevice.Desktop.dll` SHA-256：
 
 ```text
-FEEDA34A457B5E014B5B93CB1AD105B05589C7055E1B3E3BC96C55B07EB2B7FD
+FF3D0EC44CDAEA2E436C70AD95DB6BEE81F51C39B77FAFBFB7088975E454308A
 ```
 
-| 文件 | 展示内容 | SHA-256 |
+| 文件 | 实际状态 | SHA-256 |
 | --- | --- | --- |
-| [devices.png](devices.png) | 统一实例与设备列表、状态筛选、启动入口 | `9FDEC0BB9D7D8FBFEEF6BFBCD5EDC2167EF4DA02CE4EB540A8BB18ADADE074CD` |
-| [monitor.png](monitor.png) | 双卡片监控布局，未授权视频和未知资源状态 | `ECD99DD3BE31F76C82F4B5A2D810FE7D1FC3AA34A82A257660C13B2C1B098257` |
-| [inspector.png](inspector.png) | 演示图像、节点树和属性面板 | `47514426E439F5D095C76FE509BD3EF039CF2066D12156CCFD3F861FADD1020F` |
-| [applications.png](applications.png) | 两台演示目标及其应用列表、读取完成记录 | `B8B4A837275A9CD660C0C375449B8BFF1208D3A41DC7373729E34F7F8DE796A9` |
-| [automation.png](automation.png) | 导入基础脚本后的参数视图，尚未运行 | `90DFB9168C037C7D01E4AE08B8860095E6D2DFDA2B6E72172F1A379FF830E410` |
-| [api.png](api.png) | 未启用网关的接口管理与请求编辑区 | `80CA701EBF127C765AE294E78F8BEE707040C3F89039E2D91A6E312DCD8DCB00` |
-| [settings.png](settings.png) | 空授权配置、视频组件和窗体设置 | `BBBEE5F0AF38C6B45E64A17B4095B8FFB85854B94880D6BD08737CCCC2828881` |
-
-历史截图仍位于 `docs/verification/`，可能含已删除的分组、搜索、卡片或独立雷电入口，不作为当前界面介绍。本轮未使用两张未提交的英文截图，也未公开真实应用内容。
+| [devices.png](devices.png) | 未配置雷电、设备空列表 | `322EEB473853ACE9E694D4048AA8EBD64999D0566EF31BA083217E303F06BB89` |
+| [monitor.png](monitor.png) | 可见设备 0、视频 0、主机资源待采样 | `DBF20CF915FD9202CB92F1DE4DC22135878526E835ED17AC4AF078FE9872D5A2` |
+| [inspector.png](inspector.png) | 无截图、无节点、未选中节点 | `C0DCD79FFBD04E2F201AA97D9F32D0E8F6E5169A2972C89D89444E13ECF7D27D` |
+| [applications.png](applications.png) | 目标、应用和任务列表为空 | `CDD10D2326CD94A0F29EEC8C1DE71F0F75B2EACA2B28D2E1240C461E4E0C151F` |
+| [automation.png](automation.png) | 未导入脚本、未运行任务 | `2592DC9D653742EC87F889F9ED01C37825401D81D1A2CC6912A99F1B433DDC53` |
+| [api.png](api.png) | 未启动接口、没有设备 | `46791CF06AC3D6FE82CDA31DD690AAAA26091B8C8EFDC2FAC0A9486B2A6813F7` |
+| [settings.png](settings.png) | 真实模式、空路径和授权配置 | `B1A499158DE72B1A9F3666DD116983AD8EC8E85D8411A9EC04D7FAF551220157` |

@@ -4,7 +4,4 @@
   <Project Path="src/MatrixDevice.Host/MatrixDevice.Host.csproj" />
   <Project Path="src/MatrixDevice.Desktop/MatrixDevice.Desktop.csproj" />
   <Project Path="src/MatrixDevice.Cli/MatrixDevice.Cli.csproj" />
-  <Project Path="src/MatrixDevice.Mcp/MatrixDevice.Mcp.csproj" />
-  <Project Path="tests/MatrixDevice.Tests/MatrixDevice.Tests.csproj" />
-  <Project Path="tests/MatrixDevice.Mcp.Tests/MatrixDevice.Mcp.Tests.csproj" />
 </Solution>

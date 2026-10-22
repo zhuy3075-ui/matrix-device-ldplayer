@@ -28,6 +28,9 @@ public sealed class MatrixRuntime : IAsyncDisposable
 
     public static async Task<MatrixRuntime> CreateAsync(AppSettings settings, string dataDirectory, bool demo = false, IReadOnlyList<LdConnectionProof>? admissions = null, AdbDeviceBackend? epochSource = null, CancellationToken ct = default)
     {
+#if !MATRIX_TEST_SUPPORT
+        if (demo) throw new ArgumentException("正式版本不支持演示设备，未创建工作区。", nameof(demo));
+#endif
         settings = settings with { Language = "zh-CN" };
         Directory.CreateDirectory(dataDirectory);
         var store = new SettingsStore(Path.Combine(dataDirectory, "AppConfig.json"));
@@ -49,7 +52,11 @@ public sealed class MatrixRuntime : IAsyncDisposable
         {
         metadata = new CatalogRepository(Path.Combine(dataDirectory, "db.sqlite3"));
         log = new RollingLog(Path.Combine(dataDirectory, "logs"));
+#if MATRIX_TEST_SUPPORT
         backend = demo ? (IDeviceBackend)new DemoDeviceBackend() : new AdbDeviceBackend(settings);
+#else
+        backend = new AdbDeviceBackend(settings);
+#endif
         if (backend is AdbDeviceBackend inheritedBackend && epochSource is not null) inheritedBackend.InheritServerEpoch(epochSource);
         var catalog = new DeviceCatalog(backend);
         var automation = new AutomationService(backend, catalog);
@@ -80,8 +87,11 @@ public sealed class MatrixRuntime : IAsyncDisposable
         var writes = new DeviceWriteCoordinator();
         scripts = new ScriptScheduler(backend, catalog, demo, writes);
         input = new InputCoordinator(catalog, backend, writes);
+#if MATRIX_TEST_SUPPORT
         if (demo) ldPlayer = new LdPlayerService(new DemoLdConsoleRunner(), true);
-        else if (!string.IsNullOrWhiteSpace(settings.LdConsolePath))
+        else
+#endif
+        if (!string.IsNullOrWhiteSpace(settings.LdConsolePath))
         {
             try
             {

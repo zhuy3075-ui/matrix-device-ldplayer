@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="../../tests/MatrixDevice.TestSupport/**/*.cs" Link="TestSupport/%(RecursiveDir)%(Filename)%(Extension)" Condition="'$(EnableTestSupport)' == 'true'" />
     <PackageReference Include="AdvancedSharpAdbClient" Version="3.6.16" />
     <PackageReference Include="SkiaSharp" Version="4.153.1" />
   </ItemGroup>

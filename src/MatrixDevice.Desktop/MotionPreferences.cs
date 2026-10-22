@@ -7,8 +7,12 @@ namespace MatrixDevice.Desktop;
 public sealed class MotionPreferences : INotifyPropertyChanged
 {
     public static MotionPreferences Current { get; } = new();
+#if MATRIX_TEST_SUPPORT
     private bool? fixturePreference;
     public bool AnimationsEnabled => fixturePreference ?? SystemParameters.ClientAreaAnimation;
+#else
+    public bool AnimationsEnabled => SystemParameters.ClientAreaAnimation;
+#endif
     public PopupAnimation PopupAnimation => AnimationsEnabled ? PopupAnimation.Fade : PopupAnimation.None;
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -22,11 +26,13 @@ public sealed class MotionPreferences : INotifyPropertyChanged
         };
     }
 
+#if MATRIX_TEST_SUPPORT
     internal void SetFixturePreference(bool? enabled)
     {
         fixturePreference = enabled;
         Notify();
     }
+#endif
 
     private void Notify()
     {

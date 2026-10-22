@@ -3,3 +3,6 @@
 data/
 artifacts/
 *.user
+/SOURCE_BUNDLE.md
+/SOURCE_MANIFEST.json
+/PROJECT_TREE.md

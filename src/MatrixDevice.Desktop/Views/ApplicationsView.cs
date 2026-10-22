@@ -35,7 +35,9 @@ public partial class MainWindow
     private bool applicationRunning;
     private bool applicationReadPending;
     private bool applicationSyncing;
+#if MATRIX_TEST_SUPPORT
     private Func<string, string, bool>? applicationConfirmationFixture;
+#endif
 
     private FrameworkElement BuildAppsPage()
     {
@@ -358,7 +360,9 @@ public partial class MainWindow
             _ => "将读取下列模拟器的应用列表。"
         };
         var message = $"共 {plan.Count} 项，{plan.Select(item => item.Target.Serial).Distinct().Count()} 台模拟器。\n{warning}\n\n{details}";
+#if MATRIX_TEST_SUPPORT
         if (applicationConfirmationFixture is not null) return applicationConfirmationFixture(title, message);
+#endif
         var dialog = new Window { Owner = this, Title = title, Width = 560, Height = 460, MinWidth = 380, MinHeight = 280, WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false };
         var panel = new DockPanel { Margin = new Thickness(16) }; var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
         var cancel = new Button { Content = "取消", IsCancel = true, MinWidth = 78 }; var accept = new Button { Content = "确认执行", IsDefault = true, MinWidth = 92 };

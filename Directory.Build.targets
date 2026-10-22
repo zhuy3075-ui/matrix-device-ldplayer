@@ -1,0 +1,5 @@
+<Project>
+  <Target Name="RequireIsolatedTestSupport" BeforeTargets="PrepareForBuild" Condition="'$(EnableTestSupport)' == 'true'">
+    <Error Condition="'$(UseArtifactsOutput)' != 'true' or '$(ArtifactsPath)' == ''" Text="Test support requires isolated --artifacts-path output. Use tools/Test.ps1." />
+  </Target>
+</Project>

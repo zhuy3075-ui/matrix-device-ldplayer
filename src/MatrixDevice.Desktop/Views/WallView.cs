@@ -286,7 +286,10 @@ public partial class MainWindow
         if (targetGenerations.Any(saved => ViewModel.Devices.FirstOrDefault(target => target.Serial == saved.Key) is not { Info.Online: true } target || target.Info.Generation != saved.Value)) return;
         var swipe = (start - end.Value).Length > 8;
         var snapshot = new InputSnapshot { SourceSerial = row.Serial, Kind = swipe ? InputKind.Swipe : InputKind.Tap, X = (int)start.X, Y = (int)start.Y, X2 = (int)end.Value.X, Y2 = (int)end.Value.Y, DurationMs = 300, SourceWidth = (int)pixels.Width, SourceHeight = (int)pixels.Height, SourceGeneration = sourceGeneration, Generation = generation, TargetSerials = targets };
-        mainGestureDispatchCount++; lastMainGestureSnapshot = snapshot; mainGestureOperation = ViewModel.SendInputAsync(snapshot);
+#if MATRIX_TEST_SUPPORT
+        mainGestureDispatchCount++; lastMainGestureSnapshot = snapshot;
+#endif
+        mainGestureOperation = ViewModel.SendInputAsync(snapshot);
         await mainGestureOperation; e.Handled = true;
     }
 

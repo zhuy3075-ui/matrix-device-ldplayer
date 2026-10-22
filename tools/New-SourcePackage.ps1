@@ -1,4 +1,4 @@
-param([string] $ProjectRoot = (Split-Path -Parent $PSScriptRoot))
+param([string] $ProjectRoot = (Split-Path -Parent $PSScriptRoot), [switch] $IncludeTests)
 $ErrorActionPreference = 'Stop'
 $projectPath = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $artifactDirectory = Join-Path $projectPath 'artifacts'
@@ -6,6 +6,7 @@ New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
 $sources = @(Get-ChildItem -LiteralPath $projectPath -Recurse -File | Where-Object {
     $relative = [IO.Path]::GetRelativePath($projectPath, $_.FullName)
     $relative -notmatch '(^|[\\/])(bin|obj|artifacts|data|\.git)([\\/]|$)' -and
+    ($IncludeTests -or $relative -notmatch '^tests[\\/]') -and
     $_.Name -notin @('SOURCE_BUNDLE.md', 'PROJECT_TREE.md', 'SOURCE_MANIFEST.json') -and
     $_.Name -notlike 'desktop-english*'
 } | Sort-Object FullName)

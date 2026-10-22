@@ -34,38 +34,38 @@
 
 ## 界面介绍
 
-以下 7 张图片于 **2026-10-22** 从本机已构建程序的独立 **Demo 工作区**生成，是真实 WPF 界面渲染截图，不是设计稿。设备、包名和节点均为演示数据，**不代表真实模拟器、物理点击或性能验收**。来源与文件摘要见 [截图说明](docs/images/README.md)。
+以下 7 张图片于 **2026-10-22** 从正式构建的独立、未配置真实工作区渲染。没有模拟设备、预置应用、伪造节点或监控画面；未接入设备时如实显示空状态。截图仅介绍页面布局，不代表已连接模拟器或通过物理输入、视频性能验收。来源和摘要见 [截图说明](docs/images/README.md)。
 
 ### 设备列表
 
 左侧统一导航，正文集中显示实例状态与操作。勾选用于批量启动或群控，状态筛选只影响显示；横向滚动可查看其余字段。
 
-![设备页：统一实例列表、状态筛选、一键启动入口，Demo 数据](docs/images/devices.png)
+![设备页：未配置雷电和未接入设备的真实空列表](docs/images/devices.png)
 
 ### 多画面监控
 
-画面墙直接观察各设备页面，资源列表查看资源变化。**此 Demo 图未连接真实视频，画面区为“未授权视频”，资源为“未知”；仅展示布局，不是实时视频效果截图，也没有伪造帧率或资源值。**
+接入真实设备后，画面墙用于观察设备页面，资源列表用于查看资源变化。**图中没有接入设备，所以可见设备与视频均为 0，没有补入假卡片、视频或资源值。**
 
-![监控页：双设备卡片布局，Demo 未授权视频状态](docs/images/monitor.png)
+![监控页：没有连接设备时不生成监控卡片](docs/images/monitor.png)
 
 ### 界面检查
 
-左侧截图、中间节点树、右侧属性，用于确认元素和自动化坐标。`SIMULATED DEVICE` 是程序生成的演示手机画面。
+左侧截图、中间节点树、右侧属性，用于确认元素和自动化坐标。未接入设备时不生成图像或节点。
 
-![界面检查页：Demo 截图、节点树、属性面板](docs/images/inspector.png)
+![界面检查页：无设备时截图和节点保持空白](docs/images/inspector.png)
 
 ### 应用管理
 
 左侧独立勾选目标，右侧保留应用所属设备、序列号、包名和版本，底部逐项反馈结果。安装时选 APK 并确认目标；卸载时勾选应用行并确认数据损失。
 
-![应用页：选择两台 Demo 设备读取应用，显示逐项完成记录](docs/images/applications.png)
+![应用页：未选择设备，应用列表和操作记录为空](docs/images/applications.png)
 
 <details>
 <summary>自动化、接口与设置截图</summary>
 
-**自动化**：导入脚本包后切换参数、运行记录、日志、结果；图中仅导入基础示例，未执行真实设备任务。
+**自动化**：导入脚本包后切换参数、运行记录、日志、结果；图中没有预载脚本或任务记录。
 
-![自动化页：基础脚本包的参数工作区](docs/images/automation.png)
+![自动化页：未导入脚本的空工作区](docs/images/automation.png)
 
 **接口**：左侧管理设备接口，右侧编辑请求与查看响应。图中服务未启动，没有实际请求结果。
 
@@ -84,16 +84,16 @@
 - Windows 10 / 11；WPF 程序不能直接在 Linux、macOS 运行。
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)，`global.json` 固定 `10.0.402`，允许同系列更新补丁。
 - PowerShell 7、Git，以及首次还原 NuGet 依赖所需网络。
-- 真实模式另需自行安装雷电；视频组件、APK、便携 SDK 和本机配置不随源码分发。
+- 自行安装雷电；视频组件、APK、便携 SDK 和本机配置不随源码分发。
 
 ```powershell
 git clone --branch main https://github.com/zhuy3075-ui/matrix-device-ldplayer.git
 cd matrix-device-ldplayer
 ./tools/Build.ps1
-./tools/Start-Desktop.ps1 -Demo
+./tools/Start-Desktop.ps1
 ```
 
-Demo 不连接真实 ADB，可先浏览界面、读取演示节点和应用、体验脚本包。真实启动或视频操作在 Demo 中不可用，不代表真实设备已经连接。仓库暂未提供发布安装包。
+正式程序仅展示实际发现、明确接入的设备，不提供演示运行入口或自动补充虚拟设备。首次运行须先配置雷电与目标；没有设备时列表为空。仓库暂未提供发布安装包。
 
 使用自行安装的便携 SDK 时，可显式指定路径（请替换为实际位置）：
 
@@ -115,7 +115,7 @@ Demo 不连接真实 ADB，可先浏览界面、读取演示节点和应用、�
 ./tools/Start-Desktop.ps1 -DataDirectory 'C:\MatrixWorkspace\my-devices'
 ```
 
-默认数据根目录为 `%LOCALAPPDATA%\MatrixDevice.Reconstructed\`，Demo 与真实模式分离，保存本工程配置、SQLite 元数据和日志，不读取旧商业产品账号或数据库。
+桌面默认数据目录为 `%LOCALAPPDATA%\MatrixDevice.Reconstructed\data\`，保存本工程配置、SQLite 元数据和日志，不读取旧商业产品账号、数据库或旧演示工作区。
 
 ### 视频与资源监控
 
@@ -137,15 +137,15 @@ Demo 不连接真实 ADB，可先浏览界面、读取演示节点和应用、�
 | 普通 HTTP | 默认 `http://localhost:8080/`；`GET /health`、`GET /devices` |
 | 逐设备 HTTP | 页面显式启动的 `8001..8999` 端口；设备信息、Shell、点击、滑动、文字、应用启停 |
 | Automator | 默认 `http://127.0.0.1:17171/`；路由见 [API 参考](docs/reference/API.md) 和源码 `AutomationService.Routes` |
-| MCP stdio | 当前仅显式 Demo 联调：能力查询、设备列表、脚本导入与任务管理；**不能连接真实雷电** |
+| MCP stdio | 不随正式产品构建或分发；既有协议回归实现仅留在 `tests/`，真实设备 MCP 尚未提供 |
 
-启动演示接口（选择非默认端口降低冲突概率）：
+在已配置且获得设备授权的工作区启用本机接口（示例使用非默认端口）：
 
 ```powershell
-dotnet ./src/MatrixDevice.Cli/bin/Release/net10.0/MatrixDevice.Cli.dll --demo --serve --basic-port 18080 --automator-port 17172
+dotnet ./src/MatrixDevice.Cli/bin/Release/net10.0/MatrixDevice.Cli.dll --data 'C:\MatrixWorkspace\my-devices' --serve --basic-port 18080 --automator-port 17172
 ```
 
-在另一终端读取演示状态：
+在另一终端读取实际状态；未配置授权设备时不会返回虚拟设备：
 
 ```powershell
 Invoke-RestMethod http://localhost:18080/health
@@ -162,18 +162,17 @@ src/
   MatrixDevice.Features/   脚本包、自动化、输入与传输
   MatrixDevice.Host/       ADB/雷电适配、HTTP、监控、持久化
   MatrixDevice.Desktop/    WPF 桌面界面与工作区
-  MatrixDevice.Cli/        命令行与演示服务
-  MatrixDevice.Mcp/        受限 Demo MCP stdio
-tests/                    正式回归与专项验收代码
-examples/                 脚本源文件、示例包与 Demo 策略
+  MatrixDevice.Cli/        真实设备命令行与本机服务
+tests/                    回归、测试夹具及仅测试用 MCP；不进入默认产品
+examples/                 用户可导入的脚本格式模板，不自动载入
 tools/                    构建、启动与源码归档工具
 docs/reference/           原始开发参考文档
 docs/codex/               设计、缺陷、阶段验收与交接
 docs/testing/             历史实机与专项报告
-docs/images/              本 README 的 Demo 界面截图
+docs/images/              正式构建的真实空状态界面截图
 ```
 
-[完整目录](PROJECT_TREE.md) · [源码文本快照](SOURCE_BUNDLE.md) · [归档摘要](SOURCE_MANIFEST.json)。三者对应既有源码归档快照，不是当前 Git 提交的实时校验清单；当前文件以 Git 为准。
+当前文件和目录以 Git 为准，旧源码拼接副本及其清单已移除，避免继续携带旧演示生成器。
 
 ## 验证与限制
 
@@ -181,7 +180,9 @@ docs/images/              本 README 的 Demo 界面截图
 ./tools/Build.ps1 -Verify
 ```
 
-该入口编译并运行正式离线回归、独立计数的 MCP Demo 专项，**不自动开始真实模拟器压力测试或安装卸载**。本次 README 更新仅生成和检查 Demo 截图、链接、公开范围，不重启已暂停的全面测试。
+该入口先构建无演示数据的正式产品，再调用 `tools/Test.ps1`，在每次新建的 `artifacts/test-support/` 目录构建测试专用支撑。测试夹具仅存在于 `tests/`，不会写入正式产品的 `bin/obj`；保留离线回归与协议测试，不删断言来隐藏问题。**不会自动开始真实模拟器压力测试或安装卸载**。
+
+正式程序拒绝 `--demo`、`--smoke`、`--verify-*` 等测试参数；测试支撑须显式指定 `EnableTestSupport=true` 并使用隔离输出，不能通过正式启动脚本启用。历史文档中的旧测试命令只适用于测试支撑构建。视频组件专项依赖本机官方组件，未配置时测试会明确报告跳过，不应将其计为通过。拆分与实际验证见 [清理报告](docs/codex/release-without-demo/REPORT.md)。
 
 | 范围 | 已有证据与限制 |
 | --- | --- |
@@ -191,14 +192,14 @@ docs/images/              本 README 的 Demo 界面截图
 | 视频 | 专用实例 1 / 2 双路约 192 秒专项，不能据此声称 4 / 23 路或长时稳定性通过，见 [报告](docs/testing/realtime-monitoring/REPORT.md) |
 | 应用、GUI、稳定性 | 当前应用页真实安装卸载闭环、完整物理 GUI、最终双实例 30 分钟仍有未完成或失败项；旧后端有限证据不替代页面验收 |
 
-尚未提供：一键删除 / 复制实例、后台隐藏启动、任意 Android 版本创建、完整 RPA、真实设备 MCP、完整 HTTP Toolkit 抓包验收、商业登录授权及私有 ROM 能力。历史文档或旧截图可能保留已经移除的入口。
+尚未提供：一键删除 / 复制实例、后台隐藏启动、任意 Android 版本创建、完整 RPA、真实设备 MCP、完整 HTTP Toolkit 抓包验收、商业登录授权及私有 ROM 能力。历史文档可能保留已经移除的入口；本次不重写 Git 历史或声称历史测试数据从未存在。
 
 [验证方法](docs/VERIFICATION.md) · [覆盖表](docs/COVERAGE.md) · [假设与差异](docs/ASSUMPTIONS.md) · [已知问题](docs/testing/DEFECTS.md) · [完整工程记录](ENGINEERING_NOTES.md)
 
 ## 安全与公开范围
 
 - 仅操作自己拥有或明确授权的设备；卸载、清数据、重启前确认目标。内部身份核验不协调其他外部 ADB 客户端。
-- HTTP 没有生产级鉴权，仅在可信本机环境显式启用；不要开放公网或做公网端口映射。Demo MCP 不是远程真实群控服务。
+- HTTP 没有生产级鉴权，仅在可信本机环境显式启用；不要开放公网或做公网端口映射。测试协议实现不是远程真实群控服务。
 - 本次不上传本机授权配置、APK、SDK、厂商二进制、`bin/obj`、原始实机证据。历史报告中的本机环境和测试记录不是可直接复用的授权配置。
 - 不提交 `.env`、密钥、账号数据或真实应用隐私截图。公开会暴露既有分支及提交历史，包括作者信息；本次不改写历史。
 
